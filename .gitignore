@@ -1,0 +1,8 @@
+# Project files
+.env
+.venv
+node_modules
+
+# IDE files
+.idea
+.vscode
