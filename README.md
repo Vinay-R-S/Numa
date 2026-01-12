@@ -55,6 +55,13 @@ Persona addresses these challenges by implementing:
 - Real-time context sharing across all system components
 - Standardized protocol for AI tool orchestration
 
+### AI and LLM Infrastructure
+
+- **Cloud LLM Providers**: Groq API, Google Gemini API for fast inference
+- **Local LLMs**: Qwen 7B and Mistral 7B models via Ollama for offline/private processing
+- **Agentic Frameworks**: LangChain and LangGraph for workflow orchestration
+- **RAG Pipeline**: Retrieval-Augmented Generation for context-aware responses
+
 ### Productivity Tracking
 
 - Task management with intelligent prioritization algorithms
@@ -126,15 +133,17 @@ Persona addresses these challenges by implementing:
 
 ## Technology Stack
 
-| Layer              | Technologies                                        |
-| ------------------ | --------------------------------------------------- |
-| **Frontend**       | React, Next.js, TypeScript, Tailwind CSS, Shadcn/UI |
-| **Backend**        | Node.js, Express.js, Python (AI Services)           |
-| **Database**       | MongoDB, Redis (Caching)                            |
-| **AI/ML**          | LangChain, OpenAI API, Custom Agent Framework       |
-| **MCP**            | Model Context Protocol SDK                          |
-| **Authentication** | JWT, OAuth 2.0                                      |
-| **DevOps**         | Docker, Git, CI/CD Pipelines                        |
+| Layer              | Technologies                                                |
+| ------------------ | ----------------------------------------------------------- |
+| **Frontend**       | Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui |
+| **Backend**        | Python, FastAPI, Uvicorn                                    |
+| **Database**       | MongoDB, Redis (Caching)                                    |
+| **AI/ML**          | LangChain, LangGraph, RAG                                   |
+| **LLM Providers**  | Groq API, Google Gemini API                                 |
+| **Local LLMs**     | Ollama (Qwen 7B, Mistral 7B)                                |
+| **MCP**            | Model Context Protocol SDK                                  |
+| **Authentication** | JWT, OAuth 2.0                                              |
+| **DevOps**         | Docker, Git, CI/CD Pipelines                                |
 
 ---
 
@@ -152,22 +161,21 @@ Persona addresses these challenges by implementing:
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/yourusername/persona.git
-   cd persona
+   git clone https://github.com/Vinay-R-S/Persona.git
+   cd Persona
    ```
 
-2. **Install Frontend Dependencies**
+2. **Install Client Dependencies**
 
    ```bash
-   cd frontend
+   cd client
    npm install
    ```
 
-3. **Install Backend Dependencies**
+3. **Install Server Dependencies** (when backend is set up)
 
    ```bash
-   cd ../backend
-   npm install
+   cd ../server
    pip install -r requirements.txt
    ```
 
@@ -179,26 +187,17 @@ Persona addresses these challenges by implementing:
 
    Update the `.env` file with the required API keys and database connection strings.
 
-5. **Initialize the Database**
+5. **Start Development Servers**
 
    ```bash
-   npm run db:setup
+   # Terminal 1 - Client (Frontend)
+   cd client && npm run dev
+
+   # Terminal 2 - Server (Backend) - when set up
+   cd server && uvicorn main:app --reload
    ```
 
-6. **Start Development Servers**
-
-   ```bash
-   # Terminal 1 - Frontend
-   cd frontend && npm run dev
-
-   # Terminal 2 - Backend
-   cd backend && npm run dev
-
-   # Terminal 3 - AI Services
-   cd ai-services && python main.py
-   ```
-
-7. **Access the Application**
+6. **Access the Application**
 
    Open a browser and navigate to `http://localhost:3000`
 
@@ -208,22 +207,24 @@ Persona addresses these challenges by implementing:
 
 ```
 persona/
-├── frontend/                 # Next.js frontend application
-│   ├── app/                 # App router pages
-│   ├── components/          # Reusable UI components
-│   ├── lib/                 # Utilities and helper functions
-│   └── styles/              # Global styles and themes
-├── backend/                  # Node.js backend server
-│   ├── routes/              # API endpoint definitions
-│   ├── models/              # Database schemas
-│   ├── controllers/         # Request handlers
-│   └── services/            # Business logic layer
-├── ai-services/              # Python AI agent services
-│   ├── agents/              # Individual agent implementations
-│   ├── mcp/                 # MCP server and tool definitions
-│   └── utils/               # Shared utilities
+├── client/                   # Next.js frontend application
+│   ├── src/
+│   │   ├── app/             # App router pages and layouts
+│   │   │   ├── globals.css  # Global styles with Tailwind
+│   │   │   ├── layout.tsx   # Root layout component
+│   │   │   └── page.tsx     # Home page
+│   │   └── lib/             # Utilities (shadcn cn helper)
+│   ├── public/              # Static assets
+│   ├── components.json      # shadcn/ui configuration
+│   ├── tailwind.config.ts   # Tailwind configuration
+│   └── package.json
+├── server/                   # FastAPI backend server
+│   ├── routers/             # API route definitions
+│   ├── models/              # Pydantic models and schemas
+│   ├── services/            # Business logic layer
+│   ├── main.py              # FastAPI application entry
+│   └── requirements.txt     # Python dependencies
 ├── docs/                     # Project documentation
-├── tests/                    # Unit and integration tests
 └── README.md
 ```
 
