@@ -172,10 +172,12 @@ Persona addresses these challenges by implementing:
    npm install
    ```
 
-3. **Install Server Dependencies** (when backend is set up)
+3. **Install Server Dependencies**
 
    ```bash
    cd ../server
+   python -m venv .venv
+   .venv\Scripts\activate
    pip install -r requirements.txt
    ```
 
@@ -193,8 +195,10 @@ Persona addresses these challenges by implementing:
    # Terminal 1 - Client (Frontend)
    cd client && npm run dev
 
-   # Terminal 2 - Server (Backend) - when set up
-   cd server && uvicorn main:app --reload
+   # Terminal 2 - Server (Backend)
+   cd server
+   .venv\Scripts\activate
+   uvicorn main:app --reload
    ```
 
 6. **Access the Application**
@@ -248,6 +252,20 @@ Users can interact with agents through:
 - Natural language commands via the chat interface
 - Automated scheduled tasks and reminders
 - Context-aware suggestions based on current activity
+
+### Backend API
+
+The backend server exposes the following endpoints:
+
+- **Health Check**: `GET /health`
+
+  - Returns the status of the server.
+  - URL: `http://localhost:8000/health`
+  - Response: `{"status": "ok"}`
+
+- **Root**: `GET /`
+  - Returns a welcome message.
+  - URL: `http://localhost:8000/`
 
 ---
 
