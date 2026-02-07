@@ -3,11 +3,14 @@
 .venv
 .next
 node_modules
+config
 
 # IDE files
 .idea
 .vscode
 
+# Miscallenous
+links.txt
 
 # Client 
 # dependencies
