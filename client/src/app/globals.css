@@ -48,20 +48,20 @@
 
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --background: oklch(0 0 0);
+  --foreground: oklch(1 0 0);
+  --card: oklch(0 0 0);
+  --card-foreground: oklch(1 0 0);
+  --popover: oklch(0 0 0);
+  --popover-foreground: oklch(1 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.145 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.145 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.145 0 0);
+  --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
@@ -130,19 +130,19 @@
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: black;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2d2d2d;
+  background: rgba(255, 255, 255, 0.2);
   border-radius: 9999px;
-  border: 1px solid #000;
+  border: none;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #869cf3;
+  background: rgba(255, 255, 255, 0.4);
 }

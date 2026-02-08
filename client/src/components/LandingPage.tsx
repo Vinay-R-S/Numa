@@ -1,5 +1,6 @@
 "use client";
 import { LaserFlow } from "./LaserFlow";
+import ContentBox from "./ContentBox";
 import localFont from "next/font/local";
 import { motion, useScroll, useTransform } from "framer-motion";
 import { useRef } from "react";
@@ -39,64 +40,75 @@ export default function LandingPage() {
   return (
     // Outer container - 300vh vertical space.
     // REMOVED 'overflowX: hidden' to fix 'position: sticky'
-    <div ref={containerRef} style={{ height: "300vh", background: "black" }}>
-      {/* Sticky container - stays pinned at top */}
+    <div style={{ background: "black" }}>
       <div
-        className={`${gcEpic.className}`}
+        ref={containerRef}
         style={{
-          position: "sticky",
-          top: 0,
-          width: "100%",
-          height: "100vh",
+          height: "300vh",
           background: "black",
-          display: "flex",
-          justifyContent: "flex-start",
-          alignItems: "center",
-          paddingLeft: "4vw",
-          overflow: "hidden", // Internal overflow hidden is okay
+          position: "relative",
+          zIndex: 10,
         }}
       >
-        <div className="relative z-10 flex gap-2 pointer-events-auto select-none">
-          {text.split("").map((char, index) => {
-            // eslint-disable-next-line
-            const style = useCharReveal(index);
-            return (
-              <motion.span
-                key={index}
-                className="cursor-default relative"
-                style={{
-                  fontSize: "20vw",
-                  color: "#FFFFFF",
-                  ...style,
-                }}
-              >
-                {char}
-              </motion.span>
-            );
-          })}
-        </div>
-
+        {/* Sticky container - stays pinned at top */}
         <div
-          className="absolute inset-0 pointer-events-none"
-          style={{ zIndex: 20 }}
+          className={`${gcEpic.className}`}
+          style={{
+            position: "sticky",
+            top: 0,
+            width: "100%",
+            height: "100vh",
+            background: "black",
+            display: "flex",
+            justifyContent: "flex-start",
+            alignItems: "center",
+            paddingLeft: "4vw",
+            overflow: "hidden", // Internal overflow hidden is okay
+          }}
         >
-          <LaserFlow
-            color="#869cf3"
-            wispDensity={2}
-            flowSpeed={0.5}
-            verticalSizing={5}
-            horizontalSizing={1}
-            fogIntensity={0.15}
-            fogScale={0.3}
-            wispSpeed={15}
-            wispIntensity={8}
-            flowStrength={0}
-            decay={1.7}
-            horizontalBeamOffset={0.3}
-            verticalBeamOffset={-0.5}
-          />
+          <div className="relative z-10 flex gap-2 pointer-events-auto select-none">
+            {text.split("").map((char, index) => {
+              // eslint-disable-next-line
+              const style = useCharReveal(index);
+              return (
+                <motion.span
+                  key={index}
+                  className="cursor-default relative"
+                  style={{
+                    fontSize: "20vw",
+                    color: "#FFFFFF",
+                    ...style,
+                  }}
+                >
+                  {char}
+                </motion.span>
+              );
+            })}
+          </div>
+
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{ zIndex: 20 }}
+          >
+            <LaserFlow
+              color="#869cf3"
+              wispDensity={2}
+              flowSpeed={0.5}
+              verticalSizing={5}
+              horizontalSizing={3}
+              fogIntensity={0.15}
+              fogScale={0.3}
+              wispSpeed={15}
+              wispIntensity={8}
+              flowStrength={0}
+              decay={1.7}
+              horizontalBeamOffset={0.35}
+              verticalBeamOffset={-0.5}
+            />
+          </div>
         </div>
       </div>
+      <ContentBox />
     </div>
   );
 }
