@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { AnimatedBeamMultipleInputs } from "./AnimatedBeamMultipleInputs";
 
 const ContentBox = () => {
   return (
@@ -35,10 +36,8 @@ const ContentBox = () => {
               Content Block 1
             </div>
           </div>
-          <div className="h-64 rounded-xl border border-white/10 bg-white/5 p-6">
-            <div className="h-full w-full flex items-center justify-center text-white/20">
-              Content Block 2
-            </div>
+          <div className="relative h-[500px] w-full flex items-center justify-center">
+            <AnimatedBeamMultipleInputs />
           </div>
         </div>
       </div>
