@@ -1,4 +1,4 @@
-# Persona - Intelligent Productivity and Health Tracker
+# NUMA - Intelligent Agent for Productivity & Health
 
 An AI-powered web application that intelligently tracks, analyzes, and optimizes productivity and health through autonomous agents and the Model Context Protocol (MCP).
 
@@ -21,23 +21,33 @@ An AI-powered web application that intelligently tracks, analyzes, and optimizes
 
 ## Overview
 
-**Persona** is a next-generation productivity and health tracking platform that leverages cutting-edge AI technologies to provide personalized insights, smart recommendations, and automated workflows. Unlike traditional trackers, Persona uses autonomous AI agents that understand user habits, predict patterns, and proactively assist in achieving personal and professional goals.
+**NUMA** (powered by Antigravity AI) is a next-generation productivity, health, and wellbeing platform designed around explainable, safe, and user-centric decision making. Unlike traditional trackers, NUMA uses autonomous AI agents that understand user habits, predict patterns, and proactively assist in achieving personal and professional goals while maintaining strict privacy and data protection standards.
 
 ### Problem Statement
 
-In today's fast-paced world, individuals struggle to balance productivity with health and well-being. Existing tracking solutions operate in silos, lack intelligent insights, and require significant manual effort. There is a need for an integrated system that autonomously monitors, analyzes, and provides actionable recommendations.
+In today's fast-paced world, individuals struggle to balance productivity with health and well-being. Existing tracking solutions operate in silos, lack intelligent insights, and require significant manual effort. There is a need for an integrated system that autonomously monitors, analyzes, and provides actionable recommendations while respecting user privacy and maintaining full explainability.
 
 ### Proposed Solution
 
-Persona addresses these challenges by implementing:
+NUMA addresses these challenges by implementing:
 
 - **Autonomous AI Agents** that handle specialized tasks without constant user intervention
 - **Model Context Protocol (MCP)** for seamless integration and communication between AI components
 - **Unified Dashboard** that consolidates productivity and health metrics in one interface
+- **Privacy-First Architecture** where AI agents read only aggregated data, never raw user inputs
+- **Explainable AI** with every recommendation traceable to aggregate metrics
 
 ---
 
 ## Key Features
+
+### Core Design Principles
+
+- **Privacy-First Architecture**: AI agents never read raw user inputs, only aggregated data
+- **Explainable AI**: Every recommendation is traceable to aggregate metrics
+- **User Control**: Users maintain full control over their data and AI autonomy levels
+- **Immutable Data**: Raw inputs are never modified once stored
+- **Auditable Decisions**: All AI decisions are fully auditable and transparent
 
 ### AI Agent Framework
 
@@ -48,42 +58,74 @@ Persona addresses these challenges by implementing:
 | **Analytics Agent**          | Generates intelligent reports and predictive insights based on collected data         |
 | **Personal Assistant Agent** | Handles natural language queries and provides conversational interactions             |
 
-### Model Context Protocol (MCP) Integration
+### AI Framework Architecture
+
+**Model Context Protocol (MCP)**
 
 - Seamless communication between AI agents and external tools
 - Extensible architecture for connecting to third-party services
 - Real-time context sharing across all system components
 - Standardized protocol for AI tool orchestration
 
+**LangChain & LangGraph**
+
+- Advanced agentic workflow orchestration and state management
+- Multi-agent collaboration and task delegation
+- Memory systems for context-aware conversations
+- Custom tool integration and function calling
+- Graph-based execution flows for complex agent behaviors
+
 ### AI and LLM Infrastructure
 
 - **Cloud LLM Providers**: Groq API, Google Gemini API for fast inference
 - **Local LLMs**: Qwen 7B and Mistral 7B models via Ollama for offline/private processing
-- **Agentic Frameworks**: LangChain and LangGraph for workflow orchestration
+- **Agentic Frameworks**: LangChain for agent orchestration, LangGraph for stateful workflows
 - **RAG Pipeline**: Retrieval-Augmented Generation for context-aware responses
+
+### Product Integrations
+
+NUMA seamlessly connects with your favorite productivity and health tools:
+
+| Product             | Integration Purpose   | Features                                                  |
+| ------------------- | --------------------- | --------------------------------------------------------- |
+| **Google Calendar** | Schedule optimization | Event syncing, conflict detection, smart scheduling       |
+| **Google Fit**      | Health data tracking  | Activity metrics, step counts, workout data               |
+| **Google Docs**     | Documentation & notes | Journal entries, report generation, note syncing          |
+| **Strava**          | Fitness tracking      | Workout analysis, performance metrics, activity logs      |
+| **Slack**           | Team communication    | Status updates, notifications, team productivity insights |
+| **LeetCode**        | Coding progress       | Problem-solving tracking, skill development monitoring    |
+| **GitHub**          | Development activity  | Commit tracking, project progress, contribution analytics |
+
+All integrations respect NUMA's privacy-first architecture, with data aggregated before AI analysis.
+
+### Data Architecture
+
+- **Raw Inputs**: User-entered or device-synced data representing subjective state and intent
+- **Aggregated Data**: Computed trends, ratios, and baselines accessible to AI agents
+- **AI Decision Layer**: Reads only aggregated data to produce recommendations and alerts
 
 ### Productivity Tracking
 
-- Task management with intelligent prioritization algorithms
-- Automated time tracking with activity categorization
-- Focus mode with distraction analysis
-- Goal setting with progress visualization
-- Habit tracking with streak maintenance and analytics
+- Energy-based task prioritization matching task difficulty to user capacity
+- Dependency-aware task scheduling and management
+- Calendar optimization with conflict resolution
+- Goal progress tracking with alignment maintenance
+- Routine optimization based on completion patterns
 
-### Health Monitoring
+### Health and Wellbeing Monitoring
 
-- Activity and exercise logging with pattern recognition
-- Sleep quality analysis and recommendations
-- Stress level assessment through behavioral patterns
-- Mood tracking with sentiment analysis
-- Automated break reminders based on work intensity
+- **Physical Health**: Sleep tracking, activity monitoring, workout logging, fatigue detection
+- **Mental Health**: Mood tracking, stress assessment, anxiety monitoring, cognitive load management
+- **Recovery**: Sleep debt calculation, burnout prevention, recovery scheduling
+- **Smartwatch Integration**: Real-time health data syncing and analysis
 
 ### Intelligent Analytics
 
-- AI-powered insights and personalized recommendations
-- Trend analysis and behavioral pattern recognition
-- Predictive analytics for goal achievement probability
-- Customizable dashboards with exportable reports
+- AI-powered insights based on aggregated metrics only
+- Trend analysis with 7-day and 30-day rolling windows
+- Risk detection for burnout and overload
+- Personalized baseline establishment for individualized recommendations
+- Explainable recommendations with full metric traceability
 
 ---
 
@@ -142,6 +184,7 @@ Persona addresses these challenges by implementing:
 | **LLM Providers**  | Groq API, Google Gemini API                                 |
 | **Local LLMs**     | Ollama (Qwen 7B, Mistral 7B)                                |
 | **MCP**            | Model Context Protocol SDK                                  |
+| **Integrations**   | Google Calendar, Google Fit, Google Docs, Strava, Slack, LeetCode, GitHub |
 | **Authentication** | JWT, OAuth 2.0                                              |
 | **DevOps**         | Docker, Git, CI/CD Pipelines                                |
 
@@ -161,8 +204,8 @@ Persona addresses these challenges by implementing:
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/Vinay-R-S/Persona.git
-   cd Persona
+   git clone https://github.com/Vinay-R-S/Numa.git
+   cd Numa
    ```
 
 2. **Install Client Dependencies**
@@ -210,7 +253,7 @@ Persona addresses these challenges by implementing:
 ## Project Structure
 
 ```
-persona/
+numa/
 ├── client/                   # Next.js frontend application
 │   ├── src/
 │   │   ├── app/             # App router pages and layouts
@@ -229,6 +272,8 @@ persona/
 │   ├── main.py              # FastAPI application entry
 │   └── requirements.txt     # Python dependencies
 ├── docs/                     # Project documentation
+│   ├── markdown.md          # Antigravity AI technical specification
+│   └── Features.pdf         # Feature documentation
 └── README.md
 ```
 
@@ -258,7 +303,6 @@ Users can interact with agents through:
 The backend server exposes the following endpoints:
 
 - **Health Check**: `GET /health`
-
   - Returns the status of the server.
   - URL: `http://localhost:8000/health`
   - Response: `{"status": "ok"}`
