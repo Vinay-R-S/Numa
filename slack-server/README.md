@@ -1,4 +1,4 @@
-# 🤖 Slack Control Agent
+#  Slack Control Agent
 
 > A deterministic, production-ready Slack automation backend powered by FastAPI, Groq (Llama 3), and the official Slack SDK.
 
@@ -15,11 +15,11 @@ This project is a high-performance backend for controlling a Slack workspace via
 3.  **Direct Action**: The Slack SDK executes the command immediately.
 
 **Key Benefits:**
--   🚀 **Fast**: Actions take ~1 second.
--   🔒 **Safe**: 0% hallucination rate for IDs.
--   💰 **Cheap**: 1 LLM call per request.
+-    **Fast**: Actions take ~1 second.
+-    **Safe**: 0% hallucination rate for IDs.
+-    **Cheap**: 1 LLM call per request.
 
-## ✨ Features
+## Features
 
 -   **Messaging**: Send DMs, post to channels, reply to threads.
 -   **Channel Management**: Create, Rename, Archive, List.
@@ -29,18 +29,18 @@ This project is a high-performance backend for controlling a Slack workspace via
 -   **Scheduling**: Schedule messages for future delivery.
 -   **Smart Context**: Auto-fetches the latest message if you ask to "react to the last message".
 
-## 🏗 Architecture
+## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a deep dive.
 
-## 🛠 Tech Stack
+##  Tech Stack
 
 -   **Framework**: FastAPI
 -   **LLM**: Groq (Llama-3.1-8b-instant)
 -   **Integration**: Slack SDK (Official)
 -   **Validation**: Pydantic
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### 1. Clone the Repository
 ```bash
@@ -86,7 +86,7 @@ Your Slack Bot needs the following **Bot Token Scopes** under "OAuth & Permissio
 
 **Don't forget to 'Reinstall to Workspace' after adding scopes!**
 
-## 🏃 Running the Application
+##  Running the Application
 
 ### Local Development
 
@@ -104,7 +104,7 @@ Your Slack Bot needs the following **Bot Token Scopes** under "OAuth & Permissio
    ```
    The server will start at `http://localhost:9000`.
 
-### 🖥️ CLI Chat Tool
+###  CLI Chat Tool
 
 A built-in interactive CLI tool is included for easy testing without Postman.
 
@@ -117,11 +117,11 @@ A built-in interactive CLI tool is included for easy testing without Postman.
 
 **Example interaction:**
 ```
-🤖 Slack Control Agent CLI
+Slack Control Agent CLI
 -----------------------------------
 Type your instruction below. Type 'exit' or 'quit' to stop.
 
-💡 Examples:
+ Examples:
  - Send hello to #general
  - Create a channel called #project-alpha
  - Add thumbs_up reaction to last message in #general
@@ -131,7 +131,7 @@ Agent: (Thinking...)
 Agent: Message sent to general
 ```
 
-## 🐳 Docker Support
+##  Docker Support
 
 Build and run with Docker:
 ```bash
@@ -139,7 +139,7 @@ docker build -t slack-agent .
 docker run -p 9000:9000 --env-file .env slack-agent
 ```
 
-## 📚 Usage Examples
+##  Usage Examples
 
 **Send a Message:**
 ```json
@@ -165,7 +165,7 @@ POST /chat
 }
 ```
 
-## 📂 Project Structure
+##  Project Structure
 
 ```
 slack-control-agent/
@@ -183,10 +183,10 @@ slack-control-agent/
 └── WORKFLOW.md          # Step-by-step logic doc
 ```
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please fork the repository and submit a Pull Request.
 
-## 📄 License
+##  License
 
 MIT License.
