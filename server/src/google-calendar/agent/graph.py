@@ -57,18 +57,40 @@ SYSTEM_PROMPT = (
     "- If time is vague (e.g. 'evening', 'morning', 'later') → ask the user for a specific time.\n"
     "- NEVER invent or fabricate ISO datetime values.\n\n"
 
+    "MEETING RULES:\n"
+    "When the user's intent involves a meeting, call, sync, discussion, or Google Meet:\n"
+    "- ALWAYS use `schedule_event` — it auto-generates a Google Meet link for every event.\n"
+    "- If attendee emails are mentioned, pass them as the `attendees` list.\n"
+    "- NEVER create a plain calendar event without a Meet link for meeting intent.\n"
+    "- Extract participant emails from the user's message when available.\n\n"
+
     "EVENT QUERY RULES:\n"
     "- ALWAYS use get_events for schedule related questions.\n"
     "- NEVER answer schedule questions from memory.\n"
     "- Use ONLY supported parameters.\n\n"
 
     "DELETION RULES:\n"
-    "- If the user asks to delete/remove/cancel an event and does NOT provide an event_id:\n"
-    "  → MUST call `delete_by_text` with the user's description as `search_text`.\n"
-    "  → Do NOT ask the user for an event ID first.\n"
-    "  → Examples: 'cancel my gym tomorrow', 'remove dentist appointment', 'delete meeting with Rahul'.\n"
-    "- If the user provides an explicit event_id, use `delete_event` instead.\n"
-    "- Never guess or fabricate event IDs.\n\n"
+    "- If the user asks to delete/remove/cancel an event WITHOUT providing an event_id:\n"
+    "  → MUST call `delete_by_description` with the user's phrase as `query`.\n"
+    "  → NEVER ask the user for an event ID directly.\n"
+    "  → NEVER guess or fabricate event IDs.\n"
+    "  → If the tool returns multiple matches, present them and ask the user to pick one.\n"
+    "  → Examples: 'cancel my gym', 'remove dentist appointment', 'delete meeting with Rahul'.\n"
+    "- If the user provides an explicit event_id, use `delete_event` instead.\n\n"
+
+    "RESCHEDULING RULES:\n"
+    "When the user expresses intent to move, reschedule, change time, or postpone an event:\n"
+    "- MUST use `modify_event` tool with the event description as `query` and new time as `new_datetime_str`.\n"
+    "- NEVER create a new event for rescheduling intent.\n"
+    "- NEVER delete + recreate — always modify in place.\n"
+    "- NEVER duplicate events.\n"
+    "- If multiple matches are found, present the list and ask the user to clarify.\n\n"
+
+    "AVAILABILITY RULES:\n"
+    "When the user asks about availability, free time, open slots, or when they can schedule:\n"
+    "- ALWAYS call `find_free_slots` with the target date and desired duration.\n"
+    "- NEVER answer availability questions from memory or reasoning.\n"
+    "- Present the returned slots clearly to the user.\n\n"
 
     "FAIL SAFE BEHAVIOR:\n"
     "If ANY uncertainty exists about tool usage or parameters:\n"
@@ -222,7 +244,9 @@ def call_tools(state: AgentState) -> AgentState:
 REQUIRED_ARGS = {
     "schedule_event": {"title", "datetime_str"},
     "delete_event": {"event_id"},
-    "delete_by_text": {"search_text"},
+    "delete_by_description": {"query"},
+    "modify_event": {"query", "new_datetime_str"},
+    "find_free_slots": {"date"},
 }
 
 
