@@ -1,70 +1,116 @@
 # Quick Start Guide
 
-## Prerequisites
-- Python 3.8 or higher
-- Groq API key (get from [Groq Console](https://console.groq.com/keys))
-- Google Cloud project with Calendar & Gmail APIs enabled
-- `gCalender_credentials.json` file from Google Cloud Console
+Concise setup guide for running the Agentic AI Google Calendar Assistant locally.
 
-## Installation Steps
+---
 
-### 1. Install dependencies
+## 1. Prerequisites
+
+- Python 3.8+
+- Groq API key ([console.groq.com](https://console.groq.com))
+- Google Cloud project with **Calendar API** and **Gmail API** enabled
+- Google Service Account JSON credentials file
+
+---
+
+## 2. Installation
+
 ```bash
+git clone <repo-url>
+cd AgenticAi-GoogleCalender
+
+python -m venv venv
+venv\Scripts\activate            # Windows
+# source venv/bin/activate       # macOS/Linux
+
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment Variables
-Edit `.env` and add your Groq API key:
-```
-GROQ_API_KEY=gsk_...
+---
+
+## 3. Environment Variables
+
+Create `.env` in the project root:
+
+```env
+GROQ_API_KEY=gsk_your_groq_api_key_here
 TIMEZONE=Asia/Kolkata
+GOOGLE_CREDENTIALS_FILE=gCalender_credentials.json
 ```
 
-### 3. Run the application
+---
+
+## 4. Google Service Account Setup
+
+### Create the Service Account
+
+1. Open [Google Cloud Console](https://console.cloud.google.com) > **APIs & Services > Credentials**
+2. Click **Create Credentials > Service Account**
+3. Name it (e.g. `calendar-agent`) and click **Done**
+
+### Generate JSON Key
+
+1. Click the service account > **Keys** tab
+2. **Add Key > Create new key > JSON**
+3. Rename the downloaded file to `gCalender_credentials.json`
+4. Place it in the project root
+
+### Share Calendar with Service Account
+
+1. Open the JSON file and copy the `client_email` value
+2. Open [Google Calendar](https://calendar.google.com)
+3. Your calendar > three-dot menu > **Settings and sharing**
+4. Under **Share with specific people or groups**, click **Add people and groups**
+5. Paste the `client_email`
+6. Set permission to **Make changes to events**
+7. Click **Send**
+
+> **Do NOT make your calendar public.** Share only with the service account email.
+
+---
+
+## 5. Running the Server
+
 ```bash
-python app.py
+uvicorn app:app --reload
 ```
 
-### 4. First-time OAuth Setup
-- A browser window will open automatically
-- Sign in with your Google account
-- Grant permissions for Calendar and Gmail access
-- The `token.json` file will be created for future use including the refreshing of the token.
+Server starts at `http://localhost:8000`.
 
-### 5. Test the API
-Visit: http://localhost:8000/docs
+---
 
-Or use curl:
+## 6. Testing the API
+
+### Swagger Docs
+
+Open `http://localhost:8000/docs` in your browser.
+
+### Example Request
+
 ```bash
-curl -X POST "http://localhost:8000/agent" \
+curl -X POST http://localhost:8000/agent \
   -H "Content-Type: application/json" \
-  -d "{\"query\": \"Schedule a test meeting tomorrow at 3pm\"}"
+  -d '{"query": "Schedule a team sync tomorrow at 3pm"}'
 ```
 
-## Example Queries
+### Sample Queries
 
-**Calendar:**
-- "Schedule a dentist appointment on Feb 15 at 10am"
-- "Create a 2-hour meeting called 'Project Review' next Monday at 2pm"
-- "Book a lunch meeting tomorrow at 1pm"
-- "Show me my upcoming events"
-- "Cancel the meeting with Rahul"
+```
+"What's on my calendar today?"
+"Cancel my gym"
+"Move my meeting to 5pm"
+"When am I free tomorrow?"
+"Email john@example.com about the report"
+```
 
-**Email:**
-- "Send an email to john@example.com about the meeting"
-- "Email team@company.com with subject 'Weekly Update'"
+---
 
-## Troubleshooting
+## 7. Common Failure Cases
 
-**Groq API Error:**
-- Make sure your `.env` file has a valid `GROQ_API_KEY`
-- Get your API key from Groq Console (https://console.groq.com/keys)
-
-**Google OAuth Error:**
-- Ensure `gCalender_credentials.json` is present in the root directory
-- Delete `token.json` and re-authenticate if you have permission issues
-- Check that Calendar and Gmail APIs are enabled in Google Cloud Console
-
-**Import Errors:**
-- Run `pip install -r requirements.txt` again
-- Make sure you're using Python 3.8+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| `FileNotFoundError` on credentials | JSON file missing or misnamed | Ensure `gCalender_credentials.json` exists in project root |
+| `403 insufficientPermissions` | Calendar not shared with service account | Share calendar with `client_email` and grant **Make changes to events** |
+| `GROQ_API_KEY` errors | Missing or invalid key | Verify key in `.env` starts with `gsk_` |
+| Wrong timezone on events | System misconfiguration | All times are hardcoded to `Asia/Kolkata` in `calendar_service.py` |
+| Meet link not generated | Account lacks Meet access | Ensure Google account has Meet enabled |
