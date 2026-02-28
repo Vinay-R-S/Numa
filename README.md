@@ -86,15 +86,23 @@ NUMA addresses these challenges by implementing:
 
 NUMA seamlessly connects with your favorite productivity and health tools:
 
-| Product             | Integration Purpose   | Features                                                  |
-| ------------------- | --------------------- | --------------------------------------------------------- |
-| **Google Calendar** | Schedule optimization | Event syncing, conflict detection, smart scheduling       |
-| **Google Fit**      | Health data tracking  | Activity metrics, step counts, workout data               |
-| **Google Docs**     | Documentation & notes | Journal entries, report generation, note syncing          |
-| **Strava**          | Fitness tracking      | Workout analysis, performance metrics, activity logs      |
-| **Slack**           | Team communication    | Status updates, notifications, team productivity insights |
-| **LeetCode**        | Coding progress       | Problem-solving tracking, skill development monitoring    |
-| **GitHub**          | Development activity  | Commit tracking, project progress, contribution analytics |
+| Product             | Integration Purpose    | Features                                                  |
+| ------------------- | ---------------------- | --------------------------------------------------------- |
+| **Google Calendar** | Schedule optimization  | Event syncing, conflict detection, smart scheduling       |
+| **Google Fit**      | Health data tracking   | Activity metrics, step counts, workout data               |
+| **Strava**          | Fitness tracking       | Workout analysis, performance metrics, activity logs      |
+| **Slack**           | Team communication     | Status updates, notifications, team productivity insights |
+| **LeetCode**        | Coding progress        | Problem-solving tracking, skill development monitoring    |
+| **GitHub**          | Development activity   | Commit tracking, project progress, contribution analytics |
+
+### Built-in Tools
+
+| Tool           | Purpose                                                       |
+| -------------- | ------------------------------------------------------------- |
+| **Journal**    | Guided journaling with AI-powered prompts and mood tracking   |
+| **Meditation** | Breathing exercises and mindfulness sessions                  |
+| **Timer**      | Pomodoro and focus timers integrated with task scheduling      |
+| **Todo**       | Context-aware task management with energy-based prioritization |
 
 All integrations respect NUMA's privacy-first architecture, with data aggregated before AI analysis.
 
@@ -184,7 +192,7 @@ All integrations respect NUMA's privacy-first architecture, with data aggregated
 | **LLM Providers**  | Groq API, Google Gemini API                                 |
 | **Local LLMs**     | Ollama (Qwen 7B, Mistral 7B)                                |
 | **MCP**            | Model Context Protocol SDK                                  |
-| **Integrations**   | Google Calendar, Google Fit, Google Docs, Strava, Slack, LeetCode, GitHub |
+| **Integrations**   | Google Calendar, Google Fit, Strava, Slack, LeetCode, GitHub  |
 | **Authentication** | JWT, OAuth 2.0                                              |
 | **DevOps**         | Docker, Git, CI/CD Pipelines                                |
 
@@ -254,26 +262,52 @@ All integrations respect NUMA's privacy-first architecture, with data aggregated
 
 ```
 numa/
-├── client/                   # Next.js frontend application
+├── client/                          # Next.js frontend application
+│   ├── assets/
+│   │   ├── gc-epic-pro-demo/        # Custom font (ExtraBold)
+│   │   └── Images/                  # Integration logos (WebP)
 │   ├── src/
-│   │   ├── app/             # App router pages and layouts
-│   │   │   ├── globals.css  # Global styles with Tailwind
-│   │   │   ├── layout.tsx   # Root layout component
-│   │   │   └── page.tsx     # Home page
-│   │   └── lib/             # Utilities (shadcn cn helper)
-│   ├── public/              # Static assets
-│   ├── components.json      # shadcn/ui configuration
-│   ├── tailwind.config.ts   # Tailwind configuration
+│   │   ├── app/
+│   │   │   ├── auth/page.tsx        # Sign in / sign up page
+│   │   │   ├── globals.css          # Global styles (Tailwind v4)
+│   │   │   ├── layout.tsx           # Root layout
+│   │   │   └── page.tsx             # Landing page entry
+│   │   ├── components/
+│   │   │   ├── sections/            # Landing page sections
+│   │   │   │   ├── ArchitectureSection.tsx
+│   │   │   │   ├── CTASection.tsx
+│   │   │   │   ├── FeaturesSection.tsx
+│   │   │   │   ├── Footer.tsx
+│   │   │   │   ├── HeroSection.tsx
+│   │   │   │   ├── HowItWorksSection.tsx
+│   │   │   │   └── IntegrationsSection.tsx
+│   │   │   ├── ui/                  # Reusable UI primitives (shadcn/ui)
+│   │   │   │   ├── badge.tsx
+│   │   │   │   ├── button.tsx
+│   │   │   │   ├── rotating-text.tsx
+│   │   │   │   └── separator.tsx
+│   │   │   ├── ContentBox.tsx       # Section container
+│   │   │   ├── LandingPage.tsx      # Landing page layout
+│   │   │   ├── LaserFlow.tsx        # Three.js background effect
+│   │   │   ├── Navbar.tsx           # Navigation bar
+│   │   │   └── OrbitingIntegrations.tsx  # Orbital integration viz
+│   │   └── lib/
+│   │       └── utils.ts             # Tailwind merge helper
+│   ├── components.json              # shadcn/ui configuration
+│   ├── postcss.config.mjs           # PostCSS / Tailwind v4 config
 │   └── package.json
-├── server/                   # FastAPI backend server
-│   ├── routers/             # API route definitions
-│   ├── models/              # Pydantic models and schemas
-│   ├── services/            # Business logic layer
-│   ├── main.py              # FastAPI application entry
-│   └── requirements.txt     # Python dependencies
-├── docs/                     # Project documentation
-│   ├── markdown.md          # Antigravity AI technical specification
-│   └── Features.pdf         # Feature documentation
+├── server/                          # FastAPI backend server
+│   ├── src/
+│   │   ├── api/                     # API integrations (Strava, Google Fit)
+│   │   └── config/                  # Credentials & tokens
+│   ├── google-calendar/             # Google Calendar agent
+│   │   ├── agent/                   # LangGraph agent (graph, llm, state, tools)
+│   │   └── services/               # Calendar, Gmail, auth services
+│   ├── main.py                      # FastAPI application entry
+│   ├── test_main.py                 # Backend tests
+│   └── requirements.txt             # Python dependencies
+├── docs/                            # Project documentation
+│   └── markdown.md                  # Technical specification
 └── README.md
 ```
 
