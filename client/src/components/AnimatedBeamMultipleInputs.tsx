@@ -22,7 +22,7 @@ const Circle = forwardRef<
     <div
       ref={ref}
       className={cn(
-        "z-10 flex size-12 items-center justify-center rounded-full border border-white bg-black p-2 shadow-[0_0_20px_-12px_rgba(134,156,243,0.8)]",
+        "z-10 flex size-12 items-center justify-center rounded-full border border-white bg-[#0a0a0b] p-2 shadow-[0_0_20px_-12px_rgba(134,156,243,0.8)]",
         className,
       )}
     >
@@ -105,7 +105,7 @@ export function AnimatedBeamMultipleInputs({
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col justify-center">
           <Circle
             ref={div8Ref}
-            className="size-20 bg-black/80 z-20 border-white/10"
+            className="size-20 bg-[#0a0a0b]/80 z-20 border-white/10"
           >
             <Icons.numa />
           </Circle>
@@ -113,26 +113,26 @@ export function AnimatedBeamMultipleInputs({
 
         {/* Bottom - User Icon */}
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ transform: "translate(0px, 180px)" }}
+          className="absolute left-1/2 -translate-x-1/2"
+          style={{ top: "82%" }}
         >
           <Circle
             ref={div9Ref}
-            className="size-16 z-20 bg-black/80 border-white/10"
+            className="size-16 z-20 bg-[#0a0a0b]/80 border-white/10"
           >
             <User className="size-8 text-white" />
           </Circle>
         </div>
 
-        {/* Service Icons Positioned in a Top Arc (180 deg to 0 deg) */}
-        {/* Sorted Alphabetically Left to Right */}
+        {/* Service Icons — Semicircle arc (180° to 0°) centered on NUMA hub */}
+        {/* Horizontal radius: 38%, Vertical radius: 32% from center (50%, 50%) */}
 
-        {/* 1. GitHub: Left (180 deg) */}
+        {/* 1. GitHub: 180° → (12%, 50%) */}
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ transform: "translate(-200px, 0px)" }}
+          className="absolute"
+          style={{ left: "12%", top: "50%", transform: "translate(-50%, -50%)" }}
         >
-          <Circle ref={div1Ref} className="size-16 overflow-hidden">
+          <Circle ref={div1Ref} className="size-14 overflow-hidden">
             <Image
               src={GithubLogo}
               alt="GitHub"
@@ -141,12 +141,12 @@ export function AnimatedBeamMultipleInputs({
           </Circle>
         </div>
 
-        {/* 2. Google Calendar (210 deg) - (-173, -100) */}
+        {/* 2. Google Calendar: 150° → (17%, 34%) */}
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ transform: "translate(-173px, -100px)" }}
+          className="absolute"
+          style={{ left: "17%", top: "34%", transform: "translate(-50%, -50%)" }}
         >
-          <Circle ref={div2Ref} className="size-16 overflow-hidden">
+          <Circle ref={div2Ref} className="size-14 overflow-hidden">
             <div className="flex h-full w-full items-center justify-center rounded-full bg-white p-1.5">
               <Image
                 src={GoogleCalendarLogo}
@@ -157,12 +157,12 @@ export function AnimatedBeamMultipleInputs({
           </Circle>
         </div>
 
-        {/* 3. Google Docs (240 deg) - (-100, -173) */}
+        {/* 3. Google Docs: 120° → (31%, 22%) */}
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ transform: "translate(-100px, -173px)" }}
+          className="absolute"
+          style={{ left: "31%", top: "22%", transform: "translate(-50%, -50%)" }}
         >
-          <Circle ref={div3Ref} className="size-16 overflow-hidden">
+          <Circle ref={div3Ref} className="size-14 overflow-hidden">
             <Image
               src={GoogleDocsLogo}
               alt="Google Docs"
@@ -171,12 +171,12 @@ export function AnimatedBeamMultipleInputs({
           </Circle>
         </div>
 
-        {/* 4. Google Fit: Top (270 deg) */}
+        {/* 4. Google Fit: 90° → (50%, 18%) */}
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ transform: "translate(0px, -200px)" }}
+          className="absolute"
+          style={{ left: "50%", top: "18%", transform: "translate(-50%, -50%)" }}
         >
-          <Circle ref={div4Ref} className="size-16 overflow-hidden">
+          <Circle ref={div4Ref} className="size-14 overflow-hidden">
             <div className="flex h-full w-full items-center justify-center rounded-full bg-white p-1.5">
               <Image
                 src={GoogleFitLogo}
@@ -187,12 +187,12 @@ export function AnimatedBeamMultipleInputs({
           </Circle>
         </div>
 
-        {/* 5. LeetCode (300 deg) - (100, -173) */}
+        {/* 5. LeetCode: 60° → (69%, 22%) */}
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ transform: "translate(100px, -173px)" }}
+          className="absolute"
+          style={{ left: "69%", top: "22%", transform: "translate(-50%, -50%)" }}
         >
-          <Circle ref={div5Ref} className="size-16 overflow-hidden">
+          <Circle ref={div5Ref} className="size-14 overflow-hidden">
             <div className="flex h-full w-full items-center justify-center rounded-full bg-white p-1.5">
               <Image
                 src={LeetCodeLogo}
@@ -203,24 +203,24 @@ export function AnimatedBeamMultipleInputs({
           </Circle>
         </div>
 
-        {/* 6. Slack (330 deg) - (173, -100) */}
+        {/* 6. Slack: 30° → (83%, 34%) */}
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ transform: "translate(173px, -100px)" }}
+          className="absolute"
+          style={{ left: "83%", top: "34%", transform: "translate(-50%, -50%)" }}
         >
-          <Circle ref={div6Ref} className="size-16 overflow-hidden">
+          <Circle ref={div6Ref} className="size-14 overflow-hidden">
             <div className="flex h-full w-full items-center justify-center rounded-full bg-white p-2">
               <Icons.slack />
             </div>
           </Circle>
         </div>
 
-        {/* 7. Strava: Right (0/360 deg) */}
+        {/* 7. Strava: 0° → (88%, 50%) */}
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ transform: "translate(200px, 0px)" }}
+          className="absolute"
+          style={{ left: "88%", top: "50%", transform: "translate(-50%, -50%)" }}
         >
-          <Circle ref={div7Ref} className="size-16 overflow-hidden">
+          <Circle ref={div7Ref} className="size-14 overflow-hidden">
             <div className="flex h-full w-full items-center justify-center rounded-full bg-white p-1.5">
               <Image
                 src={StravaLogo}

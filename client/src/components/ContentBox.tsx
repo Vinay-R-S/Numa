@@ -1,45 +1,48 @@
 "use client";
+
 import React from "react";
-import { AnimatedBeamMultipleInputs } from "./AnimatedBeamMultipleInputs";
+import HeroSection from "./sections/HeroSection";
+import FeaturesSection from "./sections/FeaturesSection";
+import HowItWorksSection from "./sections/HowItWorksSection";
+import IntegrationsSection from "./sections/IntegrationsSection";
+import ArchitectureSection from "./sections/ArchitectureSection";
+import CTASection from "./sections/CTASection";
+import Footer from "./sections/Footer";
 
 const ContentBox = () => {
   return (
     <div
-      className="relative z-0 w-full bg-black text-white"
+      className="relative z-0 w-full text-white"
       style={{
+        backgroundColor: "#0a0a0b",
         minHeight: "100vh",
-        marginTop: "-15vh", // Pull up to overlap with the laser area
-        paddingTop: "15vh", // Compensate for the negative margin
+        marginTop: "-15vh",
+        paddingTop: "10vh",
         borderTopLeftRadius: "3rem",
         borderTopRightRadius: "3rem",
-        borderTop: "1px solid rgba(255, 255, 255, 0.2)",
-        borderLeft: "1px solid rgba(255, 255, 255, 0.1)",
-        borderRight: "1px solid rgba(255, 255, 255, 0.1)",
-        boxShadow: "0 -20px 50px rgba(0,0,0,0.8)", // Shadow to blend
-        backgroundImage: `
-          radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px)
-        `,
-        backgroundSize: "40px 40px",
+        boxShadow: "0 -30px 80px rgba(0,0,0,0.95)",
       }}
     >
-      <div className="max-w-7xl mx-auto px-6 py-12">
-        <h2 className="text-4xl font-bold mb-6">Welcome to NUMA</h2>
-        <p className="text-lg text-gray-400 max-w-2xl">
-          Experience the next generation of digital interaction. scroll down to
-          explore more.
-        </p>
+      {/* Subtle dot grid background */}
+      <div
+        className="absolute inset-0 pointer-events-none opacity-50"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)",
+          backgroundSize: "48px 48px",
+          borderTopLeftRadius: "3rem",
+          borderTopRightRadius: "3rem",
+        }}
+      />
 
-        {/* Placeholder content for demonstration */}
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className="h-64 rounded-xl border border-white/10 bg-white/5 p-6">
-            <div className="h-full w-full flex items-center justify-center text-white/20">
-              Content Block 1
-            </div>
-          </div>
-          <div className="relative h-[500px] w-full flex items-center justify-center">
-            <AnimatedBeamMultipleInputs />
-          </div>
-        </div>
+      <div className="relative z-10">
+        <HeroSection />
+        <FeaturesSection />
+        <HowItWorksSection />
+        <IntegrationsSection />
+        <ArchitectureSection />
+        <CTASection />
+        <Footer />
       </div>
     </div>
   );

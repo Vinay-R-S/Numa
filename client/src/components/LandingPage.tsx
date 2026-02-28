@@ -1,6 +1,7 @@
 "use client";
 import { LaserFlow } from "./LaserFlow";
 import ContentBox from "./ContentBox";
+import Navbar from "./Navbar";
 import localFont from "next/font/local";
 import { motion, useScroll, useTransform } from "framer-motion";
 import { useRef } from "react";
@@ -20,18 +21,19 @@ export default function LandingPage() {
 
   // Helper to create staggered transforms based on scroll PROGRESS (0 to 1)
   const useCharReveal = (index: number) => {
-    // Balanced Reveal (0-50%):
-    // Name reveals over the first half of the scroll.
-    // Frame stays pinned for the full duration.
-    const step = 0.12;
-    const start = index * step;
-    const end = start + step;
+    // Container = 350vh → scroll distance = 250vh.
+    // All 4 chars complete in first 12% = 30vh of scrolling → very fast reveal.
+    // ContentBox appears at ~(250-15)/250 = 94% → massive "all bright" buffer.
+    const revealEnd = 0.12;
+    const charStep = revealEnd / text.length; // 0.03 per char
+    const start = index * charStep;
+    const end = start + charStep;
 
-    // Opacity: 0.1 -> 1
-    const opacity = useTransform(scrollYProgress, [start, end], [0.1, 1]);
+    // Opacity: 0.05 -> 1
+    const opacity = useTransform(scrollYProgress, [start, end], [0.05, 1]);
 
-    // Blur: 10px -> 0px
-    const blur = useTransform(scrollYProgress, [start, end], [10, 0]);
+    // Blur: 14px -> 0px
+    const blur = useTransform(scrollYProgress, [start, end], [14, 0]);
     const filter = useTransform(blur, (v) => `blur(${v}px)`);
 
     return { opacity, filter };
@@ -40,12 +42,13 @@ export default function LandingPage() {
   return (
     // Outer container - 300vh vertical space.
     // REMOVED 'overflowX: hidden' to fix 'position: sticky'
-    <div style={{ background: "black" }}>
+    <div style={{ background: "#0a0a0b" }}>
+      <Navbar />
       <div
         ref={containerRef}
         style={{
-          height: "300vh",
-          background: "black",
+          height: "350vh",
+          background: "#0a0a0b",
           position: "relative",
           zIndex: 10,
         }}
@@ -58,7 +61,7 @@ export default function LandingPage() {
             top: 0,
             width: "100%",
             height: "100vh",
-            background: "black",
+            background: "#0a0a0b",
             display: "flex",
             justifyContent: "flex-start",
             alignItems: "center",
