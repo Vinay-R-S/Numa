@@ -140,8 +140,8 @@ function OrbitNode({
   size?: "sm" | "md";
 }) {
   const rad = (angle * Math.PI) / 180;
-  const x = 50 + radius * Math.cos(rad);
-  const y = 50 + radius * Math.sin(rad);
+  const x = parseFloat((50 + radius * Math.cos(rad)).toFixed(4));
+  const y = parseFloat((50 + radius * Math.sin(rad)).toFixed(4));
 
   const sizeClasses = size === "sm" ? "h-10 w-10" : "h-12 w-12";
   const imgPad = size === "sm" ? "p-1.5" : "p-2";
