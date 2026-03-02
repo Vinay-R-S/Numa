@@ -1,0 +1,138 @@
+[
+  {
+    "text": "PR on 10K! Felt amazing, perfect weather conditions today.",
+    "sentiment": {
+      "sentiment": "positive",
+      "confidence": 0.9622695446014404,
+      "scores": {
+        "positive": 0.9622695446014404,
+        "neutral": 0.019089821726083755,
+        "negative": 0.018640587106347084
+      }
+    },
+    "performance": {
+      "performance": "improvement",
+      "confidence": 0.964250922203064
+    },
+    "entities": [
+      {
+        "text": "10K",
+        "label": "DISTANCE",
+        "start": 6,
+        "end": 9
+      }
+    ],
+    "summary": "Performance: improvement | Sentiment: positive (0.96 confidence) | Distance: 10K"
+  },
+  {
+    "text": "Struggled with the hills, knees were painful throughout the run.",
+    "sentiment": {
+      "sentiment": "negative",
+      "confidence": 0.9852603673934937,
+      "scores": {
+        "positive": 0.007377563044428825,
+        "neutral": 0.007362145930528641,
+        "negative": 0.9852603673934937
+      }
+    },
+    "performance": {
+      "performance": "struggle",
+      "confidence": 0.9844875931739807
+    },
+    "entities": [
+      {
+        "text": "hills",
+        "label": "LOCATION",
+        "start": 19,
+        "end": 24
+      },
+      {
+        "text": "knees",
+        "label": "BODY_PART",
+        "start": 26,
+        "end": 31
+      },
+      {
+        "text": "painful",
+        "label": "SYMPTOM",
+        "start": 37,
+        "end": 44
+      }
+    ],
+    "summary": "Performance: struggle | Sentiment: negative (0.99 confidence) | Body parts mentioned: knees | Symptoms: painful"
+  },
+  {
+    "text": "Easy recovery 5 miles on the treadmill, no issues.",
+    "sentiment": {
+      "sentiment": "neutral",
+      "confidence": 0.9800856709480286,
+      "scores": {
+        "positive": 0.010443962179124355,
+        "neutral": 0.9800856709480286,
+        "negative": 0.009470455348491669
+      }
+    },
+    "performance": {
+      "performance": "neutral",
+      "confidence": 0.9726271033287048
+    },
+    "entities": [
+      {
+        "text": "5 miles",
+        "label": "DISTANCE",
+        "start": 14,
+        "end": 21
+      },
+      {
+        "text": "treadmill",
+        "label": "LOCATION",
+        "start": 29,
+        "end": 38
+      }
+    ],
+    "summary": "Performance: neutral | Sentiment: neutral (0.98 confidence) | Distance: 5 miles"
+  },
+  {
+    "text": "Didn't sleep well last night, workout felt really hard and exhausting.",
+    "sentiment": {
+      "sentiment": "negative",
+      "confidence": 0.986122727394104,
+      "scores": {
+        "positive": 0.006938815116882324,
+        "neutral": 0.006938441190868616,
+        "negative": 0.986122727394104
+      }
+    },
+    "performance": {
+      "performance": "struggle",
+      "confidence": 0.9861112833023071
+    },
+    "entities": [],
+    "summary": "Performance: struggle | Sentiment: negative (0.99 confidence)"
+  },
+  {
+    "text": "Sharp pain in lower back around mile 3, had to stop early.",
+    "sentiment": {
+      "sentiment": "negative",
+      "confidence": 0.9868829846382141,
+      "scores": {
+        "positive": 0.005948751699179411,
+        "neutral": 0.007168215233832598,
+        "negative": 0.9868829846382141
+      }
+    },
+    "performance": {
+      "performance": "struggle",
+      "confidence": 0.9862831234931946
+    },
+    "entities": [
+      {
+        "text": "lower back",
+        "label": "BODY_PART",
+        "start": 14,
+        "end": 24
+      }
+    ],
+    "summary": "Performance: struggle | Sentiment: negative (0.99 confidence) | Body parts mentioned: lower back"
+  }
+]
