@@ -34,3 +34,10 @@ ENV/
 
 # Logs
 *.log
+
+# Database
+*.db
+*.sqlite
+
+# Data
+*.csv

@@ -1,16 +1,28 @@
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import logging
 from app.intent_parser import parse_intent
 from app.slack_router import router
 from app.config import settings
-
-# Initialize FastAPI
-app = FastAPI(title="Slack Automation Backend", version="3.0.0")
+from app.monitor.scheduler import start_scheduler, stop_scheduler
 
 # Logging
 logger = logging.getLogger("api")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting up application...")
+    start_scheduler()
+    yield
+    # Shutdown
+    logger.info("Shutting down application...")
+    stop_scheduler()
+
+# Initialize FastAPI with lifespan
+app = FastAPI(title="Slack Automation Backend", version="3.0.0", lifespan=lifespan)
 
 # ----------------------------
 # Schemas

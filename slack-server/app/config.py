@@ -19,6 +19,17 @@ class Settings(BaseModel):
     SLACK_APP_TOKEN: str = os.getenv("SLACK_APP_TOKEN", "") # Optional depending on socket mode, but good to have
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    MONITOR_CHANNELS: str = os.getenv("MONITOR_CHANNELS", "")
+    CHECK_INTERVAL_MINUTES: int = int(os.getenv("CHECK_INTERVAL_MINUTES", "15"))
+    NOTIFICATION_USER_ID: str = os.getenv("NOTIFICATION_USER_ID", "")
+    
+    # Email Settings
+    EMAIL_ENABLED: bool = os.getenv("EMAIL_ENABLED", "false").lower() == "true"
+    EMAIL_SENDER: str = os.getenv("EMAIL_SENDER", "")
+    EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
+    EMAIL_RECIPIENT: str = os.getenv("EMAIL_RECIPIENT", "")
+    SMTP_SERVER: str = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
     
     def validate_keys(self):
         if not self.SLACK_BOT_TOKEN.startswith("xoxb-"):
