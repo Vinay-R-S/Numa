@@ -3,16 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Configure CORS
-origins = [
-    "http://localhost",
-    "http://localhost:3000",
-]
-
+# Configure CORS — allow all origins for development; restrict to your domain in production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

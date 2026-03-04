@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -15,7 +15,13 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "NUMA - AI-Powered Life Operating System",
   description:
-    "Intelligent agent for productivity, health, and wellbeing. Explainable, privacy-first AI that matches task difficulty to your actual capacity.",
+    "NUMA unifies your health trackers, calendars, code repos, and communication tools into one AI-powered platform. Intelligent agents handle the rest.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default function RootLayout({

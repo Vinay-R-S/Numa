@@ -54,7 +54,7 @@ export default function HeroSection() {
               One Platform for
             </span>
             <br />
-            <div className="mt-2 flex items-center justify-center gap-3">
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
               <span className="text-transparent bg-clip-text bg-linear-to-b from-white via-white/90 to-white/60">
                 All Your
               </span>

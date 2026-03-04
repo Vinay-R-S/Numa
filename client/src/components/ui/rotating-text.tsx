@@ -63,7 +63,7 @@ export const RotatingText = ({
           "relative inline-flex items-center justify-center overflow-hidden rounded-xl bg-white text-black px-5 py-1",
           boxClassName
         )}
-        style={{ minWidth: "200px" }}
+        style={{ minWidth: "clamp(130px, 43vw, 200px)" }}
       >
         <AnimatePresence mode="wait" custom={direction}>
           <motion.span

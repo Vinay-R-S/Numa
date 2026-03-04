@@ -28,22 +28,22 @@ export default function Navbar() {
         initial={{ y: -100, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ duration: 0.8, ease: [0.23, 1, 0.32, 1] }}
-        className="fixed top-0 left-0 right-0 z-100 flex justify-center pt-4 px-4"
+        className="fixed top-0 left-0 right-0 z-100 flex justify-center xl:pt-4 xl:px-4"
       >
         <div
-          className={`w-full max-w-5xl transition-all duration-500 rounded-2xl border ${
+          className={`w-full max-w-5xl transition-all duration-500 xl:rounded-2xl border ${
             scrolled
-              ? "bg-[#0a0a0b]/80 backdrop-blur-2xl border-white/8 shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
+              ? "bg-[#0a0a0b]/90 backdrop-blur-2xl border-white/8 shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
               : "bg-transparent border-transparent"
           }`}
         >
-          <div className="px-6 h-14 flex items-center justify-between">
+          <div className="px-4 xl:px-6 h-14 flex items-center justify-between">
             <a href="#" className="text-lg font-bold text-white tracking-tight">
               NUMA
             </a>
 
             {/* Desktop links */}
-            <div className="hidden md:flex items-center gap-1">
+            <div className="hidden xl:flex items-center gap-1">
               {navLinks.map((link) => (
                 <a
                   key={link.label}
@@ -65,9 +65,9 @@ export default function Navbar() {
               </div>
             </div>
 
-            {/* Mobile hamburger */}
+            {/* Hamburger — shown below xl (1280px) */}
             <button
-              className="md:hidden text-white p-1"
+              className="xl:hidden text-white p-1"
               onClick={() => setMobileOpen(!mobileOpen)}
             >
               {mobileOpen ? (
@@ -88,24 +88,35 @@ export default function Navbar() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-99 bg-[#0a0a0b]/95 backdrop-blur-2xl pt-24 px-8"
+            className="fixed inset-0 z-200 bg-[#0a0a0b]/95 backdrop-blur-2xl"
           >
+            {/* Header strip — same height as navbar */}
+            <div className="flex items-center justify-between px-4 h-14 border-b border-white/6">
+              <span className="text-lg font-bold text-white tracking-tight">NUMA</span>
+              <button
+                className="text-white p-1"
+                onClick={() => setMobileOpen(false)}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
             <motion.div
-              initial={{ y: 20, opacity: 0 }}
+              initial={{ y: 16, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 20, opacity: 0 }}
+              exit={{ y: 16, opacity: 0 }}
               transition={{ delay: 0.05, duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
-              className="flex flex-col gap-1"
+              className="flex flex-col px-6 pt-0"
             >
               {navLinks.map((link, i) => (
                 <motion.a
                   key={link.label}
                   href={link.href}
                   onClick={() => setMobileOpen(false)}
-                  initial={{ x: -20, opacity: 0 }}
+                  initial={{ x: -16, opacity: 0 }}
                   animate={{ x: 0, opacity: 1 }}
                   transition={{ delay: 0.1 + i * 0.05 }}
-                  className="text-3xl text-white font-medium py-3 border-b border-white/6"
+                  className="text-xl font-medium text-white py-4 border-b border-white/6 last:border-0"
                 >
                   {link.label}
                 </motion.a>
@@ -118,7 +129,7 @@ export default function Navbar() {
               >
                 <a href="/auth" className="w-full">
                   <Button
-                    className="bg-white text-black hover:bg-gray-100 font-semibold rounded-xl w-full py-6 text-base"
+                    className="bg-white text-black hover:bg-gray-100 font-semibold rounded-xl w-full py-5 text-base"
                     onClick={() => setMobileOpen(false)}
                   >
                     Sign In

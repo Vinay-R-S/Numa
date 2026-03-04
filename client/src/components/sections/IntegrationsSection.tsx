@@ -131,7 +131,7 @@ export default function IntegrationsSection() {
             whileInView={{ opacity: 1, scale: 1 }}
             viewport={{ once: true, margin: "-100px" }}
             transition={{ duration: 0.8, ease: [0.23, 1, 0.32, 1] as [number, number, number, number] }}
-            className="relative w-full flex items-center justify-center"
+            className="relative w-full flex items-center justify-center max-h-72 sm:max-h-96 lg:max-h-none"
           >
             <OrbitingIntegrations />
           </motion.div>

@@ -40,7 +40,7 @@ export default function CTASection() {
             custom={0}
             className="text-[13px] font-semibold uppercase tracking-[0.2em] text-indigo-400 mb-6"
           >
-            Early Access
+            One Platform, Everything Connected
           </motion.p>
 
           <motion.h2
@@ -56,8 +56,9 @@ export default function CTASection() {
             custom={2}
             className="text-lg text-gray-400 max-w-xl mx-auto mb-10 leading-relaxed"
           >
-            Connect your apps, let intelligent agents handle the rest.
-            One platform for health, productivity, and everything in between.
+            Connect your health trackers, calendars, repos, and communication
+            tools. Intelligent agents do the rest — surfacing insights and
+            automating your workflows across every platform.
           </motion.p>
 
           <motion.div variants={fadeUp} custom={3}>
@@ -66,7 +67,7 @@ export default function CTASection() {
                 size="lg"
                 className="bg-white text-black hover:bg-gray-100 font-semibold rounded-xl px-10 py-6 text-base shadow-[0_0_40px_rgba(255,255,255,0.1)] hover:shadow-[0_0_60px_rgba(255,255,255,0.18)] transition-all duration-500"
               >
-                Sign In
+                Get Started
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </a>

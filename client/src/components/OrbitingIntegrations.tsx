@@ -46,7 +46,7 @@ const outerOrbit: OrbitIcon[] = [
 
 export default function OrbitingIntegrations() {
   return (
-    <div className="relative w-full aspect-square max-w-135 mx-auto">
+    <div className="relative w-full aspect-square max-w-[85vw] sm:max-w-sm md:max-w-135 mx-auto">
       {/* Ambient glow behind center */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-65 h-65 bg-indigo-500/8 rounded-full blur-[80px] pointer-events-none" />
 
