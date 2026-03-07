@@ -88,22 +88,12 @@ export default function HowItWorksSection() {
           </motion.p>
         </motion.div>
 
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: "-50px" }}
-          className="relative grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
-        >
-          {/* Horizontal connector line (desktop only) */}
-          <div className="hidden lg:block absolute top-13 left-[10%] right-[10%] h-px bg-linear-to-r from-transparent via-white/8 to-transparent" />
-
+        <div className="relative grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {steps.map((step, i) => {
             const Icon = step.icon;
             return (
-              <motion.div
+              <div
                 key={step.step}
-                variants={fadeUp}
-                custom={i}
                 className="relative flex flex-col items-center text-center group"
               >
                 <div className="relative z-10 mb-6">
@@ -120,10 +110,10 @@ export default function HowItWorksSection() {
                 <p className="text-gray-400 text-[13px] leading-relaxed max-w-60">
                   {step.description}
                 </p>
-              </motion.div>
+              </div>
             );
           })}
-        </motion.div>
+        </div>
       </div>
     </section>
   );

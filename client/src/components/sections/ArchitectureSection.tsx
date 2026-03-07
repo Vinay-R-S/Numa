@@ -104,19 +104,12 @@ export default function ArchitectureSection() {
           </motion.p>
         </motion.div>
 
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: "-50px" }}
-          className="grid grid-cols-1 lg:grid-cols-3 gap-5"
-        >
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {layers.map((layer, i) => {
             const Icon = layer.icon;
             return (
-              <motion.div
+              <div
                 key={layer.title}
-                variants={fadeUp}
-                custom={i}
                 className={`relative rounded-2xl border border-white/6 bg-white/2 p-8 flex flex-col hover:border-white/10 transition-all duration-500`}
               >
                 {/* Top accent line */}
@@ -154,10 +147,10 @@ export default function ArchitectureSection() {
                 <Separator className="bg-white/6 mb-4" />
 
                 <p className="text-xs text-gray-500 italic">{layer.note}</p>
-              </motion.div>
+              </div>
             );
           })}
-        </motion.div>
+        </div>
       </div>
     </section>
   );

@@ -38,7 +38,7 @@ export default function Navbar() {
           }`}
         >
           <div className="px-4 xl:px-6 h-14 flex items-center justify-between">
-            <a href="#" className="text-lg font-bold text-white tracking-tight">
+            <a href="/" className="text-lg font-bold text-white tracking-tight">
               NUMA
             </a>
 

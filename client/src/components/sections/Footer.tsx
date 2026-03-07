@@ -34,7 +34,7 @@ export default function Footer() {
                 {links.map((link) => (
                   <li key={link}>
                     <a
-                      href="#"
+                      href="/under-construction"
                       className="text-[13px] text-gray-500 hover:text-white transition-colors duration-200"
                     >
                       {link}
@@ -54,19 +54,19 @@ export default function Footer() {
           </p>
           <div className="flex items-center gap-6">
             <a
-              href="#"
+              href="/under-construction"
               className="text-xs text-gray-600 hover:text-gray-400 transition-colors duration-200"
             >
               Privacy
             </a>
             <a
-              href="#"
+              href="/under-construction"
               className="text-xs text-gray-600 hover:text-gray-400 transition-colors duration-200"
             >
               Terms
             </a>
             <a
-              href="#"
+              href="/under-construction"
               className="text-xs text-gray-600 hover:text-gray-400 transition-colors duration-200"
             >
               Cookies

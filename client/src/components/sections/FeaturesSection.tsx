@@ -113,19 +113,12 @@ export default function FeaturesSection() {
           </motion.p>
         </motion.div>
 
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: "-50px" }}
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
-        >
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {features.map((feature, i) => {
             const Icon = feature.icon;
             return (
-              <motion.div
+              <div
                 key={feature.title}
-                variants={fadeUp}
-                custom={i}
                 className="group relative overflow-hidden rounded-2xl border border-white/6 bg-white/2 p-7 hover:border-white/12 transition-all duration-500"
               >
                 <div
@@ -144,10 +137,10 @@ export default function FeaturesSection() {
                     {feature.description}
                   </p>
                 </div>
-              </motion.div>
+              </div>
             );
           })}
-        </motion.div>
+        </div>
       </div>
     </section>
   );
