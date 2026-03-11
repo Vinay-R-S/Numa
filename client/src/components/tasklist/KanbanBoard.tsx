@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useCallback } from "react"
+import React, { useState, useCallback, useEffect } from "react"
 import {
   DndContext,
   DragOverlay,
@@ -21,6 +21,7 @@ import { TaskDialog } from "./TaskDialog"
 import { patchTaskStatus, createTask, updateTask, deleteTask } from "./api"
 import { Button } from "@/components/ui/button"
 import { toast } from "./toast"
+import { scheduleReminder, cancelReminder } from "./notifications"
 
 const STATUSES: TaskStatus[] = ["planned", "inprogress", "completed", "pending"]
 
@@ -32,6 +33,12 @@ interface KanbanBoardProps {
 
 export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
+
+  useEffect(() => {
+    tasks.forEach((t) => {
+      if (t.reminder_at) scheduleReminder(t.id, t.title, t.reminder_at)
+    })
+  }, [tasks])
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [dialogDefaultStatus, setDialogDefaultStatus] = useState<TaskStatus>("planned")
@@ -128,6 +135,7 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
 
   async function handleDeleteTask(id: string) {
     if (!confirm("Delete this task?")) return
+    cancelReminder(id)
     onTasksChange(tasks.filter((t) => t.id !== id))
     try {
       await deleteTask(id)
@@ -137,13 +145,15 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
     }
   }
 
-  async function handleSaveTask(data: Partial<Task> & { title: string }) {
+  async function handleSaveTask(data: Partial<Task> & { title: string }): Promise<Task> {
     if (editingTask) {
       const updated = await updateTask(editingTask.id, data)
       onTasksChange(tasks.map((t) => (t.id === updated.id ? updated : t)))
+      return updated
     } else {
       const created = await createTask({ ...data, status: data.status ?? dialogDefaultStatus })
       onTasksChange([...tasks, created])
+      return created
     }
   }
 

@@ -22,12 +22,13 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { DatePicker } from "@/components/ui/date-picker"
 import { TimePicker } from "@/components/ui/time-picker"
+import { requestNotificationPermission, scheduleReminder } from "./notifications"
 import type { Task, TaskStatus, TaskPriority } from "./types"
 
 interface TaskDialogProps {
   open: boolean
   onClose: () => void
-  onSave: (data: Partial<Task> & { title: string }) => Promise<void>
+  onSave: (data: Partial<Task> & { title: string }) => Promise<Task | void>
   task?: Task | null
   defaultStatus?: TaskStatus
 }
@@ -55,10 +56,19 @@ function toLocalTimeString(iso: string | null | undefined): string {
   return d.toTimeString().slice(0, 5)
 }
 
-function combineDatetime(date: string, time: string): string | null {
-  if (!date) return null
+function todayString(): string {
+  const d = new Date()
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, "0")
+  const dd = String(d.getDate()).padStart(2, "0")
+  return `${yyyy}-${mm}-${dd}`
+}
+
+function combineDatetime(date: string, time: string, fallbackToToday = false): string | null {
+  const resolvedDate = date || (fallbackToToday && time ? todayString() : "")
+  if (!resolvedDate) return null
   const t = time || "00:00"
-  return new Date(`${date}T${t}`).toISOString()
+  return new Date(`${resolvedDate}T${t}`).toISOString()
 }
 
 export function TaskDialog({
@@ -83,6 +93,11 @@ export function TaskDialog({
     },
   })
 
+  // Request notification permission when dialog opens
+  React.useEffect(() => {
+    if (open) requestNotificationPermission()
+  }, [open])
+
   // Reset form when task changes or dialog opens
   React.useEffect(() => {
     if (open) {
@@ -105,16 +120,20 @@ export function TaskDialog({
   const onSubmit = async (values: FormValues) => {
     setSaving(true)
     try {
-      await onSave({
+      const saved = await onSave({
         title: values.title,
         description: values.description || null,
         status: values.status,
         priority: (values.priority as TaskPriority) || null,
         due_date: combineDatetime(values.due_date, values.due_time),
-        reminder_at: combineDatetime(values.reminder_at, values.reminder_time),
+        reminder_at: combineDatetime(values.reminder_at, values.reminder_time, true),
         source_name: task?.source_name ?? null,
         source_logo: task?.source_logo ?? null,
       })
+      // Schedule browser notification for the reminder
+      const reminderIso = combineDatetime(values.reminder_at, values.reminder_time, true)
+      const taskId = (saved as Task | undefined)?.id ?? task?.id
+      if (taskId) scheduleReminder(taskId, values.title, reminderIso)
       onClose()
     } finally {
       setSaving(false)
@@ -123,12 +142,13 @@ export function TaskDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className="max-w-lg flex flex-col max-h-[90dvh]">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{task ? "Edit Task" : "New Task"}</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col flex-1 min-h-0">
+          <div className="flex-1 overflow-y-auto space-y-4 pr-1">
           {/* Title */}
           <div className="space-y-1.5">
             <Label htmlFor="title">Task Name *</Label>
@@ -195,16 +215,18 @@ export function TaskDialog({
           {/* Due Date + Time */}
           <div className="space-y-1.5">
             <Label>Due Date &amp; Time</Label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex gap-2">
               <DatePicker
                 value={watch("due_date")}
                 onChange={(v) => setValue("due_date", v)}
                 placeholder="Due date"
+                className="flex-1"
               />
               <TimePicker
                 value={watch("due_time")}
                 onChange={(v) => setValue("due_time", v)}
                 placeholder="Due time"
+                className="w-auto shrink-0"
               />
             </div>
           </div>
@@ -212,16 +234,18 @@ export function TaskDialog({
           {/* Reminder */}
           <div className="space-y-1.5">
             <Label>Reminder</Label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex gap-2">
               <DatePicker
                 value={watch("reminder_at")}
                 onChange={(v) => setValue("reminder_at", v)}
                 placeholder="Reminder date"
+                className="flex-1"
               />
               <TimePicker
                 value={watch("reminder_time")}
                 onChange={(v) => setValue("reminder_time", v)}
                 placeholder="Reminder time"
+                className="w-auto shrink-0"
               />
             </div>
             <p className="text-xs text-muted-foreground">
@@ -229,7 +253,8 @@ export function TaskDialog({
             </p>
           </div>
 
-          <DialogFooter>
+          </div>
+          <DialogFooter className="shrink-0 pt-4">
             <Button type="button" variant="ghost" onClick={onClose}>
               Cancel
             </Button>

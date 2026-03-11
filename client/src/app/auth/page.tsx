@@ -9,8 +9,6 @@ import { useRouter } from "next/navigation";
 
 type Mode = "signin" | "signup";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 const passwordChecks = [
   { label: "8+ characters", test: (p: string) => p.length >= 8 },
   { label: "Uppercase",     test: (p: string) => /[A-Z]/.test(p) },
@@ -64,7 +62,7 @@ export default function AuthPage() {
           ? { email, password }
           : { email, password, full_name: name };
 
-      const res = await fetch(`${API}${endpoint}`, {
+      const res = await fetch(`/api${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

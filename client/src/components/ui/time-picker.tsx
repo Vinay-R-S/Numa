@@ -3,9 +3,6 @@
 import * as React from "react"
 import { Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui/button"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { ScrollArea } from "@/components/ui/scroll-area"
 
 interface TimePickerProps {
   value?: string        // "HH:MM" (24-hour)
@@ -15,93 +12,122 @@ interface TimePickerProps {
   disabled?: boolean
 }
 
-export function TimePicker({ value, onChange, placeholder = "Pick a time", className, disabled }: TimePickerProps) {
-  const [open, setOpen] = React.useState(false)
-
-  const [selectedHour, selectedMinute] = React.useMemo(() => {
-    if (!value) return [null, null]
-    const parts = value.split(":")
-    const h = parseInt(parts[0], 10)
-    const m = parseInt(parts[1], 10)
-    if (isNaN(h) || isNaN(m)) return [null, null]
-    return [h, m]
+export function TimePicker({ value, onChange, className, disabled }: TimePickerProps) {
+  // Derive 12-hour parts from the 24-hour value prop
+  const { displayHour, displayMinute, isAm } = React.useMemo(() => {
+    if (!value) return { displayHour: "", displayMinute: "", isAm: true }
+    const [hStr, mStr] = value.split(":")
+    const h = parseInt(hStr, 10)
+    const m = parseInt(mStr, 10)
+    if (isNaN(h) || isNaN(m)) return { displayHour: "", displayMinute: "", isAm: true }
+    const am = h < 12
+    const h12 = h % 12 === 0 ? 12 : h % 12
+    return {
+      displayHour: String(h12),
+      displayMinute: String(m).padStart(2, "0"),
+      isAm: am,
+    }
   }, [value])
 
-  const hours = Array.from({ length: 24 }, (_, i) => i)
-  const minutes = Array.from({ length: 12 }, (_, i) => i * 5)
-
-  function handleSelect(h: number, m: number) {
-    const hh = String(h).padStart(2, "0")
-    const mm = String(m).padStart(2, "0")
+  function emit(h12: number, min: number, am: boolean) {
+    let h24: number
+    if (am) {
+      h24 = h12 === 12 ? 0 : h12
+    } else {
+      h24 = h12 === 12 ? 12 : h12 + 12
+    }
+    const hh = String(h24).padStart(2, "0")
+    const mm = String(min).padStart(2, "0")
     onChange(`${hh}:${mm}`)
-    setOpen(false)
   }
 
-  const displayValue = React.useMemo(() => {
-    if (selectedHour === null || selectedMinute === null) return null
-    const h = selectedHour % 12 === 0 ? 12 : selectedHour % 12
-    const ampm = selectedHour < 12 ? "AM" : "PM"
-    const mm = String(selectedMinute).padStart(2, "0")
-    return `${h}:${mm} ${ampm}`
-  }, [selectedHour, selectedMinute])
+  function handleHourChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const raw = e.target.value
+    if (raw === "") { onChange(""); return }
+    let h = parseInt(raw, 10)
+    if (isNaN(h)) return
+    if (h < 1) h = 1
+    if (h > 12) h = 12
+    const min = displayMinute ? parseInt(displayMinute, 10) : 0
+    emit(h, isNaN(min) ? 0 : min, isAm)
+  }
+
+  function handleMinuteChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const raw = e.target.value
+    if (raw === "") { onChange(""); return }
+    let m = parseInt(raw, 10)
+    if (isNaN(m)) return
+    if (m < 0) m = 0
+    if (m > 59) m = 59
+    const h = displayHour ? parseInt(displayHour, 10) : 12
+    emit(isNaN(h) ? 12 : h, m, isAm)
+  }
+
+  function handleAmPm(am: boolean) {
+    const h = displayHour ? parseInt(displayHour, 10) : 12
+    const m = displayMinute ? parseInt(displayMinute, 10) : 0
+    emit(isNaN(h) ? 12 : h, isNaN(m) ? 0 : m, am)
+  }
+
+  const hasValue = displayHour !== ""
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          disabled={disabled}
+    <div
+      className={cn(
+        "inline-flex items-center h-9 rounded-md border border-input bg-background px-2 text-sm gap-0.5",
+        disabled && "opacity-50 pointer-events-none",
+        className
+      )}
+    >
+      <Clock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      {/* Hour */}
+      <input
+        type="number"
+        min={1}
+        max={12}
+        placeholder="12"
+        value={displayHour}
+        onChange={handleHourChange}
+        className="w-7 bg-transparent text-center focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      <span className="text-muted-foreground select-none leading-none">:</span>
+      {/* Minute */}
+      <input
+        type="number"
+        min={0}
+        max={59}
+        placeholder="00"
+        value={displayMinute}
+        onChange={handleMinuteChange}
+        className="w-7 bg-transparent text-center focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      {/* AM/PM */}
+      <div className="flex rounded overflow-hidden bg-muted/50 text-xs shrink-0 ml-0.5">
+        <button
+          type="button"
+          onClick={() => handleAmPm(true)}
           className={cn(
-            "w-full justify-start text-left font-normal",
-            !displayValue && "text-muted-foreground",
-            className
+            "px-1.5 py-1 transition-colors font-medium",
+            hasValue && isAm
+              ? "bg-primary text-primary-foreground rounded-sm"
+              : "text-muted-foreground hover:text-foreground"
           )}
         >
-          <Clock className="mr-2 h-4 w-4 shrink-0" />
-          {displayValue ?? <span>{placeholder}</span>}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[200px] p-0" align="start">
-        <div className="flex divide-x divide-border">
-          {/* Hours */}
-          <ScrollArea className="h-52 flex-1">
-            <div className="p-1 space-y-0.5">
-              {hours.map((h) => (
-                <button
-                  key={h}
-                  type="button"
-                  onClick={() => handleSelect(h, selectedMinute ?? 0)}
-                  className={cn(
-                    "w-full text-sm text-left px-2.5 py-1 rounded hover:bg-accent hover:text-accent-foreground transition-colors",
-                    selectedHour === h && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
-                  )}
-                >
-                  {String(h % 12 === 0 ? 12 : h % 12).padStart(2, "0")}{" "}
-                  <span className="text-xs opacity-60">{h < 12 ? "AM" : "PM"}</span>
-                </button>
-              ))}
-            </div>
-          </ScrollArea>
-          {/* Minutes */}
-          <ScrollArea className="h-52 flex-1">
-            <div className="p-1 space-y-0.5">
-              {minutes.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => handleSelect(selectedHour ?? 9, m)}
-                  className={cn(
-                    "w-full text-sm text-left px-2.5 py-1 rounded hover:bg-accent hover:text-accent-foreground transition-colors",
-                    selectedMinute === m && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
-                  )}
-                >
-                  {String(m).padStart(2, "0")} min
-                </button>
-              ))}
-            </div>
-          </ScrollArea>
-        </div>
-      </PopoverContent>
-    </Popover>
+          AM
+        </button>
+        <button
+          type="button"
+          onClick={() => handleAmPm(false)}
+          className={cn(
+            "px-1.5 py-1 transition-colors font-medium",
+            hasValue && !isAm
+              ? "bg-primary text-primary-foreground rounded-sm"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          PM
+        </button>
+      </div>
+    </div>
   )
 }

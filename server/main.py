@@ -10,20 +10,20 @@ from src.db import init_db
 
 load_dotenv()
 
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 
-ALLOWED_ORIGINS = [
-    FRONTEND_URL,
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://127.0.0.1:3000",
-]
+# In production set FRONTEND_URL to your exact origin.
+# During local dev we match any HTTP/HTTPS origin via regex so any device on
+# the network can connect. allow_origin_regex echoes the real origin back
+# (unlike "*") which lets allow_credentials work correctly.
+IS_DEV = not FRONTEND_URL
 
 app = FastAPI(title="Numa API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=[FRONTEND_URL] if not IS_DEV else [],
+    allow_origin_regex=r"https?://.*" if IS_DEV else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
