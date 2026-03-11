@@ -4,6 +4,8 @@
 .next
 node_modules
 config
+sql
+prompt.md
 
 # IDE files
 .idea

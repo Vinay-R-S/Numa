@@ -85,6 +85,43 @@ TABLES: list[str] = [
         END IF;
     END $$
     """,
+
+    # ── tasks ──────────────────────────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS public.tasks (
+        id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id      UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        title        TEXT        NOT NULL,
+        description  TEXT,
+        status       TEXT        NOT NULL DEFAULT 'planned'
+                                 CHECK (status IN ('planned', 'inprogress', 'completed', 'pending')),
+        priority     TEXT        CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+        due_date     TIMESTAMPTZ,
+        reminder_at  TIMESTAMPTZ,
+        source_name  TEXT,
+        source_logo  TEXT,
+        position     INTEGER     NOT NULL DEFAULT 0,
+        completed_at TIMESTAMPTZ,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_tasks_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_tasks_updated_at
+            BEFORE UPDATE ON public.tasks
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_tasks_user_status ON public.tasks(user_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_completed   ON public.tasks(user_id, completed_at) WHERE completed_at IS NOT NULL",
 ]
 
 

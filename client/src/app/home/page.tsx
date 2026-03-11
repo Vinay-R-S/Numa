@@ -47,23 +47,26 @@ export default function HomePage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0a0a0b] flex items-center justify-center">
+      <div className="flex h-full items-center justify-center">
         <div className="h-8 w-8 rounded-full border-2 border-white/20 border-t-white animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0b] text-white flex flex-col items-center justify-center gap-4">
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-6">
       <h1 className="text-4xl font-extrabold tracking-tight">NUMA</h1>
       {user && (
-        <p className="text-gray-400 text-sm">
-          Welcome, <span className="text-white">{user.full_name || user.email}</span>
+        <p className="text-muted-foreground text-sm">
+          Welcome back,{" "}
+          <span className="text-foreground font-medium">
+            {user.full_name || user.email}
+          </span>
         </p>
       )}
       <button
         onClick={handleSignOut}
-        className="mt-4 text-xs text-gray-500 hover:text-white transition-colors underline underline-offset-2"
+        className="mt-4 text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
       >
         Sign out
       </button>
