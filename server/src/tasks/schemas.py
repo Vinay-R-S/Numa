@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional, Literal
 from datetime import datetime
+from uuid import UUID
 
 TaskStatus = Literal["planned", "inprogress", "completed", "pending"]
 TaskPriority = Literal["low", "medium", "high", "urgent"]
@@ -36,8 +37,8 @@ class TaskStatusUpdate(BaseModel):
 
 
 class TaskResponse(BaseModel):
-    id: str
-    user_id: str
+    id: UUID
+    user_id: UUID
     title: str
     description: Optional[str]
     status: str
