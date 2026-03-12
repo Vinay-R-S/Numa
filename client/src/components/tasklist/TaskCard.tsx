@@ -21,14 +21,16 @@ interface TaskCardProps {
   task: Task
   onEdit: (task: Task) => void
   onDelete: (id: string) => void
+  onView?: (task: Task) => void
   overlay?: boolean
 }
 
-export function TaskCard({ task, onEdit, onDelete, overlay }: TaskCardProps) {
+export function TaskCard({ task, onEdit, onDelete, onView, overlay }: TaskCardProps) {
   const {
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
@@ -55,32 +57,47 @@ export function TaskCard({ task, onEdit, onDelete, overlay }: TaskCardProps) {
         overlay && "shadow-2xl border-border rotate-2 scale-105",
       )}
     >
-      {/* Drag Handle */}
-      <div
-        {...attributes}
-        {...listeners}
-        className="absolute left-2 top-1/2 -translate-y-1/2 cursor-grab opacity-0 group-hover:opacity-40 active:cursor-grabbing transition-opacity"
-      >
-        <Grip className="h-4 w-4 text-muted-foreground" />
-      </div>
+      {/* Drag Handle — always visible on mobile, hover-only on desktop */}
+      {!overlay && (
+        <div
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          className={cn(
+            "absolute left-0 top-0 bottom-0 flex items-center px-2.5",
+            "cursor-grab active:cursor-grabbing touch-none",
+            // Always visible on small screens (no hover); fade in on desktop hover
+            "opacity-40 sm:opacity-0 sm:group-hover:opacity-40 transition-opacity",
+          )}
+        >
+          <Grip className="h-4 w-4 text-muted-foreground" />
+        </div>
+      )}
 
-      {/* Actions */}
-      <div className="absolute right-2 top-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      {/* Actions — always visible on mobile, hover-only on desktop */}
+      <div className={cn(
+        "absolute right-2 top-2 flex gap-1 transition-opacity",
+        "opacity-100 sm:opacity-0 sm:group-hover:opacity-100",
+      )}>
         <button
-          onClick={() => onEdit(task)}
+          onClick={(e) => { e.stopPropagation(); onEdit(task) }}
           className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
         >
           <Pencil className="h-3.5 w-3.5" />
         </button>
         <button
-          onClick={() => onDelete(task.id)}
+          onClick={(e) => { e.stopPropagation(); onDelete(task.id) }}
           className="rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      <div className="pl-4 pr-8">
+      {/* Clickable content area — opens detail view */}
+      <div
+        className="pl-4 pr-8 cursor-pointer"
+        onClick={() => !overlay && onView?.(task)}
+      >
         {/* Source */}
         {(task.source_name || task.source_logo) && (
           <div className="mb-2 flex items-center gap-1.5">

@@ -13,7 +13,9 @@ def _row_to_dict(row, cursor_description) -> dict:
     return {col.name: val for col, val in zip(cursor_description, row)}
 
 
-# ── List all tasks ─────────────────────────────────────────────────────────────
+# ── List active tasks (board view) ────────────────────────────────────────────
+# Completed tasks that were completed on a previous calendar day are excluded
+# from the board; they appear in GET /tasks/history instead.
 @router.get("", response_model=List[TaskResponse])
 def list_tasks(current_user: dict = Depends(get_current_user)):
     user_id = current_user["sub"]
@@ -27,7 +29,42 @@ def list_tasks(current_user: dict = Depends(get_current_user)):
                    position, completed_at, created_at, updated_at
             FROM public.tasks
             WHERE user_id = %s
+              AND (
+                  status != 'completed'
+                  OR completed_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC')
+              )
             ORDER BY status, position ASC, created_at ASC
+            """,
+            (user_id,),
+        )
+        rows = cur.fetchall()
+        tasks = [_row_to_dict(r, cur.description) for r in rows]
+        cur.close()
+        return tasks
+    finally:
+        conn.close()
+
+
+# ── Completed-task history (tasks completed before today) ──────────────────────
+@router.get("/history", response_model=List[TaskResponse])
+def list_task_history(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, user_id, title, description, status, priority,
+                   due_date, reminder_at, source_name, source_logo,
+                   position, completed_at, created_at, updated_at
+            FROM public.tasks
+            WHERE user_id = %s
+              AND status = 'completed'
+              AND (
+                  completed_at IS NULL
+                  OR completed_at < DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC')
+              )
+            ORDER BY completed_at DESC
             """,
             (user_id,),
         )

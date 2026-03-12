@@ -63,3 +63,9 @@ export async function fetchStats(): Promise<TaskStats> {
   if (!res.ok) throw new Error("Failed to fetch stats")
   return res.json()
 }
+
+export async function fetchCompletedHistory(): Promise<Task[]> {
+  const res = await fetch(`/api/tasks/history`, { headers: authHeaders() })
+  if (!res.ok) throw new Error("Failed to fetch task history")
+  return res.json()
+}

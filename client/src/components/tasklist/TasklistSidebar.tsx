@@ -1,6 +1,6 @@
 "use client"
 
-import React from "react"
+import React, { useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
@@ -11,8 +11,8 @@ import {
   Settings,
   LogOut,
   ChevronRight,
-  PanelLeftClose,
-  PanelLeft,
+  Pin,
+  PinOff,
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -27,13 +27,16 @@ const NAV_ITEMS = [
 
 interface TasklistSidebarProps {
   isOpen: boolean
-  collapsed: boolean
+  locked: boolean
   onClose: () => void
-  onToggleCollapse: () => void
+  onToggleLock: () => void
 }
 
-export function TasklistSidebar({ isOpen, collapsed, onClose, onToggleCollapse }: TasklistSidebarProps) {
+export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: TasklistSidebarProps) {
   const pathname = usePathname()
+  // Desktop hover-to-expand state — only matters when not locked
+  const [hovered, setHovered] = useState(false)
+  const isExpanded = locked || hovered
 
   const handleSignOut = () => {
     localStorage.removeItem("numa_token")
@@ -42,50 +45,55 @@ export function TasklistSidebar({ isOpen, collapsed, onClose, onToggleCollapse }
 
   return (
     <aside
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       className={cn(
         // Base layout
         "flex flex-col border-r border-border/50 bg-sidebar text-sidebar-foreground h-full",
-        // Mobile: fixed overlay drawer; Desktop: static in flex flow
+        // Mobile: fixed overlay drawer
         "fixed inset-y-0 left-0 z-30 transition-transform",
-        "lg:static lg:inset-auto lg:z-auto lg:translate-x-0 lg:transition-none",
-        // Mobile open/close
         isOpen ? "translate-x-0" : "-translate-x-full",
-        // Width: collapse only works on desktop
-        collapsed ? "lg:w-14" : "lg:w-56",
-        // Mobile always full width
-        "w-64 lg:w-auto"
+        // Desktop: when locked → static in flex flow; when unlocked → fixed overlay so content never shifts
+        "lg:translate-x-0",
+        locked ? "lg:static lg:inset-auto lg:z-auto" : "lg:fixed lg:inset-y-0 lg:left-0 lg:z-40",
+        // Width — smooth transition on desktop
+        "w-64 lg:transition-[width] lg:duration-200 lg:ease-in-out",
+        isExpanded ? "lg:w-56" : "lg:w-14",
       )}
     >
       {/* Header */}
-      <div className="relative flex h-14 items-center border-b border-border/50 shrink-0 px-4">
-        {/* Logo — always centered */}
-        <div className="flex flex-1 items-center justify-center">
-          {collapsed ? (
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-primary/30 to-primary/10 ring-1 ring-primary/20 shadow-sm">
+      <div className="relative flex h-14 items-center border-b border-border/50 shrink-0 px-3">
+        {/* Logo */}
+        <div className="flex flex-1 items-center justify-center overflow-hidden">
+          {!isExpanded ? (
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-linear-to-br from-primary/30 to-primary/10 ring-1 ring-primary/20 shadow-sm">
               <Zap className="h-4 w-4 text-primary fill-primary/20" />
             </div>
           ) : (
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary/30 to-primary/10 ring-1 ring-primary/20 shadow-sm">
+            <div className="flex items-center gap-2 w-full pl-1">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-primary/30 to-primary/10 ring-1 ring-primary/20 shadow-sm">
                 <Zap className="h-4 w-4 text-primary fill-primary/20" />
               </div>
-              <span className="font-bold text-sm tracking-tight text-foreground">NUMA</span>
+              <span className="font-bold text-sm tracking-tight text-foreground whitespace-nowrap">NUMA</span>
             </div>
           )}
         </div>
 
-        {/* Desktop collapse toggle — absolute right */}
+        {/* Desktop lock/pin toggle — absolute right */}
         <button
           type="button"
-          onClick={onToggleCollapse}
-          className="hidden lg:flex absolute right-3 items-center justify-center rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent border border-transparent hover:border-border/60 transition-all"
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {collapsed ? (
-            <PanelLeft className="h-4 w-4" />
-          ) : (
-            <PanelLeftClose className="h-4 w-4" />
+          onClick={onToggleLock}
+          className={cn(
+            "hidden lg:flex absolute right-2 items-center justify-center rounded-md p-1.5 transition-all border border-transparent",
+            locked
+              ? "text-primary bg-primary/10 border-primary/20 hover:bg-primary/20"
+              : "text-muted-foreground hover:text-foreground hover:bg-accent hover:border-border/60",
+            !isExpanded && "opacity-0 pointer-events-none",
           )}
+          title={locked ? "Unpin sidebar (hover to expand)" : "Pin sidebar open"}
+          aria-label={locked ? "Unpin sidebar" : "Pin sidebar"}
+        >
+          {locked ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
         </button>
 
         {/* Mobile close button — absolute right */}
@@ -100,12 +108,13 @@ export function TasklistSidebar({ isOpen, collapsed, onClose, onToggleCollapse }
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-auto px-3 py-4 space-y-0.5">
-        {!collapsed && (
-          <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1 lg:block hidden">
+      <nav className="flex-1 overflow-auto px-2 py-4 space-y-0.5">
+        {isExpanded && (
+          <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1 whitespace-nowrap">
             Navigation
           </p>
         )}
+        {/* Mobile always has the label */}
         <p className={cn("px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1 lg:hidden")}>
           Navigation
         </p>
@@ -118,12 +127,13 @@ export function TasklistSidebar({ isOpen, collapsed, onClose, onToggleCollapse }
               href={disabled ? "#" : href}
               onClick={(e) => {
                 if (disabled) e.preventDefault()
-                else onClose()           // close mobile drawer on navigation
+                else onClose()
               }}
-              title={collapsed ? label : undefined}
+              title={!isExpanded ? label : undefined}
               className={cn(
                 "flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all",
-                collapsed ? "lg:justify-center lg:px-2" : "gap-3",
+                !isExpanded ? "lg:justify-center lg:px-2" : "gap-3",
+                "gap-3",
                 active
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
                   : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
@@ -131,16 +141,18 @@ export function TasklistSidebar({ isOpen, collapsed, onClose, onToggleCollapse }
               )}
             >
               <Icon className="h-4 w-4 shrink-0" />
-              <span className={cn("flex-1 truncate", collapsed && "lg:hidden")}>{label}</span>
-              {active && !collapsed && <ChevronRight className="h-3.5 w-3.5 opacity-60 lg:block hidden" />}
-              {active && <ChevronRight className="h-3.5 w-3.5 opacity-60 lg:hidden" />}
-              {disabled && !collapsed && (
-                <span className="lg:block hidden text-[9px] font-medium rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground">
-                  Soon
-                </span>
+              <span className={cn(
+                "flex-1 truncate whitespace-nowrap transition-opacity duration-150",
+                !isExpanded ? "lg:hidden" : "lg:inline"
+              )}>{label}</span>
+              {active && (
+                <ChevronRight className={cn("h-3.5 w-3.5 opacity-60", !isExpanded && "lg:hidden")} />
               )}
               {disabled && (
-                <span className="lg:hidden text-[9px] font-medium rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground">
+                <span className={cn(
+                  "text-[9px] font-medium rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground whitespace-nowrap",
+                  !isExpanded && "lg:hidden"
+                )}>
                   Soon
                 </span>
               )}
@@ -150,17 +162,17 @@ export function TasklistSidebar({ isOpen, collapsed, onClose, onToggleCollapse }
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-border/50 p-3 shrink-0">
+      <div className="border-t border-border/50 p-2 shrink-0">
         <button
           onClick={handleSignOut}
-          title={collapsed ? "Sign Out" : undefined}
+          title={!isExpanded ? "Sign Out" : undefined}
           className={cn(
-            "flex w-full items-center rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive",
-            collapsed ? "lg:justify-center lg:px-2 gap-3" : "gap-3"
+            "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive",
+            !isExpanded ? "lg:justify-center lg:px-2" : ""
           )}
         >
           <LogOut className="h-4 w-4 shrink-0" />
-          <span className={cn(collapsed && "lg:hidden")}>Sign Out</span>
+          <span className={cn("whitespace-nowrap", !isExpanded && "lg:hidden")}>Sign Out</span>
         </button>
       </div>
     </aside>

@@ -126,7 +126,8 @@ export function AnalyticsDashboard({ stats, loading }: AnalyticsDashboardProps) 
     fill: STATUS_COLORS[s.status] ?? "#64748b",
   })) ?? []
 
-  if (loading) {
+  // Only show the skeleton on the very first load; once data exists, refresh in-place
+  if (loading && !stats) {
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
