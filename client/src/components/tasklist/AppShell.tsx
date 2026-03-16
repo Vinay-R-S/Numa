@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useState, useEffect, useCallback } from "react"
 import { Menu, Zap } from "lucide-react"
 import { TasklistSidebar } from "@/components/tasklist/TasklistSidebar"
 
@@ -8,6 +8,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   // locked = sidebar is pinned open on desktop; false = hover-to-expand only
   const [locked, setLocked] = useState(false)
+
+  // Persist pin state across page navigations
+  useEffect(() => {
+    const saved = localStorage.getItem("numa_sidebar_locked")
+    if (saved === "true") setLocked(true)
+  }, [])
+
+  const handleToggleLock = useCallback(() => {
+    setLocked((l) => {
+      const next = !l
+      localStorage.setItem("numa_sidebar_locked", String(next))
+      return next
+    })
+  }, [])
 
   return (
     <div className="dark flex h-screen overflow-hidden bg-background text-foreground">
@@ -23,7 +37,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         isOpen={sidebarOpen}
         locked={locked}
         onClose={() => setSidebarOpen(false)}
-        onToggleLock={() => setLocked((l) => !l)}
+        onToggleLock={handleToggleLock}
       />
 
       {/* On desktop when not locked, the sidebar is fixed-overlay so we need a spacer to reserve the rail width */}

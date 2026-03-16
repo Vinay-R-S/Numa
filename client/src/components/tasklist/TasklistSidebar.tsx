@@ -45,8 +45,8 @@ export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: Taskl
 
   return (
     <aside
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={() => { if (!locked) setHovered(true) }}
+      onMouseLeave={() => { if (!locked) setHovered(false) }}
       className={cn(
         // Base layout
         "flex flex-col border-r border-border/50 bg-sidebar text-sidebar-foreground h-full",
@@ -109,13 +109,10 @@ export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: Taskl
 
       {/* Nav */}
       <nav className="flex-1 overflow-auto px-2 py-4 space-y-0.5">
-        {isExpanded && (
-          <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1 whitespace-nowrap">
-            Navigation
-          </p>
-        )}
-        {/* Mobile always has the label */}
-        <p className={cn("px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1 lg:hidden")}>
+        <p className={cn(
+          "px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1 whitespace-nowrap",
+          !isExpanded && "lg:hidden"
+        )}>
           Navigation
         </p>
 
@@ -131,9 +128,8 @@ export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: Taskl
               }}
               title={!isExpanded ? label : undefined}
               className={cn(
-                "flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all",
-                !isExpanded ? "lg:justify-center lg:px-2" : "gap-3",
-                "gap-3",
+                "flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all gap-3",
+                !isExpanded && "lg:justify-center lg:px-2",
                 active
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
                   : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",

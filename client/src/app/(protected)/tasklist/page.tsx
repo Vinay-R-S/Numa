@@ -1,21 +1,19 @@
 "use client"
 
 import React, { useEffect, useState, useCallback, useRef } from "react"
-import { useRouter } from "next/navigation"
 import { CheckSquare, Bell, ChevronDown, ChevronRight, History } from "lucide-react"
 import { KanbanBoard } from "@/components/tasklist/KanbanBoard"
 import { AnalyticsDashboard } from "@/components/tasklist/AnalyticsDashboard"
 import { TaskDetailSheet } from "@/components/tasklist/TaskDetailSheet"
 import { fetchTasks, fetchStats, fetchCompletedHistory } from "@/components/tasklist/api"
 import type { Task, TaskStats } from "@/components/tasklist/types"
-import { PRIORITY_CONFIG, COLUMN_CONFIG } from "@/components/tasklist/types"
+import { PRIORITY_CONFIG } from "@/components/tasklist/types"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 
 export default function TasklistPage() {
-  const router = useRouter()
   const [tasks, setTasks] = useState<Task[]>([])
   const [stats, setStats] = useState<TaskStats | null>(null)
   const [loadingTasks, setLoadingTasks] = useState(true)
@@ -35,14 +33,6 @@ export default function TasklistPage() {
   // Detail sheet for history tasks
   const [historyDetailTask, setHistoryDetailTask] = useState<Task | null>(null)
   const [historyDetailOpen, setHistoryDetailOpen] = useState(false)
-
-  // Auth guard
-  useEffect(() => {
-    const token = localStorage.getItem("numa_token")
-    if (!token) {
-      router.replace("/auth")
-    }
-  }, [router])
 
   const loadTasks = useCallback(async () => {
     if (!hasLoadedTasks.current) setLoadingTasks(true)

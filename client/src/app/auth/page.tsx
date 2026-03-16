@@ -267,22 +267,32 @@ function AuthCard({
       <AnimatePresence>
         {error && (
           <motion.div
+            key="error-banner"
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
-            className="mb-3 overflow-hidden rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-2.5 text-xs text-red-400"
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden mb-3"
           >
-            {error}
+            <div className="rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-2.5 text-xs text-red-400 flex items-start gap-2">
+              <X className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
           </motion.div>
         )}
         {success && (
           <motion.div
+            key="success-banner"
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
-            className="mb-3 overflow-hidden rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-2.5 text-xs text-emerald-400"
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden mb-3"
           >
-            {success}
+            <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-2.5 text-xs text-emerald-400 flex items-start gap-2">
+              <Check className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>{success}</span>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
