@@ -6,6 +6,9 @@ from dotenv import load_dotenv
 from src.auth.router import router as auth_router
 from src.auth.dependencies import get_current_user
 from src.tasks.router import router as tasks_router
+from src.calendar.router import router as calendar_router
+from src.calendar_agent.router import router as calendar_agent_router
+from src.master_agent.router import router as master_agent_router
 from src.db import init_db
 
 load_dotenv()
@@ -37,6 +40,9 @@ def on_startup():
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(tasks_router)
+app.include_router(calendar_router)
+app.include_router(calendar_agent_router)
+app.include_router(master_agent_router)
 
 
 # ── Public ────────────────────────────────────────────────────────────────────

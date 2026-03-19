@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   CheckSquare,
   Home,
+  CalendarDays,
   Zap,
   Settings,
   LogOut,
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils"
 const NAV_ITEMS = [
   { href: "/home", icon: Home, label: "Home" },
   { href: "/tasklist", icon: CheckSquare, label: "Task List" },
+  { href: "/calendar", icon: CalendarDays, label: "Calendar" },
   { href: "/home", icon: LayoutDashboard, label: "Dashboard", disabled: true },
   { href: "/home", icon: Zap, label: "Agents", disabled: true },
   { href: "/home", icon: Settings, label: "Settings", disabled: true },

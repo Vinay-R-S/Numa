@@ -6,6 +6,9 @@ node_modules
 config
 sql
 prompt.md
+google_tokens
+google_web_oauth_client.json
+numa.apps.googleusercontent.com.json
 
 # IDE files
 .idea

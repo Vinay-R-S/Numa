@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 /** FastAPI backend – always on the same machine the Next.js server is running on. */
-const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8000"
+const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8000"
 
 /**
  * Catch-all proxy: forwards  /api/<anything>  →  BACKEND/<anything>
@@ -28,11 +28,22 @@ async function handler(
   const auth = req.headers.get("authorization")
   if (auth) headers.set("authorization", auth)
 
-  const upstream = await fetch(`${BACKEND}${backendPath}${qs}`, {
-    method: req.method,
-    headers,
-    body: body && body.byteLength > 0 ? body : undefined,
-  })
+  let upstream: Response
+  try {
+    upstream = await fetch(`${BACKEND}${backendPath}${qs}`, {
+      method: req.method,
+      headers,
+      body: body && body.byteLength > 0 ? body : undefined,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown fetch error"
+    return NextResponse.json(
+      {
+        detail: `Backend unavailable at ${BACKEND}. ${message}`,
+      },
+      { status: 503 }
+    )
+  }
 
   // Stream the response back with the same status + content-type
   const resHeaders = new Headers()

@@ -29,7 +29,7 @@ const integrations = [
   { name: "Journal", desc: "Notes & reflections", tag: "Built-in" },
   { name: "Meditation", desc: "Mindfulness sessions", tag: "Built-in" },
   { name: "Focus Timer", desc: "Deep work sessions", tag: "Built-in" },
-  { name: "Todo List", desc: "Context-aware tasks", tag: "Built-in" },
+  { name: "Task Planner", desc: "Context-aware tasks", tag: "Built-in" },
 ];
 
 export default function IntegrationsSection() {
