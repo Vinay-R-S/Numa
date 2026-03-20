@@ -14,6 +14,7 @@ class MasterAgentChatRequest(BaseModel):
         default_factory=list,
         description="Prior conversation turns",
     )
+    model: Optional[str] = Field(default=None, description="Optional model preset (70b or 8b)")
 
 
 class MasterAgentChatResponse(BaseModel):

@@ -1,69 +1,77 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { CalendarDays, Search } from "lucide-react"
+import { CalendarDays, Search, Sparkles, X } from "lucide-react"
 
 import CalendarView from "@/components/calendar/CalendarView"
+import { EventEditDialog } from "@/components/calendar/EventEditDialog"
+import { AgentSuggestions } from "@/components/calendar/AgentSuggestions"
 import { Button } from "@/components/ui/button"
+import { useCalendarStore } from "@/lib/stores"
 import {
   AgentChatMessage,
   CalendarEvent,
   CalendarEventPayload,
-  createCalendarEvent,
-  deleteCalendarEvent,
-  fetchCalendarEvents,
   getGoogleCalendarAuthorizationUrl,
   sendAgentCommand,
   startCalendarWatch,
   subscribeToCalendarUpdates,
-  updateCalendarEvent,
 } from "@/components/calendar/api"
 
 export default function CalendarPage() {
-  const [events, setEvents] = useState<CalendarEvent[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // Use global store for cached data
+  const {
+    events,
+    loading,
+    error,
+    agentMessages,
+    fetchEvents,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    setAgentMessages,
+    addAgentMessage,
+    clearError,
+  } = useCalendarStore()
+
   const [connectingGoogle, setConnectingGoogle] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
-  const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([
-    {
-      role: "assistant",
-      content: "I am your Calendar sub-agent. Ask me to create, move, or cancel meetings.",
-    },
-  ])
   const [agentInput, setAgentInput] = useState("")
   const [agentSending, setAgentSending] = useState(false)
   const [agentError, setAgentError] = useState<string | null>(null)
+  const [agentOpen, setAgentOpen] = useState(false)
+  const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null)
   const watchInitAttempted = useRef(false)
+  const sseReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const loadEvents = useCallback(async () => {
-    try {
-      setError(null)
-      const data = await fetchCalendarEvents()
-      setEvents(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load calendar events")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
+  // Fetch events on mount (will use cache if available)
   useEffect(() => {
-    loadEvents()
-  }, [loadEvents])
+    fetchEvents()
+  }, [fetchEvents])
 
+  // Subscribe to SSE updates
   useEffect(() => {
     const unsubscribe = subscribeToCalendarUpdates(() => {
-      loadEvents()
+      // Debounce calendar reloads from SSE
+      if (sseReloadTimerRef.current) {
+        clearTimeout(sseReloadTimerRef.current)
+      }
+      sseReloadTimerRef.current = setTimeout(() => {
+        fetchEvents(true) // Force fresh fetch on SSE update
+      }, 500)
     })
 
-    return unsubscribe
-  }, [loadEvents])
-
-  useEffect(() => {
-    if (watchInitAttempted.current) {
-      return
+    return () => {
+      unsubscribe()
+      if (sseReloadTimerRef.current) {
+        clearTimeout(sseReloadTimerRef.current)
+      }
     }
+  }, [fetchEvents])
+
+  // Initialize calendar watch
+  useEffect(() => {
+    if (watchInitAttempted.current) return
 
     watchInitAttempted.current = true
     startCalendarWatch().catch((err) => {
@@ -74,33 +82,25 @@ export default function CalendarPage() {
 
   const handleCreateEvent = useCallback(
     async (payload: CalendarEventPayload) => {
-      await createCalendarEvent(payload)
-      await loadEvents()
+      await createEvent(payload)
     },
-    [loadEvents]
+    [createEvent]
   )
 
   const handleUpdateEvent = useCallback(
     async (event: CalendarEvent) => {
-      const payload: CalendarEventPayload = {
-        title: event.title,
-        date: event.date.toISOString().slice(0, 10),
-        startTime: event.startTime,
-        endTime: event.endTime,
-        description: event.description,
-      }
-      await updateCalendarEvent(event.id, payload)
-      await loadEvents()
+      await updateEvent(event)
     },
-    [loadEvents]
+    [updateEvent]
   )
 
   const handleDeleteEvent = useCallback(
     async (eventId: string) => {
-      await deleteCalendarEvent(eventId)
-      await loadEvents()
+      const existing = events.find((e) => e.id === eventId)
+      if (existing?.readonly) return
+      await deleteEvent(eventId)
     },
-    [loadEvents]
+    [events, deleteEvent]
   )
 
   const handleConnectGoogleCalendar = useCallback(async () => {
@@ -109,10 +109,10 @@ export default function CalendarPage() {
       const authorizationUrl = await getGoogleCalendarAuthorizationUrl()
       window.location.assign(authorizationUrl)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start Google authorization")
+      clearError()
       setConnectingGoogle(false)
     }
-  }, [])
+  }, [clearError])
 
   const calendarNotConnected =
     !!error &&
@@ -122,9 +122,7 @@ export default function CalendarPage() {
 
   const handleSendAgentMessage = useCallback(async () => {
     const query = agentInput.trim()
-    if (!query || agentSending) {
-      return
-    }
+    if (!query || agentSending) return
 
     const nextHistory: AgentChatMessage[] = [...agentMessages, { role: "user", content: query }]
     setAgentMessages(nextHistory)
@@ -134,27 +132,32 @@ export default function CalendarPage() {
 
     try {
       const result = await sendAgentCommand(query, nextHistory)
-      setAgentMessages((prev) => [...prev, { role: "assistant", content: result.response }])
+      addAgentMessage({ role: "assistant", content: result.response })
 
       if (result.refreshCalendar) {
-        await loadEvents()
+        await fetchEvents(true) // Force fresh fetch
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Calendar sub-agent request failed"
       setAgentError(message)
-      setAgentMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: `I hit an error: ${message}` },
-      ])
+      addAgentMessage({ role: "assistant", content: `I hit an error: ${message}` })
     } finally {
       setAgentSending(false)
     }
-  }, [agentInput, agentSending, agentMessages, loadEvents])
+  }, [agentInput, agentSending, agentMessages, setAgentMessages, addAgentMessage, fetchEvents])
+
+  const handleSelectSuggestion = useCallback(
+    (query: string) => {
+      setAgentInput(query)
+      setTimeout(() => {
+        void handleSendAgentMessage()
+      }, 100)
+    },
+    [handleSendAgentMessage]
+  )
 
   const filteredEvents = useMemo(() => {
-    if (!searchQuery.trim()) {
-      return events
-    }
+    if (!searchQuery.trim()) return events
 
     const q = searchQuery.toLowerCase()
     return events.filter(
@@ -166,40 +169,51 @@ export default function CalendarPage() {
   }, [events, searchQuery])
 
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-450 flex-col gap-6 px-6 py-6">
-      <header className="flex items-center justify-between gap-4">
+    <div className="mx-auto flex h-[calc(100dvh-2rem)] w-full max-w-450 flex-col gap-3 overflow-hidden px-3 py-3 sm:gap-4 sm:px-6 sm:py-4">
+      <header className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20">
-            <CalendarDays className="h-5 w-5 text-primary" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20 sm:h-10 sm:w-10">
+            <CalendarDays className="h-4 w-4 text-primary sm:h-5 sm:w-5" />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Calendar</h1>
-            <p className="text-sm text-muted-foreground">
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-bold tracking-tight text-foreground sm:text-2xl">Calendar</h1>
+            <p className="hidden text-sm text-muted-foreground sm:block">
               Manage Google Calendar events directly from NUMA
             </p>
           </div>
         </div>
 
-        <div className="relative w-full max-w-xs">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search events"
-            className="w-full rounded-lg border border-border/40 bg-card px-9 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
-          />
+        <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-xl sm:justify-end">
+          <div className="relative flex-1 sm:w-full sm:max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search events"
+              className="h-9 w-full rounded-xl border border-border/40 bg-card px-9 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/30 sm:h-10"
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setAgentOpen((open) => !open)}
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-primary/35 bg-card/95 px-3 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-card sm:h-10 sm:gap-2 sm:px-4"
+          >
+            <Sparkles className="h-4 w-4 text-primary" />
+            <span className="hidden xs:inline">Agent</span>
+          </button>
         </div>
       </header>
 
       {loading && (
-        <div className="rounded-xl border border-border/40 bg-card/40 p-6 text-sm text-muted-foreground">
+        <div className="shrink-0 rounded-xl border border-border/40 bg-card/40 p-3 text-sm text-muted-foreground sm:p-4">
           Loading calendar events...
         </div>
       )}
 
       {error && (
-        <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
+        <div className="shrink-0 rounded-xl border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           <p>{error}</p>
           {calendarNotConnected && (
             <Button
@@ -215,61 +229,86 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {!loading && !error && (
-        <section className="min-h-180 rounded-2xl border border-border/40 bg-card/40 p-5">
+      {!loading && (
+        <section className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border/40 bg-card/40 p-2 sm:rounded-2xl sm:p-4">
           <CalendarView
             events={filteredEvents}
             onCreateEvent={handleCreateEvent}
             onUpdateEvent={handleUpdateEvent}
             onDeleteEvent={handleDeleteEvent}
+            onEditEvent={setEditingEvent}
           />
         </section>
       )}
 
-      <section className="rounded-2xl border border-border/40 bg-card/40 p-5">
-        <div className="mb-3">
-          <h2 className="text-lg font-semibold text-foreground">Calendar Sub-Agent</h2>
-          <p className="text-sm text-muted-foreground">
-            Use natural language to manage Google Calendar meetings from NUMA.
-          </p>
-        </div>
+      {editingEvent && (
+        <EventEditDialog
+          event={editingEvent}
+          onClose={() => setEditingEvent(null)}
+          onSave={handleUpdateEvent}
+          onDelete={handleDeleteEvent}
+        />
+      )}
 
-        <div className="mb-3 max-h-72 space-y-2 overflow-y-auto rounded-xl border border-border/30 bg-background/40 p-3">
-          {agentMessages.map((message, index) => (
-            <div
-              key={`${message.role}-${index}`}
-              className={
-                message.role === "user"
-                  ? "ml-auto w-fit max-w-[85%] rounded-lg bg-primary/15 px-3 py-2 text-sm text-foreground"
-                  : "mr-auto w-fit max-w-[85%] rounded-lg bg-muted/60 px-3 py-2 text-sm text-foreground"
-              }
-            >
-              {message.content}
+      {agentOpen && (
+        <section className="fixed inset-x-3 bottom-3 top-auto z-40 flex max-h-[70vh] flex-col rounded-2xl border border-border/40 bg-card/95 p-3 shadow-2xl backdrop-blur-md sm:inset-auto sm:right-6 sm:top-24 sm:h-[min(70vh,640px)] sm:w-[min(420px,calc(100vw-3rem))] sm:p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="min-w-0">
+              <h2 className="truncate text-base font-semibold text-foreground">Calendar Sub-Agent</h2>
+              <p className="truncate text-xs text-muted-foreground">Plan and manage meetings with natural language.</p>
             </div>
-          ))}
-        </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={() => setAgentOpen(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
 
-        {agentError && <p className="mb-2 text-sm text-destructive">{agentError}</p>}
+          <div className="mb-3 min-h-0 flex-1 space-y-2 overflow-y-auto rounded-xl border border-border/30 bg-background/40 p-2 sm:p-3">
+            {agentMessages.map((message, index) => (
+              <div
+                key={`${message.role}-${index}`}
+                className={
+                  message.role === "user"
+                    ? "ml-auto w-fit max-w-[90%] rounded-lg bg-primary/15 px-3 py-2 text-sm text-foreground"
+                    : "mr-auto w-fit max-w-[90%] rounded-lg bg-muted/60 px-3 py-2 text-sm text-foreground"
+                }
+              >
+                {message.content}
+              </div>
+            ))}
+          </div>
 
-        <div className="flex gap-2">
-          <input
-            value={agentInput}
-            onChange={(event) => setAgentInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault()
-                void handleSendAgentMessage()
-              }
-            }}
-            placeholder="Try: Schedule a meeting tomorrow at 10 AM called Product Sync"
-            className="flex-1 rounded-lg border border-border/40 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
-            disabled={agentSending}
-          />
-          <Button type="button" onClick={() => void handleSendAgentMessage()} disabled={agentSending}>
-            {agentSending ? "Sending..." : "Send"}
-          </Button>
-        </div>
-      </section>
+          {agentMessages.length <= 2 && (
+            <AgentSuggestions events={events} onSelectSuggestion={handleSelectSuggestion} />
+          )}
+
+          {agentError && <p className="mb-2 text-sm text-destructive">{agentError}</p>}
+
+          <div className="flex gap-2">
+            <input
+              value={agentInput}
+              onChange={(event) => setAgentInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault()
+                  void handleSendAgentMessage()
+                }
+              }}
+              placeholder="Try: Schedule product sync tomorrow at 10 AM"
+              className="flex-1 rounded-lg border border-border/40 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
+              disabled={agentSending}
+            />
+            <Button type="button" size="sm" className="shrink-0 sm:size-default" onClick={() => void handleSendAgentMessage()} disabled={agentSending}>
+              {agentSending ? "..." : "Send"}
+            </Button>
+          </div>
+        </section>
+      )}
     </div>
   )
 }

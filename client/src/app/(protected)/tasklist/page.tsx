@@ -5,8 +5,8 @@ import { CheckSquare, Bell, ChevronDown, ChevronRight, History } from "lucide-re
 import { KanbanBoard } from "@/components/tasklist/KanbanBoard"
 import { AnalyticsDashboard } from "@/components/tasklist/AnalyticsDashboard"
 import { TaskDetailSheet } from "@/components/tasklist/TaskDetailSheet"
-import { fetchTasks, fetchStats, fetchCompletedHistory } from "@/components/tasklist/api"
-import type { Task, TaskStats } from "@/components/tasklist/types"
+import { useTasksStore } from "@/lib/stores"
+import type { Task } from "@/components/tasklist/types"
 import { PRIORITY_CONFIG } from "@/components/tasklist/types"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
@@ -14,85 +14,62 @@ import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 
 export default function TasklistPage() {
-  const [tasks, setTasks] = useState<Task[]>([])
-  const [stats, setStats] = useState<TaskStats | null>(null)
-  const [loadingTasks, setLoadingTasks] = useState(true)
-  const [loadingStats, setLoadingStats] = useState(true)
-  // Track whether the first fetch has completed so subsequent refreshes don't re-show the skeleton
-  const hasLoadedTasks = useRef(false)
-  const hasLoadedStats = useRef(false)
+  // Use global store for cached data
+  const {
+    tasks,
+    stats,
+    historyTasks,
+    loadingTasks,
+    loadingStats,
+    loadingHistory,
+    tasksError,
+    fetchAllTasks,
+    fetchAllStats,
+    fetchAllHistory,
+    setTasks,
+    invalidateStats,
+  } = useTasksStore()
+
   // Stable ref for debouncing the stats refresh triggered by task changes
   const statsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // History (completed tasks from previous days)
-  const [historyTasks, setHistoryTasks] = useState<Task[]>([])
-  const [loadingHistory, setLoadingHistory] = useState(true)
-  const hasLoadedHistory = useRef(false)
   const [historyExpanded, setHistoryExpanded] = useState(false)
 
   // Detail sheet for history tasks
   const [historyDetailTask, setHistoryDetailTask] = useState<Task | null>(null)
   const [historyDetailOpen, setHistoryDetailOpen] = useState(false)
 
-  const loadTasks = useCallback(async () => {
-    if (!hasLoadedTasks.current) setLoadingTasks(true)
-    try {
-      const data = await fetchTasks()
-      hasLoadedTasks.current = true
-      setTasks(data)
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoadingTasks(false)
-    }
-  }, [])
-
-  const loadStats = useCallback(async () => {
-    if (!hasLoadedStats.current) setLoadingStats(true)
-    try {
-      const data = await fetchStats()
-      hasLoadedStats.current = true
-      setStats(data)
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoadingStats(false)
-    }
-  }, [])
-
-  const loadHistory = useCallback(async () => {
-    if (!hasLoadedHistory.current) setLoadingHistory(true)
-    try {
-      const data = await fetchCompletedHistory()
-      hasLoadedHistory.current = true
-      setHistoryTasks(data)
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoadingHistory(false)
-    }
-  }, [])
-
+  // Fetch all data on mount (will use cache if available)
   useEffect(() => {
-    loadTasks()
-    loadStats()
-    loadHistory()
-  }, [loadTasks, loadStats, loadHistory])
+    fetchAllTasks()
+    fetchAllStats()
+    fetchAllHistory()
+  }, [fetchAllTasks, fetchAllStats, fetchAllHistory])
 
   // Clean up stats debounce timer on unmount
   useEffect(() => () => {
     if (statsTimerRef.current) clearTimeout(statsTimerRef.current)
   }, [])
 
-  // Refresh stats whenever tasks change (debounced, with proper cleanup via ref)
+  // Refresh stats whenever tasks change (debounced)
   const handleTasksChange = useCallback(
     (updated: Task[]) => {
       setTasks(updated)
       if (statsTimerRef.current) clearTimeout(statsTimerRef.current)
-      statsTimerRef.current = setTimeout(() => loadStats(), 800)
+      statsTimerRef.current = setTimeout(() => {
+        invalidateStats()
+        fetchAllStats(true)
+      }, 800)
     },
-    [loadStats]
+    [setTasks, invalidateStats, fetchAllStats]
   )
+
+  // Handle manual refresh
+  const handleRefresh = useCallback(() => {
+    fetchAllTasks(true)
+    fetchAllStats(true)
+  }, [fetchAllTasks, fetchAllStats])
 
   // Web Push reminder scheduler
   useEffect(() => {
@@ -153,18 +130,26 @@ export default function TasklistPage() {
       </div>
 
       {/* ── Kanban Board ─────────────────────────────────────────────────────── */}
-      {loadingTasks ? (
+      {loadingTasks && tasks.length === 0 ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {[...Array(4)].map((_, i) => (
             <Skeleton key={i} className="h-96 rounded-2xl" />
           ))}
         </div>
       ) : (
-        <KanbanBoard
-          tasks={tasks}
-          onTasksChange={handleTasksChange}
-          onRefresh={() => { loadTasks(); loadStats() }}
-        />
+        <div className="space-y-4">
+          {tasksError && (
+            <div className="rounded-xl border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              <p>{tasksError}</p>
+            </div>
+          )}
+
+          <KanbanBoard
+            tasks={tasks}
+            onTasksChange={handleTasksChange}
+            onRefresh={handleRefresh}
+          />
+        </div>
       )}
 
       <Separator className="opacity-20" />
@@ -200,7 +185,7 @@ export default function TasklistPage() {
 
         {historyExpanded && (
           <div className="mt-4">
-            {loadingHistory ? (
+            {loadingHistory && historyTasks.length === 0 ? (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {[...Array(6)].map((_, i) => (
                   <Skeleton key={i} className="h-20 rounded-xl" />
@@ -251,7 +236,7 @@ export default function TasklistPage() {
       <Separator className="opacity-20" />
 
       {/* ── Analytics Dashboard ───────────────────────────────────────────────── */}
-      <AnalyticsDashboard stats={stats} loading={loadingStats} />
+      <AnalyticsDashboard stats={stats} loading={loadingStats && !stats} />
 
       {/* Bottom spacing */}
       <div className="h-8" />

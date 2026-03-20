@@ -1,13 +1,14 @@
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 from jose import jwt, JWTError
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SUPABASE_URL: str = os.environ["SUPABASE_URL"]

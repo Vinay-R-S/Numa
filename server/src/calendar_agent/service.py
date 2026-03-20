@@ -3,7 +3,7 @@ import os
 import importlib
 from datetime import datetime, timedelta
 from functools import lru_cache
-from typing import Annotated, List, Sequence, TypedDict
+from typing import Annotated, List, Optional, Sequence, TypedDict
 
 from ..calendar import service as calendar_service
 from ..memory import memory_service
@@ -53,15 +53,42 @@ def _require_agent_dependencies():
         "END": END,
     }
 
+def _resolve_groq_model(model_override: Optional[str]) -> str:
+    default_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+    if not model_override:
+        return default_model
 
-def _get_llm(chat_groq_cls):
-    api_key = os.getenv("GROQ_API_KEY")
+    selected = model_override.strip().lower()
+    aliases = {
+        "70b": "llama-3.3-70b-versatile",
+        "8b": "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile": "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant": "llama-3.1-8b-instant",
+    }
+
+    return aliases.get(selected, default_model)
+
+
+def _get_llm(chat_groq_cls, model_override: Optional[str] = None):
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not configured")
 
-    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = _resolve_groq_model(model_override)
     temperature = float(os.getenv("GROQ_TEMPERATURE", "0.2"))
     return chat_groq_cls(model=model, temperature=temperature, api_key=api_key)
+
+
+def _is_groq_configured() -> bool:
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        return False
+
+    lower = api_key.lower()
+    if lower in {"your_groq_api_key_here", "gsk_your_groq_api_key_here", "your_groq_key"}:
+        return False
+
+    return True
 
 
 def _toolset(tool_decorator, user_id: str | None):
@@ -73,6 +100,7 @@ def _toolset(tool_decorator, user_id: str | None):
         attendees: list = None,
         create_meet: bool = False,
     ) -> str:
+        """Create a new calendar event with optional attendees and meet link."""
         try:
             result = calendar_service.create_calendar_event(
                 title=title,
@@ -95,12 +123,17 @@ def _toolset(tool_decorator, user_id: str | None):
             return f"Error creating event: {exc}"
 
     @tool_decorator
-    def get_events(days: int = 1) -> str:
+    def get_events(days: int = 8) -> str:
+        """List events in a time window: past 7 days and future N days (excludes holidays/festivals)."""
         try:
-            events = calendar_service.list_upcoming_events(days, user_id=user_id)
+            events = calendar_service.list_events_in_window(
+                lookback_days=7,
+                lookahead_days=days,
+                user_id=user_id,
+            )
             if not events:
-                return "No upcoming events found."
-            lines = [f"Upcoming events ({len(events)}):"]
+                return "No events found in the time window."
+            lines = [f"Events in window ({len(events)}):"]
             for event in events:
                 lines.append(
                     f"- {event['summary']} at {event['start']} [{event.get('calendar', 'Primary')}]"
@@ -111,6 +144,7 @@ def _toolset(tool_decorator, user_id: str | None):
 
     @tool_decorator
     def get_events_on_date(date: str) -> str:
+        """List all events scheduled on a specific date (YYYY-MM-DD)."""
         try:
             events = calendar_service.get_events_on_date(date, user_id=user_id)
             if not events:
@@ -126,6 +160,7 @@ def _toolset(tool_decorator, user_id: str | None):
 
     @tool_decorator
     def delete_event(event_id: str) -> str:
+        """Delete a calendar event by id."""
         try:
             result = calendar_service.delete_calendar_event(event_id, user_id=user_id)
             return f"Event deleted successfully. ID: {result['deleted_event_id']}"
@@ -134,6 +169,7 @@ def _toolset(tool_decorator, user_id: str | None):
 
     @tool_decorator
     def delete_by_description(query: str) -> str:
+        """Delete an event by matching text in its description or summary."""
         try:
             result = calendar_service.delete_event_by_description(query, user_id=user_id)
             status = result.get("status")
@@ -155,6 +191,7 @@ def _toolset(tool_decorator, user_id: str | None):
 
     @tool_decorator
     def modify_event(query: str, new_datetime_str: str) -> str:
+        """Reschedule an event matched by description text to a new datetime."""
         try:
             result = calendar_service.modify_event_by_description(query, new_datetime_str, user_id=user_id)
             status = result.get("status")
@@ -176,6 +213,7 @@ def _toolset(tool_decorator, user_id: str | None):
 
     @tool_decorator
     def find_free_slots(date: str, duration_minutes: int = 30) -> str:
+        """Find available free time slots for a date and minimum duration."""
         try:
             result = calendar_service.find_free_slots(date, duration_minutes, user_id=user_id)
             if not result["free_slots"]:
@@ -201,7 +239,7 @@ def _toolset(tool_decorator, user_id: str | None):
 
 
 @lru_cache(maxsize=64)
-def _build_agent_graph(user_id: str | None):
+def _build_agent_graph(user_id: str | None, model_override: Optional[str] = None):
     deps = _require_agent_dependencies()
 
     AIMessage = deps["AIMessage"]
@@ -231,7 +269,7 @@ def _build_agent_graph(user_id: str | None):
         return None
 
     def call_model(state: AgentState) -> AgentState:
-        llm = _get_llm(deps["ChatGroq"])
+        llm = _get_llm(deps["ChatGroq"], model_override=model_override)
         llm_with_tools = llm.bind_tools(tools)
 
         now = datetime.now(calendar_service.TIMEZONE)
@@ -308,13 +346,28 @@ def _build_agent_graph(user_id: str | None):
     return workflow.compile(), AIMessage
 
 
-def run_agent_chat(query: str, history: List[dict], user_id: str | None = None):
+def run_agent_chat(
+    query: str,
+    history: List[dict],
+    user_id: str | None = None,
+    model: Optional[str] = None,
+):
+    if not _is_groq_configured():
+        return {
+            "response": (
+                "Calendar sub-agent is unavailable right now because GROQ_API_KEY is not configured on the backend. "
+                "Add GROQ_API_KEY in server/.env and restart the backend server."
+            ),
+            "success": True,
+            "refreshCalendar": False,
+        }
+
     try:
         deps = _require_agent_dependencies()
         HumanMessage = deps["HumanMessage"]
         AIMessage = deps["AIMessage"]
 
-        graph, AIMessageType = _build_agent_graph(user_id)
+        graph, AIMessageType = _build_agent_graph(user_id, model)
 
         contextual_query = query
         if user_id:

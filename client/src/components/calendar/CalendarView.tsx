@@ -15,6 +15,7 @@ interface CalendarViewProps {
   onCreateEvent?: (event: CalendarEventPayload) => Promise<void>
   onUpdateEvent?: (event: CalendarEvent) => Promise<void>
   onDeleteEvent?: (eventId: string) => Promise<void>
+  onEditEvent?: (event: CalendarEvent) => void
 }
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -85,6 +86,7 @@ function minutesToTime(value: number) {
 function EventDetailPopup({
   event,
   anchorRect,
+  onEdit,
   onDelete,
   onHoverStart,
   onHoverEnd,
@@ -99,6 +101,7 @@ function EventDetailPopup({
     width: number
     height: number
   }
+  onEdit?: (event: CalendarEvent) => void
   onDelete: (eventId: string) => Promise<void>
   onHoverStart: () => void
   onHoverEnd: () => void
@@ -173,17 +176,30 @@ function EventDetailPopup({
         </div>
         <p className="text-xs leading-relaxed text-muted-foreground/80">{event.description}</p>
         {!isReadonly && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-3 w-full"
-            onClick={async () => {
-              await onDelete(event.id)
-              onClose()
-            }}
-          >
-            Delete Event
-          </Button>
+          <div className="mt-3 flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              onClick={() => {
+                onEdit?.(event)
+                onClose()
+              }}
+            >
+              Edit
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              className="flex-1"
+              onClick={async () => {
+                await onDelete(event.id)
+                onClose()
+              }}
+            >
+              Delete
+            </Button>
+          </div>
         )}
       </div>
     </div>
@@ -295,12 +311,14 @@ function DayEventBlock({
   onResizeEnd,
   onHover,
   onHoverEnd,
+  onTap,
 }: {
   event: CalendarEvent
   onDragEnd: (id: string, newStartMin: number) => void
   onResizeEnd: (id: string, newEndMin: number) => void
   onHover: (event: CalendarEvent, e: React.MouseEvent<HTMLElement>) => void
   onHoverEnd: () => void
+  onTap?: () => void
 }) {
   const startMin = timeToMinutes(event.startTime)
   const endMin = timeToMinutes(event.endTime)
@@ -369,8 +387,9 @@ function DayEventBlock({
   return (
     <div
       className={cn(
-        "group absolute left-1 right-1 cursor-grab rounded-lg border px-2.5 py-1.5 transition-all duration-200 active:cursor-grabbing",
+        "group absolute left-1 right-1 cursor-grab rounded-lg border px-2 py-1 transition-all duration-200 active:cursor-grabbing sm:px-2.5 sm:py-1.5",
         isReadonly && "cursor-default",
+        onTap && "cursor-pointer",
         "hover:-translate-y-px hover:shadow-lg",
         isSecondary
           ? "border-secondary/20 bg-linear-to-br from-secondary/25 to-primary/10 hover:border-secondary/50"
@@ -383,13 +402,19 @@ function DayEventBlock({
         onHover(event, e)
       }}
       onMouseLeave={onHoverEnd}
+      onClick={(e) => {
+        if (onTap) {
+          e.stopPropagation()
+          onTap()
+        }
+      }}
     >
-      <div className="truncate text-xs font-medium text-foreground">{event.title}</div>
-      {height >= 36 && <div className="text-[10px] text-muted-foreground">{event.startTime} - {event.endTime}</div>}
+      <div className="truncate text-[11px] font-medium text-foreground sm:text-xs">{event.title}</div>
+      {height >= 36 && <div className="text-[9px] text-muted-foreground sm:text-[10px]">{event.startTime} - {event.endTime}</div>}
 
       {!isReadonly && (
         <div
-          className="absolute bottom-0 left-0 right-0 flex h-2 cursor-s-resize items-center justify-center opacity-0 group-hover:opacity-100"
+          className="absolute bottom-0 left-0 right-0 hidden h-2 cursor-s-resize items-center justify-center opacity-0 group-hover:flex group-hover:opacity-100"
           onMouseDown={handleResizeStart}
         >
           <div className="h-1 w-8 rounded-full bg-muted-foreground/30" />
@@ -404,6 +429,7 @@ export default function CalendarView({
   onCreateEvent,
   onUpdateEvent,
   onDeleteEvent,
+  onEditEvent,
 }: CalendarViewProps) {
   const [view, setView] = useState<ViewMode>("month")
   const [currentDate, setCurrentDate] = useState(new Date())
@@ -430,6 +456,22 @@ export default function CalendarView({
     const id = window.setInterval(() => setNow(new Date()), 30_000)
     return () => window.clearInterval(id)
   }, [])
+
+  // Responsive: detect mobile for layout adjustments
+  const [isMobile, setIsMobile] = useState(false)
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 640)
+    check()
+    window.addEventListener("resize", check)
+    return () => window.removeEventListener("resize", check)
+  }, [])
+
+  // Default to day view on mobile for better UX
+  useEffect(() => {
+    if (isMobile && view === "month") {
+      setView("day")
+    }
+  }, [isMobile, view])
 
   const today = now
 
@@ -557,9 +599,9 @@ export default function CalendarView({
 
   return (
     <div className="flex h-full flex-col" onClick={closePopups}>
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-2xl font-bold text-foreground">{headerLabel}</h2>
-        <div className="flex items-center gap-2">
+      <div className="mb-2 flex flex-col gap-2 sm:mb-4 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="truncate text-lg font-bold text-foreground sm:text-2xl">{headerLabel}</h2>
+        <div className="flex items-center gap-1 sm:gap-2">
           <div className="flex gap-0.5 rounded-md border border-border/40 bg-card p-0.5">
             {(["month", "week", "day"] as ViewMode[]).map((mode) => (
               <button
@@ -570,22 +612,23 @@ export default function CalendarView({
                   closePopups()
                 }}
                 className={cn(
-                  "rounded-md px-3 py-1.5 text-xs font-medium capitalize transition-all",
+                  "rounded-md px-2 py-1 text-xs font-medium capitalize transition-all sm:px-3 sm:py-1.5",
                   view === mode
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
                 )}
               >
-                {mode}
+                {isMobile ? mode.charAt(0).toUpperCase() : mode}
               </button>
             ))}
           </div>
-          <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-9 sm:w-9" onClick={() => navigate(-1)}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"
             size="sm"
+            className="h-8 px-2 text-xs sm:h-9 sm:px-3 sm:text-sm"
             onClick={() => {
               setCurrentDate(new Date())
               closePopups()
@@ -593,18 +636,18 @@ export default function CalendarView({
           >
             Today
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => navigate(1)}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-9 sm:w-9" onClick={() => navigate(1)}>
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
       </div>
 
       {view === "month" && (
-        <div className="flex-1 rounded-xl border border-border/40 bg-card/40 p-2">
+        <div className="flex-1 overflow-auto rounded-lg border border-border/40 bg-card/40 p-1 sm:rounded-xl sm:p-2">
           <div className="mb-1 grid grid-cols-7">
             {DAYS.map((day) => (
-              <div key={day} className="py-2 text-center text-xs font-medium text-muted-foreground">
-                {day}
+              <div key={day} className="py-1 text-center text-[10px] font-medium text-muted-foreground sm:py-2 sm:text-xs">
+                {isMobile ? day.charAt(0) : day}
               </div>
             ))}
           </div>
@@ -616,7 +659,7 @@ export default function CalendarView({
                 <div
                   key={index}
                   className={cn(
-                    "min-h-20 rounded-md p-1.5 transition-all",
+                    "min-h-12 rounded-md p-0.5 transition-all sm:min-h-20 sm:p-1.5",
                     date ? "cursor-pointer hover:bg-accent/30" : "opacity-0",
                     isToday && "bg-primary/10 ring-1 ring-primary/40"
                   )}
@@ -632,20 +675,26 @@ export default function CalendarView({
                     <>
                       <span
                         className={cn(
-                          "text-xs font-medium",
+                          "text-[10px] font-medium sm:text-xs",
                           isToday ? "font-bold text-primary" : "text-muted-foreground"
                         )}
                       >
                         {date.getDate()}
                       </span>
                       <div className="mt-0.5 space-y-0.5">
-                        {dayEvents.slice(0, 2).map((event) => (
+                        {dayEvents.slice(0, isMobile ? 1 : 2).map((event) => (
                           <div
                             key={event.id}
-                            onMouseEnter={(mouseEvent) => handleEventHover(event, mouseEvent)}
-                            onMouseLeave={schedulePopupClose}
+                            onMouseEnter={(mouseEvent) => !isMobile && handleEventHover(event, mouseEvent)}
+                            onMouseLeave={() => !isMobile && schedulePopupClose()}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (isMobile) {
+                                onEditEvent?.(event)
+                              }
+                            }}
                             className={cn(
-                              "truncate rounded border px-1.5 py-0.5 text-[10px] font-medium transition-all hover:-translate-y-px",
+                              "truncate rounded border px-1 py-0.5 text-[8px] font-medium transition-all hover:-translate-y-px sm:px-1.5 sm:text-[10px]",
                               event.color === "secondary"
                                 ? "border-secondary/20 bg-linear-to-r from-secondary/25 to-primary/15"
                                 : "border-primary/20 bg-linear-to-r from-primary/25 to-secondary/15"
@@ -654,8 +703,8 @@ export default function CalendarView({
                             {event.title}
                           </div>
                         ))}
-                        {dayEvents.length > 2 && (
-                          <span className="text-[10px] text-muted-foreground">+{dayEvents.length - 2} more</span>
+                        {dayEvents.length > (isMobile ? 1 : 2) && (
+                          <span className="text-[8px] text-muted-foreground sm:text-[10px]">+{dayEvents.length - (isMobile ? 1 : 2)} more</span>
                         )}
                       </div>
                     </>
@@ -668,21 +717,21 @@ export default function CalendarView({
       )}
 
       {view === "week" && (
-        <div className="flex-1 overflow-auto rounded-xl border border-border/40 bg-card/40 p-2">
-          <div className="grid grid-cols-[50px_repeat(7,1fr)] gap-px">
+        <div className="flex-1 overflow-auto rounded-lg border border-border/40 bg-card/40 p-1 sm:rounded-xl sm:p-2">
+          <div className="grid min-w-[500px] grid-cols-[40px_repeat(7,1fr)] gap-px sm:grid-cols-[50px_repeat(7,1fr)]">
             <div />
             {getWeekDates(currentDate).map((date, index) => (
               <div
                 key={index}
                 className={cn(
-                  "py-2 text-center text-xs font-medium",
+                  "py-1 text-center text-[10px] font-medium sm:py-2 sm:text-xs",
                   isSameDay(date, today) ? "text-primary" : "text-muted-foreground"
                 )}
               >
-                <div>{DAYS[date.getDay()]}</div>
+                <div>{isMobile ? DAYS[date.getDay()].charAt(0) : DAYS[date.getDay()]}</div>
                 <div
                   className={cn(
-                    "text-lg font-bold",
+                    "text-sm font-bold sm:text-lg",
                     isSameDay(date, today) ? "text-primary" : "text-foreground"
                   )}
                 >
@@ -693,11 +742,11 @@ export default function CalendarView({
 
             {HOURS.map((hour) => (
               <div key={`row-${hour}`} className="contents">
-                <div className="pr-2 pt-1 text-right text-[10px] text-muted-foreground">{formatHour(hour)}</div>
+                <div className="pr-1 pt-1 text-right text-[8px] text-muted-foreground sm:pr-2 sm:text-[10px]">{formatHour(hour)}</div>
                 {getWeekDates(currentDate).map((date, dayIndex) => (
                   <div
                     key={`${hour}-${dayIndex}`}
-                    className="relative min-h-12 cursor-pointer border-t border-border/20 p-0.5 transition-colors hover:bg-accent/10"
+                    className="relative min-h-10 cursor-pointer border-t border-border/20 p-0.5 transition-colors hover:bg-accent/10 sm:min-h-12"
                     onClick={(event) => handleSlotClick(date, hour, event)}
                   >
                     {eventsForDay(date)
@@ -705,17 +754,23 @@ export default function CalendarView({
                       .map((calendarEvent) => (
                         <div
                           key={calendarEvent.id}
-                          onMouseEnter={(mouseEvent) => handleEventHover(calendarEvent, mouseEvent)}
-                          onMouseLeave={schedulePopupClose}
+                          onMouseEnter={(mouseEvent) => !isMobile && handleEventHover(calendarEvent, mouseEvent)}
+                          onMouseLeave={() => !isMobile && schedulePopupClose()}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (isMobile) {
+                              onEditEvent?.(calendarEvent)
+                            }
+                          }}
                           className={cn(
-                            "cursor-pointer rounded border px-1.5 py-1 text-[10px] font-medium transition-all hover:-translate-y-px",
+                            "cursor-pointer rounded border px-1 py-0.5 text-[8px] font-medium transition-all hover:-translate-y-px sm:px-1.5 sm:py-1 sm:text-[10px]",
                             calendarEvent.color === "secondary"
                               ? "border-secondary/20 bg-linear-to-r from-secondary/25 to-primary/15"
                               : "border-primary/20 bg-linear-to-r from-primary/25 to-secondary/15"
                           )}
                         >
                           <div className="truncate">{calendarEvent.title}</div>
-                          <div className="text-muted-foreground">{calendarEvent.startTime}</div>
+                          <div className="hidden text-muted-foreground sm:block">{calendarEvent.startTime}</div>
                         </div>
                       ))}
                   </div>
@@ -727,13 +782,13 @@ export default function CalendarView({
       )}
 
       {view === "day" && (
-        <div className="flex-1 overflow-auto rounded-xl border border-border/40 bg-card/40 p-2">
-          <div className="grid grid-cols-[50px_1fr] gap-px">
+        <div className="flex-1 overflow-auto rounded-lg border border-border/40 bg-card/40 p-1 sm:rounded-xl sm:p-2">
+          <div className="grid grid-cols-[40px_1fr] gap-px sm:grid-cols-[50px_1fr]">
             <div className="relative" style={{ height: HOURS.length * SLOT_HEIGHT }}>
               {HOURS.map((hour) => (
                 <div
                   key={hour}
-                  className="absolute w-full pr-2 text-right text-[10px] text-muted-foreground"
+                  className="absolute w-full pr-1 text-right text-[8px] text-muted-foreground sm:pr-2 sm:text-[10px]"
                   style={{ top: (hour - 7) * SLOT_HEIGHT }}
                 >
                   {formatHour(hour)}
@@ -765,6 +820,7 @@ export default function CalendarView({
                   onResizeEnd={handleResizeEnd}
                   onHover={handleEventHover}
                   onHoverEnd={schedulePopupClose}
+                  onTap={isMobile ? () => onEditEvent?.(event) : undefined}
                 />
               ))}
             </div>
@@ -777,6 +833,7 @@ export default function CalendarView({
           <EventDetailPopup
             event={detailPopup.event}
             anchorRect={detailPopup.anchorRect}
+            onEdit={onEditEvent}
             onDelete={handleDelete}
             onHoverStart={cancelScheduledClose}
             onHoverEnd={schedulePopupClose}

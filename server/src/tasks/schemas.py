@@ -47,6 +47,7 @@ class TaskResponse(BaseModel):
     reminder_at: Optional[datetime]
     source_name: Optional[str]
     source_logo: Optional[str]
+    external_ref: Optional[str]
     position: int
     completed_at: Optional[datetime]
     created_at: datetime

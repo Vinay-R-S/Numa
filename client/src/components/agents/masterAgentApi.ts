@@ -1,3 +1,5 @@
+import { getAiSettings } from "@/lib/aiSettings"
+
 export interface MasterAgentMessage {
   role: "user" | "assistant"
   content: string
@@ -40,10 +42,15 @@ export async function sendMasterAgentCommand(
   query: string,
   history: MasterAgentMessage[] = []
 ): Promise<MasterAgentResponse> {
+  const aiSettings = getAiSettings()
+  if (!aiSettings.enabled) {
+    throw new Error("AI agents are disabled in Settings.")
+  }
+
   const response = await fetch(`/api/master-agent/chat`, {
     method: "POST",
     headers: authHeaders(),
-    body: JSON.stringify({ query, history }),
+    body: JSON.stringify({ query, history, model: aiSettings.modelPreset }),
   })
 
   const data = await parseJsonResponse<MasterAgentResponse>(response, "Master agent request failed")

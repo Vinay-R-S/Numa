@@ -24,7 +24,7 @@ const NAV_ITEMS = [
   { href: "/calendar", icon: CalendarDays, label: "Calendar" },
   { href: "/home", icon: LayoutDashboard, label: "Dashboard", disabled: true },
   { href: "/home", icon: Zap, label: "Agents", disabled: true },
-  { href: "/home", icon: Settings, label: "Settings", disabled: true },
+  { href: "/settings", icon: Settings, label: "Settings" },
 ]
 
 interface TasklistSidebarProps {

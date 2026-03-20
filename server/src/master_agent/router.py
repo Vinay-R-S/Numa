@@ -14,5 +14,6 @@ def chat(request: MasterAgentChatRequest, current_user: dict = Depends(get_curre
         query=request.query,
         history=[message.model_dump() for message in request.history],
         user_id=user_id,
+        model=request.model,
     )
     return MasterAgentChatResponse(**result)

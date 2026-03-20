@@ -4,11 +4,12 @@ Add new table DDL to the TABLES list to have them auto-created.
 """
 import os
 import logging
+from pathlib import Path
 
 import psycopg2
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 log = logging.getLogger(__name__)
 
 # ── Connection helper ─────────────────────────────────────────────────────────

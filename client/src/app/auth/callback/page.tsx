@@ -4,8 +4,6 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 /**
  * OAuth Callback Page
  *
@@ -18,19 +16,50 @@ export default function AuthCallbackPage() {
 
   useEffect(() => {
     const handleCallback = async () => {
-      // Give Supabase JS a moment to parse the URL and hydrate the session
-      const { data, error } = await supabase.auth.getSession();
+      let accessToken: string | null = null;
 
-      if (error || !data.session?.access_token) {
+      try {
+        const query = new URLSearchParams(window.location.search);
+        const code = query.get("code");
+
+        if (code) {
+          const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error || !data.session?.access_token) {
+            router.replace("/auth?error=oauth_failed");
+            return;
+          }
+
+          accessToken = data.session.access_token;
+        } else {
+          const hash = window.location.hash.startsWith("#")
+            ? window.location.hash.slice(1)
+            : window.location.hash;
+          const hashParams = new URLSearchParams(hash);
+          const hashToken = hashParams.get("access_token");
+
+          if (hashToken) {
+            accessToken = hashToken;
+          } else {
+            const { data, error } = await supabase.auth.getSession();
+            if (error || !data.session?.access_token) {
+              router.replace("/auth?error=oauth_failed");
+              return;
+            }
+
+            accessToken = data.session.access_token;
+          }
+        }
+      } catch {
         router.replace("/auth?error=oauth_failed");
         return;
       }
 
       try {
-        const res = await fetch(`${API}/auth/exchange`, {
+        // Use relative URL to go through Next.js API proxy - works on mobile/any network device
+        const res = await fetch("/api/auth/exchange", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ supabase_token: data.session.access_token }),
+          body: JSON.stringify({ supabase_token: accessToken }),
         });
 
         const json = await res.json();

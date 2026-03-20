@@ -1,3 +1,5 @@
+import { getAiSettings } from "@/lib/aiSettings"
+
 export interface CalendarEvent {
   id: string
   title: string
@@ -55,6 +57,8 @@ interface OAuthStartResponse {
   authorization_url: string
 }
 
+const CALENDAR_WINDOW_DAYS = 7
+
 function authHeaders() {
   const token = typeof window !== "undefined" ? localStorage.getItem("numa_token") : null
   return {
@@ -82,8 +86,9 @@ async function parseJsonResponse<T>(response: Response, fallbackMessage: string)
   return response.json() as Promise<T>
 }
 
-export async function fetchCalendarEvents(): Promise<CalendarEvent[]> {
-  const response = await fetch(`/api/calendar/events`, {
+export async function fetchCalendarEvents(days: number = CALENDAR_WINDOW_DAYS): Promise<CalendarEvent[]> {
+  const safeDays = Math.max(1, Math.min(days, CALENDAR_WINDOW_DAYS))
+  const response = await fetch(`/api/calendar/events?days=${safeDays}`, {
     headers: authHeaders(),
     cache: "no-store",
   })
@@ -204,10 +209,15 @@ export async function sendAgentCommand(
   query: string,
   history: AgentChatMessage[] = []
 ): Promise<AgentApiResponse> {
+  const aiSettings = getAiSettings()
+  if (!aiSettings.enabled) {
+    throw new Error("AI agents are disabled in Settings.")
+  }
+
   const response = await fetch(`/api/agent/chat`, {
     method: "POST",
     headers: authHeaders(),
-    body: JSON.stringify({ query, history }),
+    body: JSON.stringify({ query, history, model: aiSettings.modelPreset }),
   })
 
   const data = await parseJsonResponse<AgentApiResponse>(response, "Agent request failed")

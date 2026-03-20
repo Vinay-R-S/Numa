@@ -14,5 +14,6 @@ def chat(request: AgentChatRequest, current_user: dict = Depends(get_current_use
         query=request.query,
         history=[message.model_dump() for message in request.history],
         user_id=user_id,
+        model=request.model,
     )
     return AgentChatResponse(**result)

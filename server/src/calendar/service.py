@@ -22,6 +22,21 @@ from ..tasks import service as task_service
 TIMEZONE_NAME = os.getenv("TIMEZONE", "Asia/Kolkata")
 log = logging.getLogger(__name__)
 SYNC_WORKERS = int(os.getenv("CALENDAR_SYNC_WORKERS", "3"))
+CALENDAR_FRONTEND_WINDOW_DAYS = 8  # Fetch up to 8 days ahead
+CALENDAR_FRONTEND_LOOKBACK_DAYS = 7  # Keep past 7 days (auto-delete 8+ days old)
+WRITABLE_CALENDAR_ACCESS_ROLES = {"owner", "writer"}
+EXCLUDED_CALENDAR_ID_MARKERS = (
+    "#holiday@group.v.calendar.google.com",
+    "#contacts@group.v.calendar.google.com",
+)
+EXCLUDED_CALENDAR_SUMMARY_MARKERS = (
+    "holiday",
+    "holidays",
+    "festival",
+    "festivals",
+    "birthday",
+    "birthdays",
+)
 
 
 def _resolve_timezone() -> ZoneInfo:
@@ -529,26 +544,104 @@ def _upsert_calendar_event_memory(user_id: Optional[str], event: Dict) -> None:
     )
 
 
+def _prune_calendar_window_data(
+    user_id: Optional[str],
+    window_start: datetime,
+    window_end: datetime,
+) -> None:
+    if not user_id:
+        return
+
+    stale_events: List[Tuple[str, str]] = []
+
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT google_calendar_id, google_event_id
+            FROM public.google_calendar_events
+            WHERE user_id = %s
+              AND (start_at < %s OR start_at >= %s)
+            """,
+            (user_id, window_start, window_end),
+        )
+        rows = cur.fetchall() or []
+        stale_events = [(str(row[0]), str(row[1])) for row in rows if len(row) >= 2]
+
+        cur.execute(
+            """
+            DELETE FROM public.google_calendar_events
+            WHERE user_id = %s
+              AND (start_at < %s OR start_at >= %s)
+            """,
+            (user_id, window_start, window_end),
+        )
+
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        log.warning("Failed to prune calendar events outside rolling window: %s", exc)
+    finally:
+        conn.close()
+
+    for calendar_id, event_id in stale_events:
+        external_ref = task_service.calendar_external_ref(calendar_id, event_id)
+        _run_parallel_best_effort(
+            lambda ext_ref=external_ref: task_service.delete_task_by_external_ref(user_id, ext_ref),
+            lambda cal_id=calendar_id, evt_id=event_id: memory_service.delete_snapshot(
+                user_id=user_id,
+                source="calendar_event",
+                external_id=f"{cal_id}:{evt_id}",
+            ),
+        )
+
+
 def list_selected_calendars(service) -> List[Dict[str, Any]]:
     response = service.calendarList().list().execute()
     calendars: List[Dict[str, Any]] = []
 
     for cal in response.get("items", []):
-        if cal.get("primary") or cal.get("selected", True):
-            calendars.append(
-                {
-                    "id": cal.get("id"),
-                    "summary": cal.get("summary"),
-                    "description": cal.get("description"),
-                    "time_zone": cal.get("timeZone"),
-                    "access_role": cal.get("accessRole"),
-                    "selected": cal.get("selected", True),
-                    "is_primary": bool(cal.get("primary")),
-                    "raw_calendar": cal,
-                }
-            )
+        if not _is_supported_user_calendar(cal):
+            continue
+
+        calendars.append(
+            {
+                "id": cal.get("id"),
+                "summary": cal.get("summary"),
+                "description": cal.get("description"),
+                "time_zone": cal.get("timeZone"),
+                "access_role": cal.get("accessRole"),
+                "selected": cal.get("selected", True),
+                "is_primary": bool(cal.get("primary")),
+                "raw_calendar": cal,
+            }
+        )
 
     return calendars
+
+
+def _is_supported_user_calendar(cal: Dict[str, Any]) -> bool:
+    is_primary = bool(cal.get("primary"))
+    selected = bool(cal.get("selected", True))
+    access_role = str(cal.get("accessRole") or "").strip().lower()
+
+    calendar_id = str(cal.get("id") or "").strip().lower()
+    summary = str(cal.get("summary") or "").strip().lower()
+
+    if any(marker in calendar_id for marker in EXCLUDED_CALENDAR_ID_MARKERS):
+        return False
+
+    if any(marker in summary for marker in EXCLUDED_CALENDAR_SUMMARY_MARKERS):
+        return False
+
+    if is_primary:
+        return True
+
+    if not selected:
+        return False
+
+    return access_role in WRITABLE_CALENDAR_ACCESS_ROLES
 
 
 def fetch_events_across_selected_calendars(
@@ -578,6 +671,10 @@ def fetch_events_across_selected_calendars(
         )
 
         for event in result.get("items", []):
+            if _is_excluded_google_special_event(event, str(cal_id), str(cal.get("summary") or "")):
+                continue
+            if not _is_user_related_meeting(event):
+                continue
             event["_calendar_id"] = cal_id
             event["_calendar_summary"] = cal.get("summary")
             event["_calendar_access_role"] = cal.get("access_role")
@@ -587,6 +684,48 @@ def fetch_events_across_selected_calendars(
         key=lambda e: e.get("start", {}).get("dateTime", e.get("start", {}).get("date", ""))
     )
     return combined
+
+
+def _is_excluded_google_special_event(
+    event: Dict[str, Any],
+    calendar_id: str,
+    calendar_summary: str,
+) -> bool:
+    event_type = str(event.get("eventType") or "").strip().lower()
+    if event_type == "birthday":
+        return True
+
+    organizer = event.get("organizer") if isinstance(event.get("organizer"), dict) else {}
+    creator = event.get("creator") if isinstance(event.get("creator"), dict) else {}
+
+    source_text = " ".join(
+        [
+            str(calendar_id or ""),
+            str(calendar_summary or ""),
+            str(organizer.get("email") or ""),
+            str(creator.get("email") or ""),
+        ]
+    ).lower()
+
+    return any(marker in source_text for marker in EXCLUDED_CALENDAR_ID_MARKERS)
+
+
+def _is_user_related_meeting(event: Dict[str, Any]) -> bool:
+    creator = event.get("creator")
+    if isinstance(creator, dict) and bool(creator.get("self")):
+        return True
+
+    organizer = event.get("organizer")
+    if isinstance(organizer, dict) and bool(organizer.get("self")):
+        return True
+
+    attendees = event.get("attendees")
+    if isinstance(attendees, list):
+        for attendee in attendees:
+            if isinstance(attendee, dict) and bool(attendee.get("self")):
+                return True
+
+    return False
 
 
 def _format_event_for_frontend(event: Dict) -> Dict:
@@ -650,12 +789,19 @@ def _sync_calendar_event_to_task(user_id: Optional[str], event: Dict) -> None:
     if not user_id:
         return
 
+    # Use iCalUID as the unique identifier to prevent duplicates across calendars
+    ical_uid = str(event.get("iCalUID") or "").strip()
     event_id = str(event.get("id") or "").strip()
-    if not event_id:
+
+    if not ical_uid and not event_id:
         return
 
+    # Use iCalUID if available (unique across all calendars), otherwise fall back to calendar_id:event_id
     calendar_id = str(event.get("_calendar_id") or "primary")
-    external_ref = task_service.calendar_external_ref(calendar_id, event_id)
+    if ical_uid:
+        external_ref = f"gcal:ical:{ical_uid}"
+    else:
+        external_ref = task_service.calendar_external_ref(calendar_id, event_id)
 
     if str(event.get("status") or "").lower() == "cancelled":
         _run_parallel_best_effort(
@@ -702,7 +848,20 @@ def _delete_calendar_event_task(user_id: Optional[str], calendar_id: str, event_
     if not user_id:
         return
 
-    external_ref = task_service.calendar_external_ref(calendar_id, event_id)
+    # Try to get the event to find its iCalUID
+    try:
+        service = get_calendar_service(user_id=user_id)
+        event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        ical_uid = str(event.get("iCalUID") or "").strip()
+
+        if ical_uid:
+            external_ref = f"gcal:ical:{ical_uid}"
+        else:
+            external_ref = task_service.calendar_external_ref(calendar_id, event_id)
+    except Exception:
+        # Fallback if we can't fetch the event
+        external_ref = task_service.calendar_external_ref(calendar_id, event_id)
+
     _run_parallel_best_effort(
         lambda: task_service.delete_task_by_external_ref(user_id, external_ref),
         lambda: _mark_calendar_event_deleted(user_id, calendar_id, event_id),
@@ -735,18 +894,26 @@ def _build_google_event_body(payload) -> Dict:
     }
 
 
-def get_events_for_frontend(days: int = 60, user_id: Optional[str] = None) -> List[Dict]:
+def get_events_for_frontend(days: int = CALENDAR_FRONTEND_WINDOW_DAYS, user_id: Optional[str] = None) -> List[Dict]:
     if days < 1:
         raise ValueError("days must be >= 1")
+
+    window_days = min(days, CALENDAR_FRONTEND_WINDOW_DAYS)
 
     service = get_calendar_service(user_id=user_id)
     now = datetime.now(TIMEZONE)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    time_min = (today_start - timedelta(days=60)).isoformat()
-    time_max = (today_start + timedelta(days=days)).isoformat()
+    window_start = today_start - timedelta(days=CALENDAR_FRONTEND_LOOKBACK_DAYS)
+    window_end = today_start + timedelta(days=window_days + 1)
+
+    time_min = window_start.isoformat()
+    # Include all of today plus the next N days.
+    time_max = window_end.isoformat()
 
     selected_calendars = list_selected_calendars(service)
     _upsert_calendar_metadata(user_id, selected_calendars)
+
+    _prune_calendar_window_data(user_id, window_start, window_end)
 
     events_raw = fetch_events_across_selected_calendars(
         service,
@@ -925,6 +1092,33 @@ def list_upcoming_events(days: int = 1, user_id: Optional[str] = None) -> List[D
     now = datetime.now(TIMEZONE)
     time_min = now.isoformat()
     time_max = (now + timedelta(days=days)).isoformat()
+
+    events = fetch_events_across_selected_calendars(service, time_min, time_max)
+
+    return [
+        {
+            "summary": event.get("summary", "(No title)"),
+            "start": event["start"].get("dateTime", event["start"].get("date")),
+            "id": event.get("id"),
+            "calendar": event.get("_calendar_summary", "Primary"),
+        }
+        for event in events
+    ]
+
+
+def list_events_in_window(
+    lookback_days: int = 7,
+    lookahead_days: int = 8,
+    user_id: Optional[str] = None,
+) -> List[Dict]:
+    """List events in a window around now (past + future), excluding holidays/festivals."""
+    service = get_calendar_service(user_id=user_id)
+
+    now = datetime.now(TIMEZONE)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    time_min = (today_start - timedelta(days=lookback_days)).isoformat()
+    time_max = (today_start + timedelta(days=lookahead_days + 1)).isoformat()
 
     events = fetch_events_across_selected_calendars(service, time_min, time_max)
 

@@ -22,10 +22,43 @@ import { TaskDialog } from "./TaskDialog"
 import { TaskDetailSheet } from "./TaskDetailSheet"
 import { patchTaskStatus, createTask, updateTask, deleteTask } from "./api"
 import { Button } from "@/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { toast } from "./toast"
 import { scheduleReminder, cancelReminder } from "./notifications"
 
 const STATUSES: TaskStatus[] = ["planned", "inprogress", "completed", "pending"]
+
+type TaskSortMode = "position" | "due-date" | "priority"
+
+const PRIORITY_SORT_WEIGHT: Record<"low" | "medium" | "high" | "urgent", number> = {
+  low: 1,
+  medium: 2,
+  high: 3,
+  urgent: 4,
+}
+
+function dueDateSortValue(task: Task): number {
+  if (!task.due_date) {
+    return Number.POSITIVE_INFINITY
+  }
+
+  const parsed = new Date(task.due_date).getTime()
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed
+}
+
+function prioritySortValue(task: Task): number {
+  if (!task.priority) {
+    return 0
+  }
+
+  return PRIORITY_SORT_WEIGHT[task.priority]
+}
 
 interface KanbanBoardProps {
   tasks: Task[]
@@ -37,6 +70,7 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   // Local copy for optimistic drag/edit updates — parent is notified only after confirmed API responses
   const [localTasks, setLocalTasks] = useState(tasks)
+  const [sortMode, setSortMode] = useState<TaskSortMode>("position")
 
   // Keep local state in sync whenever the parent pushes a confirmed update or refreshes
   useEffect(() => {
@@ -67,12 +101,43 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } })
   )
 
+  const sortedTasks = useCallback(
+    (items: Task[]) => {
+      return [...items].sort((a, b) => {
+        if (sortMode === "due-date") {
+          const dueDiff = dueDateSortValue(a) - dueDateSortValue(b)
+          if (dueDiff !== 0) {
+            return dueDiff
+          }
+
+          const priorityDiff = prioritySortValue(b) - prioritySortValue(a)
+          if (priorityDiff !== 0) {
+            return priorityDiff
+          }
+        }
+
+        if (sortMode === "priority") {
+          const priorityDiff = prioritySortValue(b) - prioritySortValue(a)
+          if (priorityDiff !== 0) {
+            return priorityDiff
+          }
+
+          const dueDiff = dueDateSortValue(a) - dueDateSortValue(b)
+          if (dueDiff !== 0) {
+            return dueDiff
+          }
+        }
+
+        return a.position - b.position
+      })
+    },
+    [sortMode]
+  )
+
   const tasksByStatus = useCallback(
     (status: TaskStatus) =>
-      localTasks
-        .filter((t) => t.status === status)
-        .sort((a, b) => a.position - b.position),
-    [localTasks]
+      sortedTasks(localTasks.filter((t) => t.status === status)),
+    [localTasks, sortedTasks]
   )
 
   function handleDragStart(event: DragStartEvent) {
@@ -117,9 +182,7 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
     if (!overStatus) return
 
     const newStatus = overStatus
-    const columnTasks = snapshot
-      .filter((t) => t.status === newStatus)
-      .sort((a, b) => a.position - b.position)
+    const columnTasks = sortedTasks(snapshot.filter((t) => t.status === newStatus))
 
     // Determine new position
     let newIndex = columnTasks.length
@@ -188,10 +251,29 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
         <div>
           <h2 className="text-xl font-bold text-foreground">Task Board</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {tasks.length} total task{tasks.length !== 1 ? "s" : ""}
+            {localTasks.length} total task{localTasks.length !== 1 ? "s" : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="w-48">
+            <Select
+              value={sortMode}
+              onValueChange={(value) => {
+                if (value === "position" || value === "due-date" || value === "priority") {
+                  setSortMode(value)
+                }
+              }}
+            >
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder="Sort tasks" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="position">Sort: Manual</SelectItem>
+                <SelectItem value="due-date">Sort: Earliest Due Date</SelectItem>
+                <SelectItem value="priority">Sort: Priority</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <Button variant="ghost" size="icon" onClick={onRefresh} className="text-muted-foreground">
             <RefreshCw className="h-4 w-4" />
           </Button>
@@ -214,7 +296,7 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {STATUSES.map((status) => (
             <KanbanColumn
               key={status}

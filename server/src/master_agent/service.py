@@ -71,15 +71,42 @@ def _require_master_dependencies() -> Dict[str, object]:
             "Master agent dependencies are missing. Install langchain, langgraph, langchain-core, and langchain-groq."
         ) from exc
 
+def _resolve_groq_model(model_override: Optional[str]) -> str:
+    default_model = os.getenv("GROQ_MASTER_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")).strip()
+    if not model_override:
+        return default_model
 
-def _get_llm(chat_groq_cls):
+    selected = model_override.strip().lower()
+    aliases = {
+        "70b": "llama-3.3-70b-versatile",
+        "8b": "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile": "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant": "llama-3.1-8b-instant",
+    }
+
+    return aliases.get(selected, default_model)
+
+
+def _get_llm(chat_groq_cls, model_override: Optional[str] = None):
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is not configured")
 
-    model = os.getenv("GROQ_MASTER_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
+    model = _resolve_groq_model(model_override)
     temperature = float(os.getenv("GROQ_MASTER_TEMPERATURE", "0.1"))
     return chat_groq_cls(model=model, temperature=temperature, api_key=api_key)
+
+
+def _is_groq_configured() -> bool:
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        return False
+
+    lower = api_key.lower()
+    if lower in {"your_groq_api_key_here", "gsk_your_groq_api_key_here", "your_groq_key"}:
+        return False
+
+    return True
 
 
 def _extract_json_object(text: str) -> Dict:
@@ -193,6 +220,7 @@ def _task_toolset(tool_decorator, user_id: str):
         status: str = "planned",
         due_datetime: str = "",
     ) -> str:
+        """Create a task with optional description, status, and due datetime."""
         try:
             normalized_status = status.strip().lower() or "planned"
             if normalized_status not in {"planned", "inprogress", "completed", "pending"}:
@@ -217,6 +245,7 @@ def _task_toolset(tool_decorator, user_id: str):
         description: str = "",
         status: str = "",
     ) -> str:
+        """Update an existing task identified by title."""
         try:
             normalized_status = status.strip().lower() or None
             if normalized_status and normalized_status not in {"planned", "inprogress", "completed", "pending"}:
@@ -241,6 +270,7 @@ def _task_toolset(tool_decorator, user_id: str):
 
     @tool_decorator
     def delete_task(title: str) -> str:
+        """Delete a task by title."""
         try:
             deleted = task_service.delete_task_by_title(user_id=user_id, title=title.strip())
             if deleted == 0:
@@ -251,6 +281,7 @@ def _task_toolset(tool_decorator, user_id: str):
 
     @tool_decorator
     def list_tasks(limit: int = 10) -> str:
+        """List recent tasks up to the given limit."""
         try:
             safe_limit = max(1, min(limit, 50))
             tasks = task_service.list_recent_tasks(user_id=user_id, limit=safe_limit)
@@ -270,7 +301,7 @@ def _task_toolset(tool_decorator, user_id: str):
 
 
 @lru_cache(maxsize=64)
-def _build_task_subagent_graph(user_id: str):
+def _build_task_subagent_graph(user_id: str, model_override: Optional[str] = None):
     deps = _require_master_dependencies()
 
     AIMessage = deps["AIMessage"]
@@ -299,7 +330,7 @@ def _build_task_subagent_graph(user_id: str):
         return None
 
     def call_model(state: TaskAgentState) -> TaskAgentState:
-        llm = _get_llm(deps["ChatGroq"])
+        llm = _get_llm(deps["ChatGroq"], model_override=model_override)
         llm_with_tools = llm.bind_tools(tools)
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -396,13 +427,14 @@ def _run_task_subagent(
     history: List[dict],
     user_id: str,
     semantic_context: str,
+    model: Optional[str] = None,
 ) -> Tuple[str, bool]:
     try:
         deps = _require_master_dependencies()
         HumanMessage = deps["HumanMessage"]
         AIMessage = deps["AIMessage"]
 
-        graph, AIMessageType = _build_task_subagent_graph(user_id)
+        graph, AIMessageType = _build_task_subagent_graph(user_id, model)
 
         history_messages = _history_to_messages(history, HumanMessage, AIMessage)
         initial_state: TaskAgentState = {
@@ -454,14 +486,14 @@ def _answer_general(query: str, semantic_context: str, llm) -> str:
     return str(content).strip() or "How can I help with your calendar or tasks?"
 
 
-@lru_cache(maxsize=1)
-def _build_master_graph():
+@lru_cache(maxsize=8)
+def _build_master_graph(model_override: Optional[str] = None):
     deps = _require_master_dependencies()
     StateGraph = deps["StateGraph"]
     END = deps["END"]
 
     def route_intent(state: MasterAgentState) -> Dict:
-        llm = _get_llm(deps["ChatGroq"])
+        llm = _get_llm(deps["ChatGroq"], model_override=model_override)
         route = _route_query(state["query"], state.get("semantic_context", ""), llm)
         return {"route": route}
 
@@ -470,6 +502,7 @@ def _build_master_graph():
             query=state["query"],
             history=state.get("history", []),
             user_id=state["user_id"],
+            model=model_override,
         )
 
         response_text = str(delegated.get("response", "Done."))
@@ -493,6 +526,7 @@ def _build_master_graph():
             history=state.get("history", []),
             user_id=state["user_id"],
             semantic_context=state.get("semantic_context", ""),
+            model=model_override,
         )
 
         return {
@@ -504,7 +538,7 @@ def _build_master_graph():
         }
 
     def answer_general(state: MasterAgentState) -> Dict:
-        llm = _get_llm(deps["ChatGroq"])
+        llm = _get_llm(deps["ChatGroq"], model_override=model_override)
         response_text = _answer_general(state["query"], state.get("semantic_context", ""), llm)
 
         if state["user_id"] and response_text.strip():
@@ -549,7 +583,12 @@ def _build_master_graph():
     return workflow.compile()
 
 
-def run_master_agent_chat(query: str, history: List[dict], user_id: Optional[str]) -> Dict:
+def run_master_agent_chat(
+    query: str,
+    history: List[dict],
+    user_id: Optional[str],
+    model: Optional[str] = None,
+) -> Dict:
     if not user_id:
         return {
             "response": "Please sign in again. Your user session is missing.",
@@ -559,9 +598,21 @@ def run_master_agent_chat(query: str, history: List[dict], user_id: Optional[str
             "refreshTasks": False,
         }
 
+    if not _is_groq_configured():
+        return {
+            "response": (
+                "Master agent is unavailable right now because GROQ_API_KEY is not configured on the backend. "
+                "Add GROQ_API_KEY in server/.env and restart the backend server."
+            ),
+            "success": True,
+            "delegated_to": None,
+            "refreshCalendar": False,
+            "refreshTasks": False,
+        }
+
     try:
         semantic_context = memory_service.build_context_for_query(user_id, query)
-        graph = _build_master_graph()
+        graph = _build_master_graph(model)
 
         initial_state: MasterAgentState = {
             "query": query,

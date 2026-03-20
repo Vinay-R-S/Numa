@@ -10,6 +10,11 @@ import { TaskCard } from "./TaskCard"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 
+const MAX_VISIBLE_TASK_CARDS = 4
+const ESTIMATED_TASK_CARD_HEIGHT = 112
+const TASK_CARD_GAP = 10
+const TASK_LIST_VERTICAL_PADDING = 24
+
 interface KanbanColumnProps {
   status: TaskStatus
   tasks: Task[]
@@ -29,11 +34,16 @@ export function KanbanColumn({
 }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: status })
   const config = COLUMN_CONFIG[status]
+  const visibleCards = MAX_VISIBLE_TASK_CARDS
+  const scrollAreaHeight =
+    visibleCards * ESTIMATED_TASK_CARD_HEIGHT +
+    (visibleCards - 1) * TASK_CARD_GAP +
+    TASK_LIST_VERTICAL_PADDING
 
   return (
     <div
       className={cn(
-        "flex flex-col rounded-2xl border transition-all duration-200",
+        "flex self-start flex-col rounded-2xl border transition-all duration-200",
         config.bgColor,
         config.borderColor,
         isOver && "ring-2 ring-offset-2 ring-offset-background",
@@ -42,7 +52,6 @@ export function KanbanColumn({
         isOver && status === "completed" && "ring-emerald-500/50",
         isOver && status === "pending" && "ring-rose-500/50",
       )}
-      style={{ minHeight: 400 }}
     >
       {/* Column Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
@@ -69,7 +78,7 @@ export function KanbanColumn({
       </div>
 
       {/* Tasks */}
-      <ScrollArea className="flex-1 p-3">
+      <ScrollArea className="p-3" style={{ height: scrollAreaHeight }}>
         <SortableContext
           id={status}
           items={tasks.map((t) => t.id)}

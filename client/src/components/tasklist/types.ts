@@ -12,6 +12,7 @@ export interface Task {
   reminder_at?: string | null
   source_name?: string | null
   source_logo?: string | null
+  external_ref?: string | null
   position: number
   completed_at?: string | null
   created_at: string

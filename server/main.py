@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+
+SERVER_ROOT = Path(__file__).resolve().parent
+load_dotenv(SERVER_ROOT / ".env")
 
 from src.auth.router import router as auth_router
 from src.auth.dependencies import get_current_user
@@ -10,8 +14,6 @@ from src.calendar.router import router as calendar_router
 from src.calendar_agent.router import router as calendar_agent_router
 from src.master_agent.router import router as master_agent_router
 from src.db import init_db
-
-load_dotenv()
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 

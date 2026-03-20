@@ -50,6 +50,7 @@ watch_state: Dict[str, Optional[str]] = {
     "last_message_number": None,
 }
 watch_version = 0
+CALENDAR_EVENTS_MAX_DAYS = 7
 
 
 def _touch_watch_version() -> None:
@@ -164,10 +165,11 @@ def oauth_callback(
 
 
 @router.get("/events", response_model=EventsResponse)
-def get_events(days: int = 60, current_user: dict = Depends(get_current_user)):
+def get_events(days: int = CALENDAR_EVENTS_MAX_DAYS, current_user: dict = Depends(get_current_user)):
     user_id = current_user.get("sub") if isinstance(current_user, dict) else None
     try:
-        events = get_events_for_frontend(days, user_id=user_id)
+        effective_days = max(1, min(days, CALENDAR_EVENTS_MAX_DAYS))
+        events = get_events_for_frontend(effective_days, user_id=user_id)
         return EventsResponse(events=events)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

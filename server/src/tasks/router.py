@@ -26,7 +26,7 @@ def list_tasks(current_user: dict = Depends(get_current_user)):
             """
             SELECT id, user_id, title, description, status, priority,
                    due_date, reminder_at, source_name, source_logo,
-                   position, completed_at, created_at, updated_at
+                   external_ref, position, completed_at, created_at, updated_at
             FROM public.tasks
             WHERE user_id = %s
               AND (
@@ -56,7 +56,7 @@ def list_task_history(current_user: dict = Depends(get_current_user)):
             """
             SELECT id, user_id, title, description, status, priority,
                    due_date, reminder_at, source_name, source_logo,
-                   position, completed_at, created_at, updated_at
+                   external_ref, position, completed_at, created_at, updated_at
             FROM public.tasks
             WHERE user_id = %s
               AND status = 'completed'
@@ -91,7 +91,7 @@ def create_task(body: TaskCreate, current_user: dict = Depends(get_current_user)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id, user_id, title, description, status, priority,
                       due_date, reminder_at, source_name, source_logo,
-                      position, completed_at, created_at, updated_at
+                      external_ref, position, completed_at, created_at, updated_at
             """,
             (
                 user_id,
@@ -138,6 +138,65 @@ def update_task(
             else:
                 fields["completed_at"] = None
 
+        # First, fetch the task to check for external_ref (calendar sync)
+        cur.execute(
+            """
+            SELECT external_ref, title, description, due_date
+            FROM public.tasks
+            WHERE id = %s AND user_id = %s
+            """,
+            (task_id, user_id),
+        )
+        existing_task = cur.fetchone()
+        if not existing_task:
+            raise HTTPException(status_code=404, detail="Task not found.")
+
+        external_ref = existing_task[0]
+
+        # If this task is linked to a calendar event, sync the changes back
+        if external_ref and external_ref.startswith("gcal:"):
+            try:
+                from ..calendar.service import update_event_from_payload
+                from ..calendar.schemas import CalendarEventUpsert
+
+                # Parse external_ref to get calendar_id and event_id
+                # Format: gcal:calendar_id:event_id or gcal:ical:ical_uid
+                parts = external_ref.split(":", 2)
+                if len(parts) >= 3 and parts[1] != "ical":
+                    calendar_id = parts[1]
+                    event_id = parts[2]
+                    composite_event_id = f"{calendar_id}:{event_id}"
+
+                    # Build calendar event payload from task fields
+                    title = fields.get("title", existing_task[1])
+                    description = fields.get("description", existing_task[2] or "")
+                    due_date = fields.get("due_date", existing_task[3])
+
+                    if due_date:
+                        from datetime import datetime as dt
+                        if isinstance(due_date, dt):
+                            date_str = due_date.strftime("%Y-%m-%d")
+                            time_str = due_date.strftime("%H:%M")
+                        else:
+                            # Parse string datetime
+                            due_dt = dt.fromisoformat(str(due_date).replace('Z', '+00:00'))
+                            date_str = due_dt.strftime("%Y-%m-%d")
+                            time_str = due_dt.strftime("%H:%M")
+
+                        # Update the calendar event
+                        calendar_payload = CalendarEventUpsert(
+                            title=title,
+                            date=date_str,
+                            startTime=time_str,
+                            endTime=time_str,
+                            description=description or "",
+                        )
+                        update_event_from_payload(composite_event_id, calendar_payload, user_id=user_id)
+            except Exception as e:
+                # Log but don't fail the task update if calendar sync fails
+                import logging
+                logging.warning(f"Failed to sync task update to calendar: {e}")
+
         set_clause = ", ".join(f"{k} = %s" for k in fields)
         values = list(fields.values())
         values.extend([task_id, user_id])
@@ -149,7 +208,7 @@ def update_task(
             WHERE id = %s AND user_id = %s
             RETURNING id, user_id, title, description, status, priority,
                       due_date, reminder_at, source_name, source_logo,
-                      position, completed_at, created_at, updated_at
+                      external_ref, position, completed_at, created_at, updated_at
             """,
             values,
         )
@@ -187,7 +246,7 @@ def patch_task_status(
             WHERE id = %s AND user_id = %s
             RETURNING id, user_id, title, description, status, priority,
                       due_date, reminder_at, source_name, source_logo,
-                      position, completed_at, created_at, updated_at
+                      external_ref, position, completed_at, created_at, updated_at
             """,
             (body.status, completed_at, body.position, task_id, user_id),
         )
