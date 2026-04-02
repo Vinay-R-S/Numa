@@ -9,6 +9,21 @@ const nextConfig: NextConfig = {
     "192.168.1.1",     // Common router gateway
     "localhost",
   ],
+  // Allow external images for yoga poses
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "cdn.yogajournal.com",
+        pathname: "/wp-content/uploads/**",
+      },
+      {
+        protocol: "https",
+        hostname: "upload.wikimedia.org",
+        pathname: "/wikipedia/commons/**",
+      },
+    ],
+  },
 };
 
 export default nextConfig;
