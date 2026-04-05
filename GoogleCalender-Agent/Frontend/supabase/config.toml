@@ -1,7 +1,0 @@
-project_id = "vxzsvmnfqhwgxmauahwv"
-
-[functions.get-events]
-verify_jwt = false
-
-[functions.agent]
-verify_jwt = false
