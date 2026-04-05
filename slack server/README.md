@@ -135,20 +135,7 @@ After saving Slack settings, reinstall the app when prompted.
 
 ---
 
-## Docker (Production)
 
-```bash
-cp backend/.env.example backend/.env   # edit
-cp frontend/.env.example frontend/.env # edit
-
-docker compose up --build -d
-```
-
-- Frontend: `http://localhost:5173`
-- API: `http://localhost:8000`
-- API docs: `http://localhost:8000/docs`
-
----
 
 ## Features
 
