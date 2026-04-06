@@ -286,3 +286,8 @@ Behavior
 Executes full agent pipeline
 Returns Insight Agent output
 Target latency: < 1.5 seconds
+
+
+
+IF ANY DOUBT REFER:
+https://www.notion.so/Agentic-Part-23cafcde75348003a9a3ec422047ea8f?source=copy_link
