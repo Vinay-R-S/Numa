@@ -2,11 +2,12 @@
  * Dashboard — today's full overview.
  */
 import { useEffect } from 'react'
-import { CheckSquare, Clock, Smile, Zap, MessageSquare, TrendingUp, Plus } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { CheckSquare, Clock, Zap, MessageSquare, TrendingUp } from 'lucide-react'
 import { format } from 'date-fns'
 import { useDashboardStore } from '../store/dashboardStore'
 import { useTaskStore }      from '../store/taskStore'
-import { StatCard, MoodDisplay, StatusBadge, PriorityBadge, Spinner, EmptyState, SectionHeader } from '../components/ui'
+import { StatCard, PriorityBadge, Spinner, EmptyState, SectionHeader } from '../components/ui'
 import TopBar from '../components/TopBar'
 
 // ── Productivity score ring ────────────────────────────────────────────────────
@@ -97,10 +98,7 @@ export default function DashboardPage() {
           <StatCard icon={CheckSquare}  label="Tasks today"     value={todayTasks.length}         color="text-numa-400" />
           <StatCard icon={TrendingUp}   label="Completed"       value={data?.tasks_completed_today ?? 0} color="text-emerald-400" />
           <StatCard icon={MessageSquare} label="Messages"       value={data?.recent_messages?.length ?? 0} color="text-blue-400" />
-          <StatCard icon={Smile}        label="Latest mood"
-            value={data?.latest_mood ? <MoodDisplay mood={data.latest_mood.mood} /> : '—'}
-            color="text-yellow-400"
-          />
+          <StatCard icon={Zap}          label="Unread nudges"   value={data?.unread_nudges ?? 0} color="text-yellow-400" />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -110,7 +108,7 @@ export default function DashboardPage() {
               title="Tasks"
               subtitle={format(new Date(), 'EEEE, MMMM d')}
               action={
-                <a href="/tasks" className="btn-ghost text-xs">View all →</a>
+                <Link to="/tasks" className="btn-ghost text-xs">View all →</Link>
               }
             />
 
@@ -146,7 +144,7 @@ export default function DashboardPage() {
               <SectionHeader
                 title="Today's Plan"
                 subtitle={plan ? 'AI generated' : 'No plan yet'}
-                action={<a href="/schedule" className="btn-ghost text-xs">Edit →</a>}
+                action={<Link to="/schedule" className="btn-ghost text-xs">Edit →</Link>}
               />
               {blocks.length === 0 ? (
                 <EmptyState icon={Clock} title="No plan" description="Use /numa plan today in Slack" />
@@ -163,7 +161,7 @@ export default function DashboardPage() {
         <div className="card">
           <SectionHeader
             title="Recent Slack Messages"
-            action={<a href="/messages" className="btn-ghost text-xs">View all →</a>}
+            action={<Link to="/messages" className="btn-ghost text-xs">View all →</Link>}
           />
           {(!data?.recent_messages || data.recent_messages.length === 0) ? (
             <EmptyState icon={MessageSquare} title="No messages" description="Messages from Slack will appear here" />

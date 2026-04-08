@@ -80,7 +80,7 @@ Copy these three values — you'll need them in step 6:
 
 ## 4. Run the Database Schema
 
-This creates all the tables NUMA needs (users, tasks, messages, mood, reflections, etc).
+This creates all the tables NUMA needs (users, user_tokens, channels, messages, tasks, extracted_intelligence, analytics, etc).
 
 1. In your Supabase dashboard, click **SQL Editor** in the left sidebar.
 2. Click **+ New query**.

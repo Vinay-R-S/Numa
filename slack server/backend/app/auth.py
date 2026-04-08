@@ -18,15 +18,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 
 from app.config import settings
-from app.database import get_supabase
+from app.database import get_supabase, upsert_user_token
 from app.models import UserOut
 
 logger = logging.getLogger(__name__)
 
 _bearer = HTTPBearer(auto_error=True)
-
-MOOD_SCORES = {"great": 5, "good": 4, "okay": 3, "low": 2, "bad": 1}
-
 
 # ── Token helpers ─────────────────────────────────────────────────────────────
 
@@ -94,6 +91,14 @@ async def upsert_user_from_slack(slack_data: dict) -> UserOut:
     slack_user_id = authed_user.get("id")
     slack_team_id = team.get("id")
     access_token = authed_user.get("access_token") or slack_data.get("access_token")
+    token_type = slack_data.get("token_type")
+    expires_in = authed_user.get("expires_in") or slack_data.get("expires_in")
+    expires_at = None
+    if expires_in:
+        try:
+            expires_at = (datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))).isoformat()
+        except Exception:
+            expires_at = None
 
     # Fetch Slack user profile for display info
     profile = {}
@@ -117,16 +122,27 @@ async def upsert_user_from_slack(slack_data: dict) -> UserOut:
         "real_name": profile.get("real_name"),
         "email": profile.get("email"),
         "avatar_url": profile.get("image_72"),
-        "access_token": access_token,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     db = get_supabase()
     # Upsert on slack_user_id
-    result = (
+    db.table("users").upsert(upsert_payload, on_conflict="slack_user_id").execute()
+    user_resp = (
         db.table("users")
-        .upsert(upsert_payload, on_conflict="slack_user_id")
+        .select("*")
+        .eq("slack_user_id", slack_user_id)
+        .limit(1)
         .execute()
     )
-    user_row = result.data[0]
+    if not user_resp.data:
+        raise HTTPException(status_code=500, detail="Failed to upsert user")
+    user_row = user_resp.data[0]
+    if access_token:
+        upsert_user_token(
+            user_row["id"],
+            access_token,
+            token_type=token_type or "bearer",
+            expires_at=expires_at,
+        )
     return UserOut(**user_row)

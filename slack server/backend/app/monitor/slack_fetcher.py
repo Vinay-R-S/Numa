@@ -8,7 +8,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from app.config import settings
-from app.database import get_supabase
+from app.database import get_supabase, get_or_create_channel
 from app.agent import run_agent_for_message
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,8 @@ def _persist_message(channel_id: str, msg: Dict[str, Any]) -> None:
 
     slack_team_id = _get_team_id()
     user_id = _resolve_numa_user(slack_user_id, slack_team_id)
+    channel_name = _get_channel_name(channel_id)
+    channel_uuid = get_or_create_channel(channel_id, channel_name, slack_team_id)
 
     get_supabase().table("messages").upsert(
         {
@@ -82,7 +84,8 @@ def _persist_message(channel_id: str, msg: Dict[str, Any]) -> None:
             "slack_user_id": slack_user_id,
             "slack_team_id": slack_team_id,
             "channel_id": channel_id,
-            "channel_name": _get_channel_name(channel_id),
+            "channel_uuid": channel_uuid,
+            "channel_name": channel_name,
             "text": msg.get("text", ""),
             "ts": ts,
             "thread_ts": msg.get("thread_ts"),
@@ -98,16 +101,16 @@ def _persist_message(channel_id: str, msg: Dict[str, Any]) -> None:
 def _get_last_checked(channel_id: str) -> float:
     """Return the timestamp of the last fetched message for a channel (0.0 if none)."""
     try:
-        row = (
+        resp = (
             get_supabase()
             .table("monitor_state")
             .select("last_ts")
             .eq("channel_id", channel_id)
-            .maybe_single()
+            .limit(1)
             .execute()
         )
-        if row.data:
-            return float(row.data["last_ts"])
+        if resp and resp.data:
+            return float(resp.data[0]["last_ts"])
     except Exception:
         pass
     return 0.0
@@ -121,15 +124,18 @@ def _update_last_checked(channel_id: str, ts: float) -> None:
 
 
 def _is_processed(ts: str) -> bool:
-    row = (
-        get_supabase()
-        .table("processed_messages")
-        .select("ts")
-        .eq("ts", ts)
-        .maybe_single()
-        .execute()
-    )
-    return row.data is not None
+    try:
+        resp = (
+            get_supabase()
+            .table("processed_messages")
+            .select("ts")
+            .eq("ts", ts)
+            .limit(1)
+            .execute()
+        )
+        return bool(resp and resp.data)
+    except Exception:
+        return False
 
 
 def _mark_processed(ts: str) -> None:
@@ -140,6 +146,15 @@ def _mark_processed(ts: str) -> None:
 
 
 # --- Public API ---
+
+def ensure_channel_registered(channel_id: str) -> None:
+    """Ensure a monitored channel exists in channels table even if there are no new messages."""
+    if not channel_id:
+        return
+    slack_team_id = _get_team_id()
+    channel_name = _get_channel_name(channel_id)
+    get_or_create_channel(channel_id, channel_name, slack_team_id)
+
 
 def fetch_new_messages(channel_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     """

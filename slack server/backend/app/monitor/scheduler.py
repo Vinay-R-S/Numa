@@ -7,7 +7,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import settings
-from app.monitor.slack_fetcher import fetch_new_messages
+from app.monitor.slack_fetcher import ensure_channel_registered, fetch_new_messages
 from app.monitor.analyzer import analyze_messages
 from app.monitor.notifier.notification_service import dispatch_notifications
 
@@ -35,6 +35,7 @@ def run_monitoring_cycle() -> None:
     all_messages: list = []
     for channel_id in channels:
         try:
+            ensure_channel_registered(channel_id)
             msgs = fetch_new_messages(channel_id)
             all_messages.extend(msgs)
         except Exception as exc:

@@ -40,7 +40,7 @@ def _format_text(summary: Dict[str, List[Dict[str, Any]]]) -> str:
 
 
 def _store_nudge(summary: Dict[str, List[Dict[str, Any]]]) -> None:
-    """Persist an aggregate nudge to Supabase so the dashboard can surface it."""
+    """Persist aggregate nudges for all users so dashboards can surface them."""
     total = sum(len(v) for v in summary.values())
     if total == 0:
         return
@@ -56,14 +56,21 @@ def _store_nudge(summary: Dict[str, List[Dict[str, Any]]]) -> None:
     message = "Activity: " + ", ".join(parts) if parts else f"{total} new Slack message(s)"
 
     try:
-        # Insert a global nudge (user_id NULL = system-wide)
-        get_supabase().table("nudges").insert({
-            "user_id":  None,
-            "type":     "slack_summary",
-            "message":  message,
-            "metadata": {"counts": {k: len(v) for k, v in summary.items()}},
-            "is_read":  False,
-        }).execute()
+        db = get_supabase()
+        users = db.table("users").select("id").execute().data or []
+        rows = [
+            {
+                "user_id": u["id"],
+                "type": "insight",
+                "title": "Slack Activity Summary",
+                "body": message,
+                "read": False,
+                "sent_via": "app",
+            }
+            for u in users
+        ]
+        if rows:
+            db.table("nudges").insert(rows).execute()
     except Exception as exc:
         logger.warning("Could not store nudge in Supabase: %s", exc)
 

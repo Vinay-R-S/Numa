@@ -10,7 +10,7 @@ import { format, parseISO } from 'date-fns'
 import api from '../lib/api'
 import { Spinner, StatCard } from '../components/ui'
 import TopBar from '../components/TopBar'
-import { TrendingUp, CheckSquare, MessageSquare, Zap, Clock } from 'lucide-react'
+import { TrendingUp, CheckSquare, MessageSquare, Zap } from 'lucide-react'
 
 const CUSTOM_TOOLTIP = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null
@@ -48,7 +48,6 @@ export default function AnalyticsPage() {
     Tasks:       r.tasks_completed,
     Messages:    r.messages_sent,
     Commands:    r.commands_used,
-    Focus:       Math.round((r.focus_minutes || 0) / 60 * 10) / 10,
     Score:       r.productivity_score,
   }))
 
@@ -71,12 +70,11 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Totals */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard icon={CheckSquare}   label="Tasks done"    value={totals.tasks_completed} color="text-emerald-400" />
           <StatCard icon={TrendingUp}    label="Tasks created" value={totals.tasks_created}   color="text-numa-400" />
           <StatCard icon={MessageSquare} label="Messages"      value={totals.messages_sent}   color="text-blue-400" />
           <StatCard icon={Zap}           label="Commands used" value={totals.commands_used}   color="text-purple-400" />
-          <StatCard icon={Clock}         label="Focus hours"   value={Math.round((totals.focus_minutes || 0) / 60)} color="text-yellow-400" />
         </div>
 
         {loading ? (

@@ -96,8 +96,6 @@ class SlackActionRouter:
             "task_add": lambda: self._task_add(params, user_id),
             "task_list": lambda: self._task_list(user_id),
             "plan_today": lambda: self._plan_today(user_id),
-            "mood_log": lambda: self._mood_log(params, user_id),
-            "reflect": lambda: {"ok": True, "message": "Open your NUMA dashboard to log today's reflection."},
             "score": lambda: self._score(user_id),
             "schedule_view": lambda: self._schedule_view(user_id),
             "unknown": lambda: {"ok": False, "error": "I didn't understand that.", "reflection": intent_data.reflection},
@@ -290,29 +288,16 @@ class SlackActionRouter:
             return {"ok": True, "message": f"Today's plan:\n{lines}" if lines else "Plan exists but no blocks yet."}
         return {"ok": True, "message": "No plan yet. Visit your NUMA dashboard to generate one."}
 
-    def _mood_log(self, params, user_id: Optional[str]):
-        if not user_id:
-            return {"ok": False, "error": "Not authenticated."}
-        mood = params.mood
-        if not mood or mood not in ("great", "good", "okay", "low", "bad"):
-            return {"ok": False, "error": "Mood must be one of: great, good, okay, low, bad"}
-        db = get_supabase()
-        row = {"user_id": user_id, "mood": mood}
-        if params.energy:
-            row["energy"] = params.energy
-        db.table("mood_logs").insert(row).execute()
-        return {"ok": True, "message": f"Mood logged: *{mood}*. Thank you for checking in!"}
-
     def _score(self, user_id: Optional[str]):
         if not user_id:
             return {"ok": False, "error": "Not authenticated."}
         today = date.today().isoformat()
         db = get_supabase()
-        resp = db.table("analytics").select("productivity_score,tasks_completed,focus_minutes").eq("user_id", user_id).eq("period_date", today).limit(1).execute()
+        resp = db.table("analytics").select("productivity_score,tasks_completed").eq("user_id", user_id).eq("period_date", today).limit(1).execute()
         if resp.data:
             d = resp.data[0]
-            return {"ok": True, "message": f"Today's score: *{d.get('productivity_score', '—')}%*\nTasks completed: {d.get('tasks_completed', 0)}\nFocus time: {d.get('focus_minutes', 0)} min"}
-        return {"ok": True, "message": "No score yet for today. Complete tasks and log your mood to start building your score."}
+            return {"ok": True, "message": f"Today's score: *{d.get('productivity_score', '—')}%*\nTasks completed: {d.get('tasks_completed', 0)}"}
+        return {"ok": True, "message": "No score yet for today. Complete tasks to start building your score."}
 
     def _schedule_view(self, user_id: Optional[str]):
         return self._plan_today(user_id)

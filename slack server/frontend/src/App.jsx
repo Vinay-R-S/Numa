@@ -17,20 +17,20 @@ import MessagesPage     from './pages/MessagesPage'
 import TasksPage        from './pages/TasksPage'
 import SchedulePage     from './pages/SchedulePage'
 import AnalyticsPage    from './pages/AnalyticsPage'
-import MoodPage         from './pages/MoodPage'
-import ReflectPage      from './pages/ReflectPage'
 import SettingsPage     from './pages/SettingsPage'
 import CommandPage     from './pages/CommandPage'
 
 /** Protected layout — wraps all authenticated pages. */
 function AppLayout() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const token = useAuthStore((s) => s.token)
+  const hasSession = isAuthenticated || !!token || !!localStorage.getItem('numa_token')
 
   // Realtime subscriptions are started here so they are always active
   // while the user is logged in, regardless of which page they visit.
   useRealtimeSync()
 
-  if (!isAuthenticated) return <Navigate to="/login" replace />
+  if (!hasSession) return <Navigate to="/login" replace />
 
   return (
     <div className="flex min-h-screen bg-gray-950 text-gray-100">
@@ -45,7 +45,9 @@ function AppLayout() {
 /** Public-only guard — redirect to /dashboard if already logged in. */
 function PublicRoute({ children }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
-  return isAuthenticated ? <Navigate to="/dashboard" replace /> : children
+  const token = useAuthStore((s) => s.token)
+  const hasSession = isAuthenticated || !!token || !!localStorage.getItem('numa_token')
+  return hasSession ? <Navigate to="/dashboard" replace /> : children
 }
 
 export default function App() {
@@ -68,8 +70,6 @@ export default function App() {
           <Route path="/tasks"      element={<TasksPage />} />
           <Route path="/schedule"   element={<SchedulePage />} />
           <Route path="/analytics"  element={<AnalyticsPage />} />
-          <Route path="/mood"       element={<MoodPage />} />
-          <Route path="/reflect"    element={<ReflectPage />} />
           <Route path="/commands"   element={<CommandPage />} />
           <Route path="/settings"   element={<SettingsPage />} />
         </Route>

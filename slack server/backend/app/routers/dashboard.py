@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.auth import get_current_user
 from app.database import get_supabase
-from app.models import UserOut, DashboardToday, TaskOut, MoodOut, MessageOut, PlanOut
+from app.models import UserOut, DashboardToday, TaskOut, MessageOut, PlanOut
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -37,17 +37,6 @@ async def get_today_dashboard(current_user: UserOut = Depends(get_current_user))
         .execute()
     )
     plan = PlanOut(**plan_resp.data[0]) if plan_resp.data else None
-
-    # Latest mood
-    mood_resp = (
-        db.table("mood_logs")
-        .select("*")
-        .eq("user_id", current_user.id)
-        .order("logged_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    latest_mood = MoodOut(**mood_resp.data[0]) if mood_resp.data else None
 
     # Unread nudges
     nudge_resp = (
@@ -86,7 +75,6 @@ async def get_today_dashboard(current_user: UserOut = Depends(get_current_user))
         tasks_today=tasks,
         tasks_completed_today=tasks_completed,
         plan_today=plan,
-        latest_mood=latest_mood,
         unread_nudges=unread_nudges,
         productivity_score=score,
         recent_messages=recent_messages,

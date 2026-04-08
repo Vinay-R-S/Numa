@@ -16,7 +16,7 @@ from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 
 from app.config import settings
-from app.database import get_supabase
+from app.database import get_supabase, get_or_create_channel
 from app.intent_parser import parse_intent
 from app.slack_action_router import SlackActionRouter
 from app.agent import run_agent_for_message
@@ -67,6 +67,8 @@ def _save_message(event: dict, channel_name: str | None = None):
         return
 
     user_id = _resolve_numa_user(slack_user_id, slack_team_id)
+    channel_id = event.get("channel", "")
+    channel_uuid = get_or_create_channel(channel_id, channel_name, slack_team_id) if channel_id else None
 
     db = get_supabase()
     db.table("messages").upsert(
@@ -74,7 +76,8 @@ def _save_message(event: dict, channel_name: str | None = None):
             "user_id": user_id,
             "slack_user_id": slack_user_id,
             "slack_team_id": slack_team_id,
-            "channel_id": event.get("channel", ""),
+            "channel_id": channel_id,
+            "channel_uuid": channel_uuid,
             "channel_name": channel_name,
             "text": event.get("text", ""),
             "ts": ts,
@@ -178,6 +181,7 @@ if bolt_app:
         slack_user_id = command.get("user_id", "")
         slack_team_id = command.get("team_id", "")
         channel_id = command.get("channel_id", "")
+        channel_uuid = get_or_create_channel(channel_id, None, slack_team_id) if channel_id else None
         user_id = _resolve_numa_user(slack_user_id, slack_team_id)
         _bump(user_id, "commands_used")
         db = get_supabase()
@@ -188,6 +192,7 @@ if bolt_app:
             "slack_user_id": slack_user_id,
             "slack_team_id": slack_team_id,
             "channel_id": channel_id,
+            "channel_uuid": channel_uuid,
             "text": f"/numa {text}",
             "ts": ts_now,
             "message_type": "command",

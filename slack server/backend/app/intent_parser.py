@@ -36,17 +36,14 @@ AVAILABLE INTENTS:
 - task_add             : Add a new task (extracts task_title from text)
 - task_list            : List tasks
 - plan_today           : Generate / show today's plan
-- mood_log             : Log mood (extracts mood and energy level)
-- reflect              : Start end-of-day reflection
 - score                : Show productivity score
 - schedule_view        : Show today's schedule
 - unknown              : Request is unclear or not supported
 
 EXTRACTION RULES:
 1. For task intents: extract task title into parameters.task_title
-2. For mood intents: extract mood (great/good/okay/low/bad) into parameters.mood, energy (1-10) into parameters.energy
-3. For messages: extract channel_name (without #) and text
-4. For reactions: extract reaction_name (without colons) and thread_ts
+2. For messages: extract channel_name (without #) and text
+3. For reactions: extract reaction_name (without colons) and thread_ts
 5. Return ONLY valid JSON matching the schema exactly
 
 SCHEMA:

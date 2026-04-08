@@ -20,7 +20,6 @@ class UserOut(BaseModel):
     email: Optional[str] = None
     avatar_url: Optional[str] = None
     timezone: str = "UTC"
-    access_token: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -92,45 +91,6 @@ class PlanOut(BaseModel):
     created_at: Optional[datetime] = None
 
 
-# ── Mood ──────────────────────────────────────────────────────────────────────
-
-class MoodCreate(BaseModel):
-    mood: str
-    energy: Optional[int] = Field(None, ge=1, le=10)
-    note: Optional[str] = None
-
-
-class MoodOut(BaseModel):
-    id: str
-    user_id: str
-    mood: str
-    energy: Optional[int] = None
-    note: Optional[str] = None
-    logged_at: Optional[datetime] = None
-
-
-# ── Reflections ───────────────────────────────────────────────────────────────
-
-class ReflectionCreate(BaseModel):
-    reflection_date: Optional[date] = None
-    what_went_well: Optional[str] = None
-    what_to_improve: Optional[str] = None
-    gratitude: Optional[str] = None
-    tomorrow_focus: Optional[str] = None
-
-
-class ReflectionOut(BaseModel):
-    id: str
-    user_id: str
-    reflection_date: date
-    what_went_well: Optional[str] = None
-    what_to_improve: Optional[str] = None
-    gratitude: Optional[str] = None
-    tomorrow_focus: Optional[str] = None
-    ai_summary: Optional[str] = None
-    created_at: Optional[datetime] = None
-
-
 # ── Messages ──────────────────────────────────────────────────────────────────
 
 class MessageOut(BaseModel):
@@ -139,6 +99,7 @@ class MessageOut(BaseModel):
     slack_user_id: str
     slack_team_id: str
     channel_id: str
+    channel_uuid: Optional[str] = None
     channel_name: Optional[str] = None
     text: Optional[str] = None
     ts: str
@@ -157,10 +118,7 @@ class AnalyticsOut(BaseModel):
     tasks_created: int = 0
     messages_sent: int = 0
     commands_used: int = 0
-    avg_mood: Optional[float] = None
-    avg_energy: Optional[float] = None
     productivity_score: Optional[int] = None
-    focus_minutes: int = 0
     created_at: Optional[datetime] = None
 
 
@@ -177,7 +135,6 @@ class DashboardToday(BaseModel):
     tasks_today: list[TaskOut] = Field(default_factory=list)
     tasks_completed_today: int = 0
     plan_today: Optional[PlanOut] = None
-    latest_mood: Optional[MoodOut] = None
     unread_nudges: int = 0
     productivity_score: Optional[int] = None
     recent_messages: list[MessageOut] = Field(default_factory=list)

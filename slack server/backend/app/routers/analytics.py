@@ -12,10 +12,9 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 def _calc_score(row: AnalyticsOut) -> int:
     """Derive a 0-100 productivity score from available counters.
     Called when productivity_score is NULL in the DB."""
-    task_pts  = min(row.tasks_completed * 20, 60)        # up to 60 pts (3+ tasks)
-    cmd_pts   = min(row.commands_used   *  5, 20)        # up to 20 pts (4+ commands)
-    focus_pts = min((row.focus_minutes or 0) // 5, 20)  # up to 20 pts (100+ focus mins)
-    return min(100, task_pts + cmd_pts + focus_pts)
+    task_pts = min(row.tasks_completed * 20, 80)  # up to 80 pts (4+ tasks)
+    cmd_pts = min(row.commands_used * 5, 20)      # up to 20 pts (4+ commands)
+    return min(100, task_pts + cmd_pts)
 
 
 def _fetch_range(user_id: str, start: date, end: date) -> list[AnalyticsOut]:
@@ -55,7 +54,6 @@ async def analytics_week(current_user: UserOut = Depends(get_current_user)):
         "tasks_created": sum(d.tasks_created for d in data),
         "messages_sent": sum(d.messages_sent for d in data),
         "commands_used": sum(d.commands_used for d in data),
-        "focus_minutes": sum(d.focus_minutes for d in data),
     }
     return AnalyticsPeriodOut(period="week", data=data, totals=totals)
 
@@ -70,7 +68,6 @@ async def analytics_month(current_user: UserOut = Depends(get_current_user)):
         "tasks_created": sum(d.tasks_created for d in data),
         "messages_sent": sum(d.messages_sent for d in data),
         "commands_used": sum(d.commands_used for d in data),
-        "focus_minutes": sum(d.focus_minutes for d in data),
     }
     return AnalyticsPeriodOut(period="month", data=data, totals=totals)
 
@@ -81,7 +78,7 @@ async def score_today(current_user: UserOut = Depends(get_current_user)):
     db = get_supabase()
     resp = (
         db.table("analytics")
-        .select("productivity_score,tasks_completed,focus_minutes")
+        .select("productivity_score,tasks_completed")
         .eq("user_id", current_user.id)
         .eq("period_date", today)
         .limit(1)
@@ -89,4 +86,4 @@ async def score_today(current_user: UserOut = Depends(get_current_user)):
     )
     if resp.data:
         return resp.data[0]
-    return {"productivity_score": None, "tasks_completed": 0, "focus_minutes": 0}
+    return {"productivity_score": None, "tasks_completed": 0}

@@ -1,6 +1,6 @@
 # NUMA — Personal Slack Productivity Dashboard
 
-> A full-stack personal productivity app that turns your Slack workspace into a smart daily planner — with an AI chat interface, real-time updates, mood & reflection logs, and automated channel monitoring.
+> A full-stack personal productivity app that turns your Slack workspace into a smart daily planner — with an AI chat interface, real-time updates, and automated channel monitoring.
 
 ---
 
@@ -135,19 +135,30 @@ After saving Slack settings, reinstall the app when prompted.
 
 ---
 
+## Docker (Production)
 
+```bash
+cp backend/.env.example backend/.env   # edit
+cp frontend/.env.example frontend/.env # edit
+
+docker compose up --build -d
+```
+
+- Frontend: `http://localhost:5173`
+- API: `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
+
+---
 
 ## Features
 
 | Feature | Path |
 |---------|------|
-| **Dashboard** | `/dashboard` — today's score, tasks, plan, mood, Slack messages |
+| **Dashboard** | `/dashboard` — today's score, tasks, plan, Slack messages |
 | **AI Chat** | `/api/chat` — natural language → Slack actions via Groq + LangChain |
 | **Tasks** | `/tasks` — full CRUD with priority/status, real-time sync |
 | **Schedule** | `/schedule` — daily time block editor |
 | **Analytics** | `/analytics` — weekly/monthly Recharts graphs |
-| **Mood Log** | `/mood` — 5-point mood pick + energy slider + note |
-| **Reflection** | `/reflect` — guided end-of-day journal |
 | **Monitor** | Background job (every 15 min) — fetches Slack channels, analyses for mentions/urgency, sends DM/email digest |
 
 ---
@@ -166,8 +177,6 @@ GET  /messages
 GET  /tasks          POST /tasks
 PUT  /tasks/{id}     DELETE /tasks/{id}
 GET  /schedule/today POST /schedule/plan
-POST /mood           GET  /mood
-POST /reflect        GET  /reflect
 GET  /analytics/week
 GET  /analytics/month
 GET  /analytics/score/today

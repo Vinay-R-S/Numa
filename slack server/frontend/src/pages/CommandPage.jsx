@@ -29,8 +29,6 @@ const INTENT_META = {
   task_add:         { label: 'add task',         color: 'bg-emerald-900/50 text-emerald-300 border-emerald-800/60' },
   task_list:        { label: 'list tasks',       color: 'bg-emerald-900/50 text-emerald-400 border-emerald-800/60' },
   plan_today:       { label: 'plan today',       color: 'bg-numa-900/50 text-numa-300 border-numa-800/60' },
-  mood_log:         { label: 'log mood',         color: 'bg-pink-900/50 text-pink-300 border-pink-800/60' },
-  reflect:          { label: 'reflect',          color: 'bg-rose-900/50 text-rose-300 border-rose-800/60' },
   score:            { label: 'score',            color: 'bg-amber-900/50 text-amber-300 border-amber-800/60' },
   schedule_view:    { label: 'schedule view',    color: 'bg-amber-900/50 text-amber-400 border-amber-800/60' },
   unknown:          { label: 'unknown',          color: 'bg-red-900/50 text-red-400 border-red-800/60' },
@@ -59,7 +57,6 @@ const SUGGESTIONS = [
   'What\'s my score today?',
   'Send "Hello team!" to #general',
   'Add task: Review pull request',
-  'Log mood good energy 7',
   'Create channel #new-project',
 ]
 

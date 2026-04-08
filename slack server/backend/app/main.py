@@ -54,14 +54,12 @@ app.add_middleware(
 )
 
 # ── Route registrations ────────────────────────────────────────────────────────
-from app.routers import auth, dashboard, tasks, messages, mood, reflect, schedule, analytics, chat
+from app.routers import auth, dashboard, tasks, messages, schedule, analytics, chat
 
 app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(tasks.router)
 app.include_router(messages.router)
-app.include_router(mood.router)
-app.include_router(reflect.router)
 app.include_router(schedule.router)
 app.include_router(analytics.router)
 app.include_router(chat.router)
