@@ -90,3 +90,10 @@ pnpm-debug.log*
 # Deployment / platform
 # ------------------------------
 .vercel/
+
+# ------------------------------
+# Miscallaneous
+# ------------------------------
+
+docs
+prompt.md

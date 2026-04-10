@@ -1,24 +1,36 @@
-# NUMA — Complete Setup Guide
+# NUMA - Complete Setup Guide
 
 Follow every step in order. Nothing will work until all credentials are in place.
 
----
-
 ## Table of Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [Get a Groq API Key](#2-get-a-groq-api-key)
-3. [Create a Supabase Project](#3-create-a-supabase-project)
-4. [Run the Database Schema](#4-run-the-database-schema)
-5. [Create & Configure a Slack App](#5-create--configure-a-slack-app)
-6. [Configure the Backend (.env)](#6-configure-the-backend-env)
-7. [Configure the Frontend (.env)](#7-configure-the-frontend-env)
-8. [Run the Project (Local Dev)](#8-run-the-project-local-dev)
-9. [Run with Docker](#9-run-with-docker)
-10. [Verify Everything Works](#10-verify-everything-works)
-11. [Optional — Email Notifications](#11-optional--email-notifications)
-
----
+- [NUMA - Complete Setup Guide](#numa---complete-setup-guide)
+  - [Table of Contents](#table-of-contents)
+  - [1. Prerequisites](#1-prerequisites)
+  - [2. Get a Groq API Key](#2-get-a-groq-api-key)
+  - [3. Create a Supabase Project](#3-create-a-supabase-project)
+  - [4. Run the Database Schema](#4-run-the-database-schema)
+  - [5. Create \& Configure a Slack App](#5-create--configure-a-slack-app)
+    - [5a. Create the app](#5a-create-the-app)
+    - [5b. Enable Socket Mode (for the App Token)](#5b-enable-socket-mode-for-the-app-token)
+    - [5c. Add Bot Token Scopes](#5c-add-bot-token-scopes)
+    - [5d. Install the App to Your Workspace](#5d-install-the-app-to-your-workspace)
+    - [5e. Copy Signing Secret and OAuth credentials](#5e-copy-signing-secret-and-oauth-credentials)
+    - [5f. Add the OAuth Redirect URL](#5f-add-the-oauth-redirect-url)
+    - [5g. Enable Event Subscriptions](#5g-enable-event-subscriptions)
+    - [5h. Add the /numa Slash Command](#5h-add-the-numa-slash-command)
+    - [5i. Find Your Slack User ID and Channel IDs](#5i-find-your-slack-user-id-and-channel-ids)
+  - [6. Start ngrok (Required for Slack)](#6-start-ngrok-required-for-slack)
+  - [7. Configure the Backend (.env)](#7-configure-the-backend-env)
+  - [8. Configure the Frontend (.env)](#8-configure-the-frontend-env)
+  - [9. Run the Project (Local Dev)](#9-run-the-project-local-dev)
+    - [Terminal 1 - Backend](#terminal-1---backend)
+    - [Terminal 2 - Frontend](#terminal-2---frontend)
+    - [Terminal 3 - ngrok](#terminal-3---ngrok)
+  - [10. Run with Docker](#10-run-with-docker)
+  - [11. Verify Everything Works](#11-verify-everything-works)
+  - [12. Optional - Email Notifications](#12-optional---email-notifications)
+  - [Common Problems](#common-problems)
 
 ## 1. Prerequisites
 
@@ -39,8 +51,6 @@ node --version      # v20.x.x
 npm --version       # 10.x.x
 ```
 
----
-
 ## 2. Get a Groq API Key
 
 NUMA uses Groq to run the LLaMA 3 model that powers the AI chat interface.
@@ -48,11 +58,9 @@ NUMA uses Groq to run the LLaMA 3 model that powers the AI chat interface.
 1. Go to **https://console.groq.com**
 2. Sign in / create a free account.
 3. Click **API Keys** in the left sidebar → **Create API Key**.
-4. Name it `NUMA` and copy the key — it starts with `gsk_`.
+4. Name it `NUMA` and copy the key - it starts with `gsk_`.
 
 > **Keep this key secret.** It only goes into `backend/.env`, never the frontend.
-
----
 
 ## 3. Create a Supabase Project
 
@@ -66,7 +74,7 @@ Supabase is the database + real-time backend.
 3. Wait ~2 minutes for provisioning.
 4. Once the project is ready, open **Settings → API**.
 
-Copy these three values — you'll need them in step 6:
+Copy these three values - you'll need them in step 6:
 
 | What | Where to find it | Env var name |
 |------|-----------------|--------------|
@@ -74,9 +82,7 @@ Copy these three values — you'll need them in step 6:
 | **anon / public key** | Settings → API → Project API keys → `anon` `public` | `SUPABASE_ANON_KEY` |
 | **service_role key** | Settings → API → Project API keys → `service_role` `secret` *(click Reveal)* | `SUPABASE_SERVICE_KEY` |
 
-> `SUPABASE_SERVICE_KEY` bypasses Row Level Security — **never** put it in frontend code or commit it to Git.
-
----
+> `SUPABASE_SERVICE_KEY` bypasses Row Level Security - **never** put it in frontend code or commit it to Git.
 
 ## 4. Run the Database Schema
 
@@ -87,11 +93,9 @@ This creates all the tables NUMA needs (users, user_tokens, channels, messages, 
 3. Open the file `supabase/schema.sql` from this project in a text editor, select all, and paste it into the Supabase SQL Editor.
 4. Click **Run** (▶).
 
-You should see `Success. No rows returned` — that means all tables were created cleanly.
+You should see `Success. No rows returned` - that means all tables were created cleanly.
 
-> If you see an error like `relation already exists`, the table already exists from a previous run — that is fine, the schema uses `CREATE TABLE IF NOT EXISTS` so it is safe to re-run.
-
----
+> If you see an error like `relation already exists`, the table already exists from a previous run - that is fine, the schema uses `CREATE TABLE IF NOT EXISTS` so it is safe to re-run.
 
 ## 5. Create & Configure a Slack App
 
@@ -107,8 +111,6 @@ This is the longest step. Take it one section at a time.
 
 You are now on the app management page. Keep this tab open.
 
----
-
 ### 5b. Enable Socket Mode (for the App Token)
 
 1. In the left sidebar, click **Socket Mode**.
@@ -116,11 +118,9 @@ You are now on the app management page. Keep this tab open.
 3. You will be prompted to create an **App-Level Token**.
    - **Token Name**: `numa-socket`
    - **Scopes**: add `connections:write`
-4. Click **Generate** and copy the token — it starts with `xapp-`.
+4. Click **Generate** and copy the token - it starts with `xapp-`.
 
 > This is your `SLACK_APP_TOKEN`.
-
----
 
 ### 5c. Add Bot Token Scopes
 
@@ -139,17 +139,13 @@ You are now on the app management page. Keep this tab open.
 | `users:read` | Resolve user names |
 | `users:read.email` | Read user emails (optional) |
 
----
-
 ### 5d. Install the App to Your Workspace
 
 1. Still in **OAuth & Permissions**, scroll to the top.
 2. Click **Install to Workspace** → **Allow**.
-3. Copy the **Bot User OAuth Token** — it starts with `xoxb-`.
+3. Copy the **Bot User OAuth Token** - it starts with `xoxb-`.
 
 > This is your `SLACK_BOT_TOKEN`.
-
----
 
 ### 5e. Copy Signing Secret and OAuth credentials
 
@@ -161,16 +157,12 @@ From the left sidebar → **Basic Information**:
 | **Client ID** | `SLACK_CLIENT_ID` |
 | **Client Secret** | `SLACK_CLIENT_SECRET` |
 
----
-
 ### 5f. Add the OAuth Redirect URL
 
 1. Left sidebar → **OAuth & Permissions**.
 2. Under **Redirect URLs**, click **Add New Redirect URL**.
 3. Enter: `https://<your-ngrok-domain>.ngrok-free.dev/auth/slack/callback`
 4. Click **Save URLs**.
-
----
 
 ### 5g. Enable Event Subscriptions
 
@@ -182,8 +174,6 @@ From the left sidebar → **Basic Information**:
    - `app_mention`
    - `reaction_added`
 4. Click **Save Changes**.
-
----
 
 ### 5h. Add the /numa Slash Command
 
@@ -199,8 +189,6 @@ From the left sidebar → **Basic Information**:
 2. Click **Save**.
 3. Reinstall the app when prompted (**OAuth & Permissions → Reinstall to Workspace**).
 
----
-
 ### 5i. Find Your Slack User ID and Channel IDs
 
 **Your User ID** (for `NOTIFICATION_USER_ID`):
@@ -211,13 +199,11 @@ From the left sidebar → **Basic Information**:
 
 **Channel IDs** (for `MONITOR_CHANNELS`):
 1. In Slack, right-click a channel → **View channel details**.
-2. Scroll to the bottom — the Channel ID is shown (e.g. `C04XXXXXXX`).
+2. Scroll to the bottom - the Channel ID is shown (e.g. `C04XXXXXXX`).
 3. Repeat for every channel you want NUMA to monitor.
 4. Comma-separate them: `C04XXXXX,C04YYYYY`
 
 > Make sure the NUMA bot has been **invited to each channel** (`/invite @NUMA` in the channel).
-
----
 
 ## 6. Start ngrok (Required for Slack)
 
@@ -232,8 +218,6 @@ ngrok http --url=https://<your-ngrok-domain>.ngrok-free.dev 8000
 ```
 
 You will use this HTTPS domain in the Slack app settings above.
-
----
 
 ## 7. Configure the Backend (.env)
 
@@ -285,8 +269,6 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 Paste the output as the value of `SECRET_KEY`.
 
----
-
 ## 8. Configure the Frontend (.env)
 
 ```bash
@@ -305,13 +287,11 @@ VITE_SUPABASE_ANON_KEY=eyJ...                   # same anon key as backend
 
 > `VITE_API_BASE_URL` is only needed if you are not using the Vite dev proxy. In development the proxy transparently routes `/api` to `http://localhost:8000` already.
 
----
-
 ## 9. Run the Project (Local Dev)
 
 Open **three separate terminals**.
 
-### Terminal 1 — Backend
+### Terminal 1 - Backend
 
 ```bash
 cd backend
@@ -335,10 +315,10 @@ You should see:
 ```
 INFO:     Uvicorn running on http://0.0.0.0:8000
 INFO:     NUMA API starting up...
-INFO:     Slack monitor started — polling every 15 minute(s).
+INFO:     Slack monitor started - polling every 15 minute(s).
 ```
 
-### Terminal 2 — Frontend
+### Terminal 2 - Frontend
 
 ```bash
 cd frontend
@@ -359,13 +339,11 @@ You should see:
 
 Open **http://localhost:5173** in your browser.
 
-### Terminal 3 — ngrok
+### Terminal 3 - ngrok
 
 ```bash
 ngrok http --url=https://<your-ngrok-domain>.ngrok-free.dev 8000
 ```
-
----
 
 ## 10. Run with Docker
 
@@ -388,22 +366,18 @@ To stop:
 docker compose down
 ```
 
----
-
 ## 11. Verify Everything Works
 
 Work through this checklist in order:
 
-- [ ] **API health** — open http://localhost:8000/docs — you should see the Swagger UI with all routes listed.
-- [ ] **Supabase tables** — in the Supabase dashboard, open **Table Editor** and confirm tables like `users`, `tasks`, `messages` exist.
-- [ ] **Login** — open http://localhost:5173, click **Sign in with Slack**, complete the OAuth flow. You should land on the Dashboard.
-- [ ] **AI chat** — in Slack, type `/numa add task Buy groceries`. Check the NUMA dashboard — the task should appear in real-time.
-- [ ] **Monitor** — wait up to 15 minutes after startup (or post a message in a monitored channel). The backend logs should show `Monitor cycle starting…`.
-- [ ] **Real-time sync** — open the Tasks page in two browser tabs. Add a task in one — it should appear in the other instantly.
+- [ ] **API health** - open http://localhost:8000/docs - you should see the Swagger UI with all routes listed.
+- [ ] **Supabase tables** - in the Supabase dashboard, open **Table Editor** and confirm tables like `users`, `tasks`, `messages` exist.
+- [ ] **Login** - open http://localhost:5173, click **Sign in with Slack**, complete the OAuth flow. You should land on the Dashboard.
+- [ ] **AI chat** - in Slack, type `/numa add task Buy groceries`. Check the NUMA dashboard - the task should appear in real-time.
+- [ ] **Monitor** - wait up to 15 minutes after startup (or post a message in a monitored channel). The backend logs should show `Monitor cycle starting…`.
+- [ ] **Real-time sync** - open the Tasks page in two browser tabs. Add a task in one - it should appear in the other instantly.
 
----
-
-## 12. Optional — Email Notifications
+## 12. Optional - Email Notifications
 
 NUMA can also send you an email digest when your monitored channels have urgent activity.
 
@@ -425,8 +399,6 @@ SMTP_PORT=587
 ```
 
 3. Restart the backend. Email digests will be sent alongside Slack DMs during each monitor cycle.
-
----
 
 ## Common Problems
 

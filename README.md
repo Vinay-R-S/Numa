@@ -1,8 +1,7 @@
-# NUMA — AI-Powered Life Operating System
+# NUMA - AI-Powered Life Operating System
 
-An intelligent platform that unifies your productivity, health, and integrations into one AI-powered system. Autonomous agents handle scheduling, fitness tracking, communication monitoring, and task management — so you don't have to.
+An intelligent platform that unifies your productivity, health, and integrations into one AI-powered system. Autonomous agents handle scheduling, fitness tracking, communication monitoring, and task management - so you don't have to.
 
----
 
 ## Table of Contents
 
@@ -24,23 +23,21 @@ An intelligent platform that unifies your productivity, health, and integrations
 - [AI & NLP Modules](#ai--nlp-modules)
 - [Contributors](#contributors)
 
----
 
 ## Overview
 
-**NUMA** is a multi-service AI platform built around the concept of a personal "Life OS". It aggregates data from health trackers, calendars, code repositories, and communication tools into a unified backend, then uses AI agents with LangChain/LangGraph to generate actionable daily plans — all while keeping user data private.
+**NUMA** is a multi-service AI platform built around the concept of a personal "Life OS". It aggregates data from health trackers, calendars, code repositories, and communication tools into a unified backend, then uses AI agents with LangChain/LangGraph to generate actionable daily plans - all while keeping user data private.
 
 ### Core Services
 
 | Service | Description | Port |
 |---|---|---|
-| **client** | Next.js 16 web app — landing page, auth, task board, analytics | `3000` |
-| **server** | FastAPI backend — auth, task CRUD, Supabase integration | `8000` |
-| **google-calendar** | LangGraph agent — natural language calendar + Gmail control | `8001` |
-| **slack-server** | Slack automation — intent parsing, channel monitoring, notifications | `9000` |
-| **NLP-NUMA** | Custom NLP pipeline — sentiment, NER, performance classification | offline |
+| **client** | Next.js 16 web app - landing page, auth, task board, analytics | `3000` |
+| **server** | FastAPI backend - auth, task CRUD, Supabase integration | `8000` |
+| **google-calendar** | LangGraph agent - natural language calendar + Gmail control | `8001` |
+| **slack-server** | Slack automation - intent parsing, channel monitoring, notifications | `9000` |
+| **NLP-NUMA** | Custom NLP pipeline - sentiment, NER, performance classification | offline |
 
----
 
 ## System Architecture
 
@@ -58,8 +55,8 @@ An intelligent platform that unifies your productivity, health, and integrations
 └──────────────────────────────┬──────────────────────────────────┘
                                │
                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      FASTAPI BACKEND                            │
+┌────────────────────────────────────────────────────────────────┐
+│                      FASTAPI BACKEND                           │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────┐  │
 │  │   Auth Service  │  │  Tasks Service  │  │  Health Check  │  │
 │  │  /auth/*        │  │   /tasks/*      │  │  GET /health   │  │
@@ -75,19 +72,19 @@ An intelligent platform that unifies your productivity, health, and integrations
 │  GitHub OAuth     │  └────────────────────────────────────────┘
 └───────────────────┘
 
-┌─────────────────────────────────────────────────────────────────┐
-│                     STANDALONE SERVICES                         │
-│  ┌──────────────────────────────┐  ┌───────────────────────┐   │
-│  │  Google Calendar Agent       │  │   Slack Server        │   │
-│  │  LangGraph + Groq + Gmail    │  │   FastAPI + Groq      │   │
-│  │  port 8001                   │  │   port 9000           │   │
-│  └──────────────────────────────┘  └───────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  NLP-NUMA Pipeline                                       │   │
-│  │  DistilBERT (Sentiment + Performance) │ spaCy NER        │   │
-│  │  TF-IDF LogReg (Daily Productivity)  │ Burnout Risk      │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                     STANDALONE SERVICES                       │
+│  ┌──────────────────────────────┐  ┌───────────────────────┐  │
+│  │  Google Calendar Agent       │  │   Slack Server        │  │
+│  │  LangGraph + Groq + Gmail    │  │   FastAPI + Groq      │  │
+│  │  port 8001                   │  │   port 9000           │  │
+│  └──────────────────────────────┘  └───────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  NLP-NUMA Pipeline                                      │  │
+│  │  DistilBERT (Sentiment + Performance) │ spaCy NER       │  │
+│  │  TF-IDF LogReg (Daily Productivity)  │ Burnout Risk     │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ### Authentication Flow
@@ -109,7 +106,6 @@ User clicks Google/GitHub ──► Supabase OAuth redirect
                              ◄── Custom backend JWT
 ```
 
----
 
 ## Technology Stack
 
@@ -126,7 +122,6 @@ User clicks Google/GitHub ──► Supabase OAuth redirect
 | **NLP** | Transformers (DistilBERT), spaCy, scikit-learn (TF-IDF + LogReg) |
 | **Integrations** | Google Calendar API, Google Fit API, Strava API v3, Slack SDK |
 
----
 
 ## Project Structure
 
@@ -261,7 +256,6 @@ Numa/
     └── markdown.md                      # Technical specification
 ```
 
----
 
 ## Setup Guide
 
@@ -272,7 +266,6 @@ Numa/
 - pip + virtualenv
 - A [Supabase](https://supabase.com) account
 
----
 
 ### 1. Supabase Project
 
@@ -290,7 +283,7 @@ Supabase provides the database (PostgreSQL) and authentication (email/password +
 2. Copy the following values:
    - **Project URL** → `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL`
    - **anon public key** → `SUPABASE_ANON_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - **service_role secret key** → `SUPABASE_SERVICE_ROLE_KEY` (**keep this secret — never expose it client-side**)
+   - **service_role secret key** → `SUPABASE_SERVICE_ROLE_KEY` (**keep this secret - never expose it client-side**)
 
 #### 1.3 Get Database Connection String
 
@@ -319,7 +312,7 @@ Supabase provides the database (PostgreSQL) and authentication (email/password +
 
 #### 1.6 Enable Google OAuth in Supabase
 
-> You need Google OAuth credentials first — see [Section 2](#2-google-cloud-oauth--fit-api).
+> You need Google OAuth credentials first - see [Section 2](#2-google-cloud-oauth--fit-api).
 
 1. Go to **Authentication** → **Providers** → **Google**
 2. Toggle **Enable Google provider**
@@ -329,14 +322,13 @@ Supabase provides the database (PostgreSQL) and authentication (email/password +
 
 #### 1.7 Enable GitHub OAuth in Supabase
 
-> You need GitHub OAuth credentials first — see [Section 3](#3-github-oauth).
+> You need GitHub OAuth credentials first - see [Section 3](#3-github-oauth).
 
 1. Go to **Authentication** → **Providers** → **GitHub**
 2. Toggle **Enable GitHub provider**
 3. Paste your **GitHub Client ID** and **GitHub Client Secret**
 4. Copy the **Supabase Callback URL** shown on this page
 
----
 
 ### 2. Google Cloud OAuth & Fit API
 
@@ -398,7 +390,6 @@ Used for: Sign in with Google (via Supabase), Google Calendar agent, Google Fit 
 
 > **Important**: Supabase OAuth callbacks only work over IPv4. If you are on an IPv6-only network, the callback may fail. Use a VPN or ensure your ISP provides IPv4.
 
----
 
 ### 3. GitHub OAuth
 
@@ -419,7 +410,6 @@ Used for: Sign in with GitHub (via Supabase).
 
 > GitHub OAuth redirects go through Supabase servers. Ensure your network supports IPv4 connections to Supabase. If you encounter connection errors, toggle your network or use a VPN with IPv4.
 
----
 
 ### 4. Strava API
 
@@ -465,7 +455,6 @@ Strava uses OAuth 2.0. You need to do an initial authorization to get the tokens
 
 > The backend automatically refreshes expired tokens using the refresh token.
 
----
 
 ### 5. Google Fit Token
 
@@ -481,7 +470,6 @@ Google Fit uses the same OAuth credentials from Section 2. The token is generate
 4. After approval, `server/src/config/token.json` is auto-generated and saved
 5. Subsequent runs use the saved token (auto-refreshed by the library)
 
----
 
 ### 6. Environment Variables
 
@@ -556,7 +544,6 @@ GOOGLE_CREDENTIALS_FILE=../src/config/credentials.json
 GOOGLE_TOKEN_FILE=../src/config/token.json
 ```
 
----
 
 ### 7. Running the Application
 
@@ -603,7 +590,7 @@ uvicorn app.main:app --reload --port 9000
 # → http://localhost:9000
 ```
 
-#### NLP-NUMA — Training (optional, standalone)
+#### NLP-NUMA - Training (optional, standalone)
 
 ```bash
 cd NLP-NUMA
@@ -622,7 +609,6 @@ python training/train_daily_from_combined.py
 python testing/test_models_quick.py
 ```
 
----
 
 ## API Reference
 
@@ -656,9 +642,8 @@ Base URL: `http://localhost:8000`
 |---|---|---|---|
 | `GET` | `/` | None | Welcome message. |
 | `GET` | `/health` | None | `{"status": "ok"}` |
-| `GET` | `/home` | Bearer JWT | Protected home route — returns user info. |
+| `GET` | `/home` | Bearer JWT | Protected home route - returns user info. |
 
----
 
 ## Integrations
 
@@ -671,7 +656,6 @@ Base URL: `http://localhost:8000`
 | **GitHub** | Planned | Commit tracking, contribution analytics |
 | **LeetCode** | Planned | Problem-solving tracking, skill development |
 
----
 
 ## AI & NLP Modules
 
@@ -710,19 +694,17 @@ MODERATE  0.40 – 0.70
 LOW    < 0.40
 ```
 
----
 
 ## Contributors
 
 | Name | Role | Contact |
 |---|---|---|
-| Vinay R S | Full-Stack Developer | — |
+| Vinay R S | Full-Stack Developer | - |
 
 **Institution**: BMS College of Engineering
 **Course**: 6th Semester Mini Project
 **Academic Year**: 2025-2026
 
----
 
 ## License
 
