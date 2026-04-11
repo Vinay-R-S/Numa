@@ -14,6 +14,7 @@ interface CalendarStore {
   events: CalendarEvent[]
   loading: boolean
   error: string | null
+  calendarConnected: boolean   // false = token missing/expired, show reconnect prompt
   lastFetchedAt: number | null
   agentMessages: AgentChatMessage[]
 
@@ -35,6 +36,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
   events: [],
   loading: false,
   error: null,
+  calendarConnected: true,   // optimistically true; set to false on 401
   lastFetchedAt: null,
   agentMessages: [
     {
@@ -47,25 +49,28 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     const { lastFetchedAt, loading } = get()
     const now = Date.now()
 
-    // Skip if already loading
     if (loading) return
 
-    // Skip if cache is still valid and not forcing fresh
     if (!forceFresh && lastFetchedAt && now - lastFetchedAt < CACHE_DURATION) {
       return
     }
 
-    // Only show loading state on first fetch
     if (!lastFetchedAt) {
       set({ loading: true })
     }
 
     try {
       set({ error: null })
-      const data = await fetchCalendarEvents(7)
-      set({ events: data, lastFetchedAt: now })
+      const data = await fetchCalendarEvents(forceFresh ? { refresh: true } : undefined)
+      set({ events: data, lastFetchedAt: now, calendarConnected: true })
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : "Failed to load calendar events" })
+      const msg = err instanceof Error ? err.message : "Failed to load calendar events"
+      if (msg === "CALENDAR_NOT_CONNECTED") {
+        // Not an error — just not connected yet. Let the UI show the reconnect prompt.
+        set({ calendarConnected: false, events: [] })
+      } else {
+        set({ error: msg })
+      }
     } finally {
       set({ loading: false })
     }

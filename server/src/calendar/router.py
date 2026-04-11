@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus
 from typing import AsyncGenerator, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 from jose import JWTError, jwt
 
@@ -50,7 +50,7 @@ watch_state: Dict[str, Optional[str]] = {
     "last_message_number": None,
 }
 watch_version = 0
-CALENDAR_EVENTS_MAX_DAYS = 7
+# Calendar always fetches the full current month (no configurable window needed)
 
 
 def _touch_watch_version() -> None:
@@ -70,7 +70,12 @@ def _parse_google_expiration(expiration_ms: Optional[str]) -> Optional[str]:
 
 
 def _is_calendar_not_connected_error(exc: Exception) -> bool:
-    return "google calendar is not connected" in str(exc).lower()
+    msg = str(exc).lower()
+    return (
+        "google calendar is not connected" in msg
+        or "session expired" in msg
+        or "please reconnect" in msg
+    )
 
 
 def _build_oauth_state(user_id: str) -> str:
@@ -123,6 +128,56 @@ def oauth_status(current_user: dict = Depends(get_current_user)):
     return OAuthStatusResponse(connected=has_calendar_credentials(user_id))
 
 
+@router.get("/token/health")
+def token_health(current_user: dict = Depends(get_current_user)):
+    """
+    Actively validate the stored Google Calendar token by making a real API call.
+    Returns a JSON object so the frontend can decide whether to prompt re-auth.
+
+    Response shape:
+      { "valid": true,  "connected": true }        – token exists and works
+      { "valid": false, "connected": true,          – token file exists but is expired/revoked
+        "reason": "...", "reconnect_url": "..." }
+      { "valid": false, "connected": false }        – no token file at all
+    """
+    user_id = current_user.get("sub") if isinstance(current_user, dict) else None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User session is invalid")
+
+    file_exists = has_calendar_credentials(user_id)
+
+    if not file_exists:
+        return {"valid": False, "connected": False}
+
+    # Attempt a real API call to verify the token is still accepted by Google
+    try:
+        svc = get_calendar_service(user_id=user_id)
+        svc.calendarList().list(maxResults=1).execute()
+        return {"valid": True, "connected": True}
+    except RuntimeError as exc:
+        # Token exists but is expired/revoked — generate a fresh OAuth URL
+        try:
+            state = _build_oauth_state(user_id)
+            reconnect_url = build_google_oauth_authorization_url(
+                redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+                state=state,
+            )
+        except Exception:
+            reconnect_url = None
+        return {
+            "valid": False,
+            "connected": True,
+            "reason": str(exc),
+            "reconnect_url": reconnect_url,
+        }
+    except Exception as exc:
+        return {
+            "valid": False,
+            "connected": True,
+            "reason": f"Unexpected error: {exc}",
+            "reconnect_url": None,
+        }
+
 @router.post("/oauth/start", response_model=OAuthStartResponse)
 def oauth_start(current_user: dict = Depends(get_current_user)):
     user_id = current_user.get("sub") if isinstance(current_user, dict) else None
@@ -165,11 +220,18 @@ def oauth_callback(
 
 
 @router.get("/events", response_model=EventsResponse)
-def get_events(days: int = CALENDAR_EVENTS_MAX_DAYS, current_user: dict = Depends(get_current_user)):
+def get_events(
+    refresh: bool = Query(False, description="Force re-fetch from Google API, bypassing the 30-min DB cache"),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return all events for the current calendar month (holidays & birthdays included).
+
+    By default, events are served from the DB cache if last synced within 30 minutes.
+    Pass ?refresh=true to force a fresh fetch from Google Calendar.
+    """
     user_id = current_user.get("sub") if isinstance(current_user, dict) else None
     try:
-        effective_days = max(1, min(days, CALENDAR_EVENTS_MAX_DAYS))
-        events = get_events_for_frontend(effective_days, user_id=user_id)
+        events = get_events_for_frontend(user_id=user_id, force_refresh=refresh)
         return EventsResponse(events=events)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

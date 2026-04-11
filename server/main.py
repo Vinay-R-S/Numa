@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from fastapi import FastAPI, Depends
@@ -14,6 +15,8 @@ from src.calendar.router import router as calendar_router
 from src.calendar_agent.router import router as calendar_agent_router
 from src.master_agent.router import router as master_agent_router
 from src.db import init_db
+
+log = logging.getLogger(__name__)
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 
@@ -35,9 +38,61 @@ app.add_middleware(
 )
 
 
+# ── Background scheduler ──────────────────────────────────────────────────────
+
+def _start_nightly_sync_scheduler():
+    """
+    Start an APScheduler background job that runs a full Google Calendar sync
+    for every connected user at the configured time (default: 02:00 IST).
+
+    This acts as a safety net for missed webhook events and also triggers the
+    monthly purge automatically on the 1st of each new month.
+    """
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler  # type: ignore
+        from apscheduler.triggers.cron import CronTrigger  # type: ignore
+    except ImportError:
+        log.warning(
+            "APScheduler not installed — nightly calendar sync disabled. "
+            "Install apscheduler to enable background sync."
+        )
+        return
+
+    from src.calendar.service import get_events_for_frontend, get_all_connected_user_ids
+
+    scheduler_hour   = int(os.getenv("SYNC_SCHEDULER_HOUR",   "2"))
+    scheduler_minute = int(os.getenv("SYNC_SCHEDULER_MINUTE", "0"))
+
+    def _nightly_job():
+        user_ids = get_all_connected_user_ids()
+        log.info("Nightly calendar sync: found %d connected user(s).", len(user_ids))
+        for uid in user_ids:
+            try:
+                get_events_for_frontend(user_id=uid, force_refresh=True)
+                log.info("Nightly sync complete for user %s", uid)
+            except Exception as exc:
+                log.warning("Nightly sync failed for user %s: %s", uid, exc)
+
+    scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
+    scheduler.add_job(
+        _nightly_job,
+        trigger=CronTrigger(hour=scheduler_hour, minute=scheduler_minute),
+        id="nightly_calendar_sync",
+        replace_existing=True,
+        misfire_grace_time=300,  # allow up to 5 min late start
+    )
+    scheduler.start()
+    log.info(
+        "Nightly calendar sync scheduled at %02d:%02d IST.",
+        scheduler_hour,
+        scheduler_minute,
+    )
+
+
 @app.on_event("startup")
 def on_startup():
     init_db()
+    _start_nightly_sync_scheduler()
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
@@ -55,7 +110,23 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    """Basic health + Qdrant/memory status check."""
+    from src.memory.service import memory_service
+
+    mem_status: dict = {
+        "enabled": memory_service.enabled,
+        "mode": "local_file" if memory_service._using_local_mode else ("remote" if memory_service.qdrant_url else "disabled"),
+        "embedding_provider": memory_service.embedding_provider,
+        "collection": memory_service.collection_name,
+    }
+
+    if memory_service._using_local_mode:
+        mem_status["local_path"] = memory_service.qdrant_local_path
+
+    return {
+        "status": "ok",
+        "vector_memory": mem_status,
+    }
 
 
 # ── Protected ─────────────────────────────────────────────────────────────────

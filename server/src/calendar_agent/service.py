@@ -7,19 +7,25 @@ from typing import Annotated, List, Optional, Sequence, TypedDict
 
 from ..calendar import service as calendar_service
 from ..memory import memory_service
+from ..memory.service import search_calendar_events as _qdrant_search
+from ..tasks import service as task_service
 
 
 SYSTEM_PROMPT = (
-    "You are Numa, a conversational calendar assistant."
-    " You can only act through the available calendar tools."
-    " If required fields are missing, ask a short clarification question."
-    " Never invent event ids or datetimes."
+    "You are Numa, a smart calendar assistant with access to the user's Google Calendar data.\n"
+    "You receive relevant calendar events as context in the system message — use them to answer"
+    " questions directly and accurately.\n"
+    "Only call tools when you need to CREATE, EDIT, or DELETE events, search for something not"
+    " in the provided context, or add an event to the Task list.\n"
+    "If required fields are missing, ask a short clarification question.\n"
+    "Never invent event IDs or datetimes."
 )
 
 
 class AgentState(TypedDict):
     messages: Annotated[Sequence[object], operator.add]
     user_query: str
+    rag_context: str
 
 
 def _require_agent_dependencies():
@@ -89,6 +95,45 @@ def _is_groq_configured() -> bool:
         return False
 
     return True
+
+
+def _build_rag_context(user_id: str, query: str) -> str:
+    """
+    Pull the top-6 semantically relevant calendar events from Qdrant and format
+    them as a compact context block to inject into the system prompt.
+    Returns an empty string if Qdrant is unavailable or no results found.
+    """
+    if not user_id:
+        return ""
+    try:
+        hits = _qdrant_search(user_id, query, limit=6)
+        if not hits:
+            return ""
+
+        lines = ["\n[Your Calendar — Relevant Events from this month]"]
+        for evt in hits:
+            title = evt.get("title") or "(No title)"
+            start = evt.get("start_at") or ""
+            end   = evt.get("end_at") or ""
+            desc  = evt.get("description") or ""
+
+            # Format: "• Title | Start → End | Description"
+            try:
+                start_dt = datetime.fromisoformat(start)
+                end_dt   = datetime.fromisoformat(end)
+                time_str = (
+                    f"{start_dt.strftime('%b %d, %I:%M %p')} → {end_dt.strftime('%I:%M %p')}"
+                )
+            except Exception:
+                time_str = start
+
+            entry = f"• {title} | {time_str}"
+            if desc:
+                entry += f" | {desc[:80]}"
+            lines.append(entry)
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def _toolset(tool_decorator, user_id: str | None):
@@ -227,6 +272,74 @@ def _toolset(tool_decorator, user_id: str | None):
         except Exception as exc:
             return f"Error finding free slots: {exc}"
 
+    @tool_decorator
+    def search_calendar_rag(query: str) -> str:
+        """
+        Search the user's calendar events semantically using RAG (Qdrant vector search).
+        Use this to find events by topic, type, or description when the system context
+        does not already contain the answer. Returns the top matching events.
+        """
+        if not user_id:
+            return "User not authenticated — cannot search calendar."
+        try:
+            hits = _qdrant_search(user_id, query, limit=8)
+            if not hits:
+                return "No matching calendar events found in the RAG index."
+            lines = [f"Calendar RAG results for '{query}':"]
+            for evt in hits:
+                title = evt.get("title") or "(No title)"
+                start = evt.get("start_at") or ""
+                end   = evt.get("end_at") or ""
+                try:
+                    start_dt = datetime.fromisoformat(start)
+                    end_dt   = datetime.fromisoformat(end)
+                    time_str = (
+                        f"{start_dt.strftime('%b %d, %I:%M %p')} → {end_dt.strftime('%I:%M %p')}"
+                    )
+                except Exception:
+                    time_str = start
+                lines.append(f"- {title} | {time_str}")
+            return "\n".join(lines)
+        except Exception as exc:
+            return f"Error searching calendar RAG: {exc}"
+
+    @tool_decorator
+    def add_today_as_task(event_title: str, event_start_time: str, description: str = "") -> str:
+        """
+        Add a specific calendar event to today's Task list.
+        Use this when the user explicitly asks to add an event as a task,
+        or when an event needs to appear in today's task list.
+        event_start_time should be in ISO format (YYYY-MM-DDTHH:MM:SS).
+        """
+        if not user_id:
+            return "User not authenticated — cannot add task."
+        try:
+            now = datetime.now(calendar_service.TIMEZONE)
+            today_str = now.date().isoformat()
+
+            # Parse start time
+            try:
+                start_dt = datetime.fromisoformat(event_start_time)
+                reminder_at = start_dt - timedelta(minutes=15)
+            except Exception:
+                start_dt = now
+                reminder_at = None
+
+            from ..calendar.service import get_all_connected_user_ids  # noqa: F401
+            external_ref = f"gcal:manual:{user_id}:{event_title.strip().lower().replace(' ', '-')}"
+
+            task_service.upsert_calendar_event_task(
+                user_id=user_id,
+                external_ref=external_ref,
+                title=event_title.strip() or "(No title)",
+                description=description.strip() or None,
+                due_date=start_dt,
+                reminder_at=reminder_at,
+            )
+            return f"Added '{event_title}' to your task list for today ({today_str})."
+        except Exception as exc:
+            return f"Error adding task: {exc}"
+
     return [
         schedule_event,
         get_events,
@@ -235,6 +348,8 @@ def _toolset(tool_decorator, user_id: str | None):
         delete_by_description,
         modify_event,
         find_free_slots,
+        search_calendar_rag,
+        add_today_as_task,
     ]
 
 
@@ -257,6 +372,8 @@ def _build_agent_graph(user_id: str | None, model_override: Optional[str] = None
         "delete_by_description": {"query"},
         "modify_event": {"query", "new_datetime_str"},
         "find_free_slots": {"date"},
+        "search_calendar_rag": {"query"},
+        "add_today_as_task": {"event_title", "event_start_time"},
     }
 
     def validate_tool_call(tool_name: str, args: dict) -> str | None:
@@ -281,7 +398,14 @@ def _build_agent_graph(user_id: str | None, model_override: Optional[str] = None
             f"Tomorrow: {(now + timedelta(days=1)).strftime('%Y-%m-%d')}\n"
         )
 
-        full_messages = [SystemMessage(content=SYSTEM_PROMPT + runtime_context)] + list(state["messages"])
+        # RAG context is injected per-turn from the state's stored rag_context
+        rag_context = state.get("rag_context", "")
+
+        full_system = SYSTEM_PROMPT + runtime_context
+        if rag_context:
+            full_system += rag_context
+
+        full_messages = [SystemMessage(content=full_system)] + list(state["messages"])
         response = llm_with_tools.invoke(full_messages)
         return {
             "messages": [response],
@@ -369,6 +493,12 @@ def run_agent_chat(
 
         graph, AIMessageType = _build_agent_graph(user_id, model)
 
+        # ── RAG context: pull relevant calendar events from Qdrant ──────────
+        rag_context = ""
+        if user_id:
+            rag_context = _build_rag_context(user_id, query)
+
+        # ── Conversational memory context ────────────────────────────────────
         contextual_query = query
         if user_id:
             memory_context = memory_service.build_context_for_query(user_id, query)
@@ -395,6 +525,7 @@ def run_agent_chat(
         initial_state = {
             "messages": history_messages + [HumanMessage(content=contextual_query)],
             "user_query": query,
+            "rag_context": rag_context,
         }
         result = graph.invoke(initial_state)
 

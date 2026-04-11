@@ -40,6 +40,7 @@ htmlcov/
 node_modules/
 .pnpm-store/
 .npm/
+.next
 
 # Yarn Berry
 .yarn/*
@@ -94,6 +95,8 @@ pnpm-debug.log*
 # ------------------------------
 # Miscallaneous
 # ------------------------------
-
+models
 docs
 prompt.md
+apiConfig
+qdrant_storage

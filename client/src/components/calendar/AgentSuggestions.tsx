@@ -17,10 +17,7 @@ interface AgentSuggestionsProps {
 
 function getSmartSuggestions(events: CalendarEvent[]): Suggestion[] {
   const now = new Date()
-  const tomorrow = new Date(now)
-  tomorrow.setDate(tomorrow.getDate() + 1)
 
-  // Quick actions
   const quickActions: Suggestion[] = [
     {
       icon: <Plus className="h-3 w-3" />,
@@ -42,17 +39,13 @@ function getSmartSuggestions(events: CalendarEvent[]): Suggestion[] {
     },
   ]
 
-  // Event-based suggestions
-  const eventSuggestions: Suggestion[] = []
-
-  // Get upcoming events
   const upcomingEvents = events
     .filter((e) => e.date >= now)
     .sort((a, b) => a.date.getTime() - b.date.getTime())
-    .slice(0, 3)
+    .slice(0, 1)
 
   if (upcomingEvents.length > 0) {
-    eventSuggestions.push({
+    quickActions.push({
       icon: <Zap className="h-3 w-3" />,
       label: `Reschedule ${upcomingEvents[0].title}`,
       query: `Reschedule "${upcomingEvents[0].title}" to tomorrow at 2 PM`,
@@ -60,42 +53,26 @@ function getSmartSuggestions(events: CalendarEvent[]): Suggestion[] {
     })
   }
 
-  // Time-based suggestions
-  const timeSuggestions: Suggestion[] = [
-    {
-      icon: <Calendar className="h-3 w-3" />,
-      label: "Check Monday's schedule",
-      query: "What's on my calendar next Monday?",
-      category: "time",
-    },
-    {
-      icon: <Clock className="h-3 w-3" />,
-      label: "Schedule 30min call",
-      query: "Schedule a 30 minute call tomorrow afternoon",
-      category: "time",
-    },
-  ]
-
-  return [...quickActions, ...eventSuggestions, ...timeSuggestions]
+  return quickActions
 }
 
 export function AgentSuggestions({ events, onSelectSuggestion }: AgentSuggestionsProps) {
   const suggestions = getSmartSuggestions(events)
 
   return (
-    <div className="mb-3 space-y-2">
-      <p className="text-xs font-medium text-muted-foreground">Quick Actions</p>
-      <div className="grid grid-cols-1 gap-1.5">
-        {suggestions.slice(0, 6).map((suggestion, index) => (
+    <div className="mb-2">
+      <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+        Quick Actions
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {suggestions.slice(0, 4).map((suggestion, index) => (
           <button
             key={index}
             onClick={() => onSelectSuggestion(suggestion.query)}
-            className="group flex items-center gap-2 rounded-lg border border-border/30 bg-muted/20 px-3 py-2 text-left text-xs transition-all hover:border-primary/40 hover:bg-primary/5"
+            className="flex items-center gap-1.5 rounded-full border border-border/30 bg-muted/20 px-2.5 py-1 text-[11px] text-foreground/80 transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-foreground"
           >
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary transition-colors group-hover:bg-primary/20">
-              {suggestion.icon}
-            </div>
-            <span className="flex-1 truncate text-foreground">{suggestion.label}</span>
+            <span className="text-primary">{suggestion.icon}</span>
+            <span className="truncate max-w-[150px]">{suggestion.label}</span>
           </button>
         ))}
       </div>

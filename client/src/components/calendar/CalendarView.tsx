@@ -34,8 +34,10 @@ const MONTHS = [
   "December",
 ]
 
-const HOURS = Array.from({ length: 14 }, (_, i) => i + 7)
+const HOURS = Array.from({ length: 15 }, (_, i) => i + 7) // 7 AM – 9 PM
 const SLOT_HEIGHT = 56
+// Sidebar rail width (collapsed) in px — used to keep popups from hiding behind the sidebar
+const SIDEBAR_RAIL_WIDTH = 56
 
 function isSameDay(a: Date, b: Date) {
   return (
@@ -119,18 +121,24 @@ function EventDetailPopup({
     const rect = popup.getBoundingClientRect()
     const margin = 12
     const gap = 10
+    // On desktop (lg) there's a sidebar rail of 56px; on mobile there's the 12px safe area.
+    const leftBound = window.innerWidth >= 1024 ? SIDEBAR_RAIL_WIDTH + margin : margin
 
     const spaceRight = window.innerWidth - anchorRect.right
-    const spaceLeft = anchorRect.left
+    const spaceLeft = anchorRect.left - leftBound
     const spaceBottom = window.innerHeight - anchorRect.bottom
     const spaceTop = anchorRect.top
 
-    let left =
-      spaceRight >= rect.width + gap
-        ? anchorRect.right + gap
-        : spaceLeft >= rect.width + gap
-          ? anchorRect.left - rect.width - gap
-          : Math.max(margin, Math.min(anchorRect.left, window.innerWidth - rect.width - margin))
+    // Prefer to open to the right; fall back to left; otherwise center in available area
+    let left: number
+    if (spaceRight >= rect.width + gap) {
+      left = anchorRect.right + gap
+    } else if (spaceLeft >= rect.width + gap) {
+      left = anchorRect.left - rect.width - gap
+    } else {
+      // Center between left bound and right edge
+      left = leftBound + (window.innerWidth - leftBound - rect.width) / 2
+    }
 
     let top = anchorRect.top + (anchorRect.height - rect.height) / 2
 
@@ -140,7 +148,8 @@ function EventDetailPopup({
       top = anchorRect.top - rect.height - gap
     }
 
-    left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin))
+    // Clamp so popup never overlaps the sidebar or exits the viewport
+    left = Math.max(leftBound, Math.min(left, window.innerWidth - rect.width - margin))
     top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin))
 
     setCoords({ left, top })
@@ -233,6 +242,7 @@ function CreateEventPopup({
     const rect = popup.getBoundingClientRect()
     const margin = 12
     const gap = 8
+    const leftBound = window.innerWidth >= 1024 ? SIDEBAR_RAIL_WIDTH + margin : margin
 
     let left = position.x - rect.width / 2
     let top = position.y + gap
@@ -241,7 +251,7 @@ function CreateEventPopup({
       top = position.y - rect.height - gap
     }
 
-    left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin))
+    left = Math.max(leftBound, Math.min(left, window.innerWidth - rect.width - margin))
     top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin))
 
     setCoords({ left, top })
@@ -594,7 +604,7 @@ export default function CalendarView({
         : `${MONTHS[currentDate.getMonth()]} ${currentDate.getDate()}, ${currentDate.getFullYear()}`
 
   const nowMinutes = today.getHours() * 60 + today.getMinutes()
-  const showNowLine = nowMinutes >= 7 * 60 && nowMinutes <= 21 * 60
+  const showNowLine = nowMinutes >= 7 * 60 && nowMinutes <= 22 * 60
   const nowTop = ((nowMinutes - 7 * 60) / 60) * SLOT_HEIGHT
 
   return (

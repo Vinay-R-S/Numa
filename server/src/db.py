@@ -51,21 +51,7 @@ def _get_conn():
 TABLES: list[str] = [
     "CREATE EXTENSION IF NOT EXISTS pgcrypto",
 
-    # ── profiles ────────────────────────────────────────────────────────────
-    # One row per user, linked to Supabase-managed auth.users via UUID FK.
-    # Created automatically on sign-up (in auth service) or by the trigger below.
-    """
-    CREATE TABLE IF NOT EXISTS public.profiles (
-        id          UUID        PRIMARY KEY
-                                REFERENCES auth.users(id) ON DELETE CASCADE,
-        full_name   TEXT,
-        avatar_url  TEXT,
-        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-    """,
-
-    # Keep updated_at current on every row update
+    # ── shared updated_at trigger function ───────────────────────────────────
     """
     CREATE OR REPLACE FUNCTION public.set_updated_at()
     RETURNS TRIGGER LANGUAGE plpgsql AS $$
@@ -75,6 +61,26 @@ TABLES: list[str] = [
     END;
     $$
     """,
+
+    # ── profiles ─────────────────────────────────────────────────────────────
+    # One row per user, linked to Supabase-managed auth.users via UUID FK.
+    # Created automatically on sign-up (in auth service) or by the trigger below.
+    """
+    CREATE TABLE IF NOT EXISTS public.profiles (
+        id           UUID        PRIMARY KEY
+                                 REFERENCES auth.users(id) ON DELETE CASCADE,
+        full_name    TEXT,
+        avatar_url   TEXT,
+        google_id    TEXT,
+        timezone     TEXT        NOT NULL DEFAULT 'Asia/Kolkata',
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+
+    # Add new columns to profiles for existing deployments (idempotent)
+    "ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS google_id TEXT",
+    "ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata'",
 
     """
     DO $$ BEGIN
@@ -89,7 +95,7 @@ TABLES: list[str] = [
     END $$
     """,
 
-    # ── tasks ──────────────────────────────────────────────────────────────────
+    # ── tasks ─────────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS public.tasks (
         id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -140,11 +146,191 @@ TABLES: list[str] = [
     END $$
     """,
 
-    "CREATE INDEX IF NOT EXISTS idx_tasks_user_status ON public.tasks(user_id, status)",
-    "CREATE INDEX IF NOT EXISTS idx_tasks_completed   ON public.tasks(user_id, completed_at) WHERE completed_at IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_user_status       ON public.tasks(user_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_completed         ON public.tasks(user_id, completed_at) WHERE completed_at IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_tasks_user_external_ref ON public.tasks(user_id, external_ref)",
 
-    # ── google calendars ─────────────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════════════
+    # GOOGLE CALENDAR — NORMALIZED SCHEMA
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # ── cal_calendars ─────────────────────────────────────────────────────────
+    # One row per Google calendar per user.
+    # google_cal_id is the calendar's Google ID (e.g. primary or email address).
+    # calendar_type drives frontend color-coding and agent filter logic.
+    """
+    CREATE TABLE IF NOT EXISTS public.cal_calendars (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        google_cal_id   TEXT        NOT NULL,
+        name            TEXT        NOT NULL,
+        access_role     TEXT        NOT NULL DEFAULT 'reader'
+                                    CHECK (access_role IN ('owner', 'writer', 'reader', 'freeBusyReader')),
+        is_primary      BOOLEAN     NOT NULL DEFAULT FALSE,
+        calendar_type   TEXT        NOT NULL DEFAULT 'personal'
+                                    CHECK (calendar_type IN ('personal', 'shared', 'holiday', 'birthday', 'other')),
+        sync_token      TEXT,
+        last_synced_at  TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, google_cal_id)
+    )
+    """,
+
+    # Add calendar_type to existing deployments (idempotent)
+    "ALTER TABLE public.cal_calendars ADD COLUMN IF NOT EXISTS calendar_type TEXT NOT NULL DEFAULT 'personal'",
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_cal_calendars_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_cal_calendars_updated_at
+            BEFORE UPDATE ON public.cal_calendars
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_cal_calendars_user         ON public.cal_calendars(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cal_calendars_user_primary ON public.cal_calendars(user_id, is_primary)",
+
+    # ── cal_events ────────────────────────────────────────────────────────────
+    # One row per calendar event — no raw JSON blobs.
+    # user_id is denormalized (redundant FK) for fast single-table range queries
+    # without needing to join through cal_calendars.
+    """
+    CREATE TABLE IF NOT EXISTS public.cal_events (
+        id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        calendar_id         UUID        NOT NULL REFERENCES public.cal_calendars(id) ON DELETE CASCADE,
+        user_id             UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        google_event_id     TEXT        NOT NULL,
+        title               TEXT        NOT NULL DEFAULT '(No title)',
+        description         TEXT,
+        location            TEXT,
+        start_at            TIMESTAMPTZ NOT NULL,
+        end_at              TIMESTAMPTZ NOT NULL,
+        is_all_day          BOOLEAN     NOT NULL DEFAULT FALSE,
+        start_time_zone     TEXT,
+        end_time_zone       TEXT,
+        status              TEXT        NOT NULL DEFAULT 'confirmed'
+                                        CHECK (status IN ('confirmed', 'tentative', 'cancelled')),
+        etag                TEXT,
+        recurring_event_id  TEXT,
+        html_link           TEXT,
+        meet_link           TEXT,
+        organizer_email     TEXT,
+        organizer_name      TEXT,
+        is_readonly         BOOLEAN     NOT NULL DEFAULT FALSE,
+        deleted_at          TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (calendar_id, google_event_id)
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_cal_events_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_cal_events_updated_at
+            BEFORE UPDATE ON public.cal_events
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    # Indexes for common query patterns:
+    # - range query for current month view
+    # - fetch all events for a specific calendar
+    # - recurring chain lookup
+    "CREATE INDEX IF NOT EXISTS idx_cal_events_user_start      ON public.cal_events(user_id, start_at)",
+    "CREATE INDEX IF NOT EXISTS idx_cal_events_calendar_start  ON public.cal_events(calendar_id, start_at)",
+    "CREATE INDEX IF NOT EXISTS idx_cal_events_active          ON public.cal_events(user_id, start_at) WHERE deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_cal_events_recurring       ON public.cal_events(recurring_event_id) WHERE recurring_event_id IS NOT NULL",
+
+    # ── cal_attendees ─────────────────────────────────────────────────────────
+    # One row per attendee per event.
+    # Replaces the JSONB attendees blob that was stored in the old snapshot table.
+    """
+    CREATE TABLE IF NOT EXISTS public.cal_attendees (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_id        UUID        NOT NULL REFERENCES public.cal_events(id) ON DELETE CASCADE,
+        email           TEXT        NOT NULL,
+        display_name    TEXT,
+        response_status TEXT        NOT NULL DEFAULT 'needsAction'
+                                    CHECK (response_status IN ('needsAction', 'accepted', 'declined', 'tentative')),
+        is_organizer    BOOLEAN     NOT NULL DEFAULT FALSE,
+        is_self         BOOLEAN     NOT NULL DEFAULT FALSE,
+        optional        BOOLEAN     NOT NULL DEFAULT FALSE,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (event_id, email)
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_cal_attendees_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_cal_attendees_updated_at
+            BEFORE UPDATE ON public.cal_attendees
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_cal_attendees_event          ON public.cal_attendees(event_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cal_attendees_event_response ON public.cal_attendees(event_id, response_status)",
+
+    # ── cal_watch_channels ────────────────────────────────────────────────────
+    # Tracks Google Calendar push-notification channel registrations.
+    # One channel per (user, calendar) pair; renewed before expiry.
+    """
+    CREATE TABLE IF NOT EXISTS public.cal_watch_channels (
+        id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id              UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        calendar_id          UUID        NOT NULL REFERENCES public.cal_calendars(id) ON DELETE CASCADE,
+        channel_uuid         TEXT        NOT NULL UNIQUE,
+        google_resource_id   TEXT,
+        status               TEXT        NOT NULL DEFAULT 'active'
+                                         CHECK (status IN ('active', 'expired', 'stopped')),
+        expires_at           TIMESTAMPTZ,
+        registered_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_notification_at TIMESTAMPTZ,
+        created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_cal_watch_channels_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_cal_watch_channels_updated_at
+            BEFORE UPDATE ON public.cal_watch_channels
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_cal_watch_user       ON public.cal_watch_channels(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cal_watch_calendar   ON public.cal_watch_channels(calendar_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cal_watch_status     ON public.cal_watch_channels(status)",
+    "CREATE INDEX IF NOT EXISTS idx_cal_watch_expires_at ON public.cal_watch_channels(expires_at) WHERE status = 'active'",
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # LEGACY TABLES — kept for backward compatibility; no longer written to.
+    # google_calendar_events.raw_event is dropped to free up storage.
+    # ═══════════════════════════════════════════════════════════════════════════
+
     """
     CREATE TABLE IF NOT EXISTS public.google_calendars (
         id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -164,23 +350,6 @@ TABLES: list[str] = [
     )
     """,
 
-    """
-    DO $$ BEGIN
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_trigger
-            WHERE tgname = 'trg_google_calendars_updated_at'
-        ) THEN
-            CREATE TRIGGER trg_google_calendars_updated_at
-            BEFORE UPDATE ON public.google_calendars
-            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
-        END IF;
-    END $$
-    """,
-
-    "CREATE INDEX IF NOT EXISTS idx_google_calendars_user ON public.google_calendars(user_id)",
-    "CREATE INDEX IF NOT EXISTS idx_google_calendars_user_selected ON public.google_calendars(user_id, selected)",
-
-    # ── google calendar events snapshot ──────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS public.google_calendar_events (
         id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -205,7 +374,6 @@ TABLES: list[str] = [
         creator             JSONB,
         attendees           JSONB       NOT NULL DEFAULT '[]'::JSONB,
         reminders           JSONB,
-        raw_event           JSONB,
         is_readonly         BOOLEAN     NOT NULL DEFAULT FALSE,
         deleted_at          TIMESTAMPTZ,
         created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -214,24 +382,20 @@ TABLES: list[str] = [
     )
     """,
 
+    # Drop the raw_event blob from the legacy table if it still exists
     """
     DO $$ BEGIN
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_trigger
-            WHERE tgname = 'trg_google_calendar_events_updated_at'
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name   = 'google_calendar_events'
+              AND column_name  = 'raw_event'
         ) THEN
-            CREATE TRIGGER trg_google_calendar_events_updated_at
-            BEFORE UPDATE ON public.google_calendar_events
-            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+            ALTER TABLE public.google_calendar_events DROP COLUMN raw_event;
         END IF;
     END $$
     """,
 
-    "CREATE INDEX IF NOT EXISTS idx_google_calendar_events_user_start ON public.google_calendar_events(user_id, start_at)",
-    "CREATE INDEX IF NOT EXISTS idx_google_calendar_events_user_calendar_start ON public.google_calendar_events(user_id, google_calendar_id, start_at)",
-    "CREATE INDEX IF NOT EXISTS idx_google_calendar_events_active ON public.google_calendar_events(user_id, deleted_at) WHERE deleted_at IS NULL",
-
-    # ── google calendar sync/watch state ─────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS public.google_calendar_sync_state (
         id                     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -252,21 +416,6 @@ TABLES: list[str] = [
         UNIQUE (user_id)
     )
     """,
-
-    """
-    DO $$ BEGIN
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_trigger
-            WHERE tgname = 'trg_google_calendar_sync_state_updated_at'
-        ) THEN
-            CREATE TRIGGER trg_google_calendar_sync_state_updated_at
-            BEFORE UPDATE ON public.google_calendar_sync_state
-            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
-        END IF;
-    END $$
-    """,
-
-    "CREATE INDEX IF NOT EXISTS idx_google_calendar_sync_state_user ON public.google_calendar_sync_state(user_id)",
 ]
 
 

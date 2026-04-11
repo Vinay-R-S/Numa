@@ -24,6 +24,7 @@ export default function CalendarPage() {
     events,
     loading,
     error,
+    calendarConnected,
     agentMessages,
     fetchEvents,
     createEvent,
@@ -114,11 +115,6 @@ export default function CalendarPage() {
     }
   }, [clearError])
 
-  const calendarNotConnected =
-    !!error &&
-    (error.toLowerCase().includes("not connected") ||
-      error.toLowerCase().includes("oauth/start") ||
-      error.toLowerCase().includes("google oauth"))
 
   const handleSendAgentMessage = useCallback(async () => {
     const query = agentInput.trim()
@@ -169,7 +165,7 @@ export default function CalendarPage() {
   }, [events, searchQuery])
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-2rem)] w-full max-w-450 flex-col gap-3 overflow-hidden px-3 py-3 sm:gap-4 sm:px-6 sm:py-4">
+    <div className="mx-auto flex h-[calc(100dvh-3rem)] w-full max-w-[1200px] flex-col gap-3 overflow-hidden px-3 py-3 sm:h-[100dvh] sm:gap-4 sm:px-6 sm:py-4">
       <header className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20 sm:h-10 sm:w-10">
@@ -212,20 +208,32 @@ export default function CalendarPage() {
         </div>
       )}
 
+      {/* Calendar not connected — show a clean prompt, not a red error */}
+      {!loading && !calendarConnected && (
+        <div className="shrink-0 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 sm:p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <CalendarDays className="h-4 w-4 text-amber-400" />
+            <p className="text-sm font-medium text-amber-400">Google Calendar not connected</p>
+          </div>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Connect your Google Calendar to sync events, holidays, and birthdays with NUMA.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleConnectGoogleCalendar}
+            disabled={connectingGoogle}
+          >
+            {connectingGoogle ? "Redirecting to Google..." : "Connect Google Calendar"}
+          </Button>
+        </div>
+      )}
+
+      {/* Generic errors (not connection-related) */}
       {error && (
         <div className="shrink-0 rounded-xl border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           <p>{error}</p>
-          {calendarNotConnected && (
-            <Button
-              type="button"
-              variant="outline"
-              className="mt-3"
-              onClick={handleConnectGoogleCalendar}
-              disabled={connectingGoogle}
-            >
-              {connectingGoogle ? "Redirecting to Google..." : "Connect Google Calendar"}
-            </Button>
-          )}
         </div>
       )}
 

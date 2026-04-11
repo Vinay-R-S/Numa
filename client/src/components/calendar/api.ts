@@ -57,7 +57,6 @@ interface OAuthStartResponse {
   authorization_url: string
 }
 
-const CALENDAR_WINDOW_DAYS = 7
 
 function authHeaders() {
   const token = typeof window !== "undefined" ? localStorage.getItem("numa_token") : null
@@ -86,12 +85,17 @@ async function parseJsonResponse<T>(response: Response, fallbackMessage: string)
   return response.json() as Promise<T>
 }
 
-export async function fetchCalendarEvents(days: number = CALENDAR_WINDOW_DAYS): Promise<CalendarEvent[]> {
-  const safeDays = Math.max(1, Math.min(days, CALENDAR_WINDOW_DAYS))
-  const response = await fetch(`/api/calendar/events?days=${safeDays}`, {
+export async function fetchCalendarEvents(opts?: { refresh?: boolean }): Promise<CalendarEvent[]> {
+  const params = opts?.refresh ? "?refresh=true" : ""
+  const response = await fetch(`/api/calendar/events${params}`, {
     headers: authHeaders(),
     cache: "no-store",
   })
+
+  // If calendar is not connected the backend returns 401 — surface a friendly error
+  if (response.status === 401) {
+    throw new Error("CALENDAR_NOT_CONNECTED")
+  }
 
   const data = await parseJsonResponse<EventsApiResponse>(response, "Failed to load events")
 
@@ -191,6 +195,27 @@ export async function getGoogleCalendarAuthorizationUrl(): Promise<string> {
   }
 
   return data.authorization_url
+}
+
+export interface TokenHealthResult {
+  valid: boolean
+  connected: boolean
+  reason?: string
+  reconnect_url?: string
+}
+
+/** Actively validates the stored Google token by pinging the real Google API. */
+export async function checkCalendarTokenHealth(): Promise<TokenHealthResult> {
+  const response = await fetch(`/api/calendar/token/health`, {
+    headers: authHeaders(),
+    cache: "no-store",
+  })
+
+  if (!response.ok) {
+    return { valid: false, connected: false }
+  }
+
+  return response.json() as Promise<TokenHealthResult>
 }
 
 export function subscribeToCalendarUpdates(onUpdate: () => void): () => void {

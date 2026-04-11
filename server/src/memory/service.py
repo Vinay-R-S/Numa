@@ -4,10 +4,15 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 log = logging.getLogger(__name__)
+
+# Calendar collection name (separate from conversation memory)
+_CALENDAR_COLLECTION = os.getenv("QDRANT_CALENDAR_COLLECTION", "numa_calendar_events")
+_CALENDAR_EMBEDDING_DIM = 384  # all-MiniLM-L6-v2
+
 
 
 class SemanticMemoryService:
@@ -36,6 +41,13 @@ class SemanticMemoryService:
         self.openai_api_key = self._normalize_openai_key(os.getenv("OPENAI_API_KEY", ""))
         self.qdrant_url = os.getenv("QDRANT_URL", "").strip()
         self.qdrant_api_key = os.getenv("QDRANT_API_KEY", "").strip() or None
+
+        # Local file-mode: run Qdrant entirely on disk — no server, no Docker.
+        # Set QDRANT_LOCAL_PATH to a directory path to activate this mode.
+        # QDRANT_URL takes precedence when both are set.
+        _local_path_raw = os.getenv("QDRANT_LOCAL_PATH", "").strip()
+        self.qdrant_local_path: Optional[str] = _local_path_raw if _local_path_raw else None
+
         self.embedding_retry_after = timedelta(
             seconds=max(30, int(os.getenv("EMBEDDING_RETRY_AFTER_SECONDS", "300")))
         )
@@ -53,7 +65,9 @@ class SemanticMemoryService:
 
     @property
     def enabled(self) -> bool:
-        if not self.qdrant_url:
+        # Need at least one Qdrant backend (remote URL or local path)
+        has_backend = bool(self.qdrant_url) or bool(self.qdrant_local_path)
+        if not has_backend:
             return False
 
         if self.embedding_provider == "openai":
@@ -63,6 +77,11 @@ class SemanticMemoryService:
             return True
 
         return False
+
+    @property
+    def _using_local_mode(self) -> bool:
+        """True when Qdrant runs from local disk (no server needed)."""
+        return bool(self.qdrant_local_path) and not bool(self.qdrant_url)
 
     @lru_cache(maxsize=1)
     def _deps(self) -> Optional[dict]:
@@ -129,6 +148,16 @@ class SemanticMemoryService:
         deps = self._deps()
         if not deps:
             return None
+
+        if self._using_local_mode:
+            # Local file mode — no server or Docker required.
+            # Data is persisted to QDRANT_LOCAL_PATH on disk.
+            import os as _os
+            _os.makedirs(self.qdrant_local_path, exist_ok=True)
+            log.info("Qdrant running in local file mode at: %s", self.qdrant_local_path)
+            return deps["QdrantClient"](path=self.qdrant_local_path)
+
+        # Remote / Docker mode
         return deps["QdrantClient"](url=self.qdrant_url, api_key=self.qdrant_api_key)
 
     def _ensure_collection(self) -> bool:
@@ -478,3 +507,246 @@ class SemanticMemoryService:
 
 
 memory_service = SemanticMemoryService()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CALENDAR RAG — dedicated Qdrant collection  ("numa_calendar_events")
+# ══════════════════════════════════════════════════════════════════════════════
+# Uses the shared CachedEmbedder singleton so the model is only loaded once.
+
+def _cal_qdrant_client():
+    """Return the same local Qdrant client used by the memory service."""
+    return memory_service._qdrant_client()
+
+
+def _ensure_calendar_collection() -> bool:
+    """
+    Create the `numa_calendar_events` Qdrant collection if it doesn't exist.
+    Idempotent — safe to call on every ingest.
+    """
+    try:
+        qdrant = _cal_qdrant_client()
+        deps   = memory_service._deps()
+        if not qdrant or not deps:
+            return False
+
+        if not qdrant.collection_exists(_CALENDAR_COLLECTION):
+            qdrant.create_collection(
+                collection_name=_CALENDAR_COLLECTION,
+                vectors_config=deps["VectorParams"](
+                    size=_CALENDAR_EMBEDDING_DIM,
+                    distance=deps["Distance"].COSINE,
+                ),
+            )
+            log.info("Created Qdrant collection '%s'", _CALENDAR_COLLECTION)
+        return True
+    except Exception as exc:
+        log.warning("_ensure_calendar_collection failed: %s", exc)
+        return False
+
+
+def store_calendar_event(
+    user_id: str,
+    user_email: str,
+    calendar_id: str,
+    event_id: str,
+    title: str,
+    description: Optional[str],
+    start_at: datetime,
+    end_at: datetime,
+    is_all_day: bool,
+    calendar_type: str = "personal",
+) -> None:
+    """
+    Embed one Google Calendar event and upsert it into `numa_calendar_events`.
+
+    The point ID is stable — re-ingesting the same event updates the vector
+    in place rather than creating a duplicate.
+    """
+    if not user_id or not event_id:
+        return
+
+    # Lazy import to avoid circular dependency
+    try:
+        from src.embedder import embedder  # type: ignore
+    except ImportError:
+        try:
+            from ..embedder import embedder  # type: ignore
+        except ImportError:
+            log.warning("store_calendar_event: embedder not importable")
+            return
+
+    month_str = start_at.strftime("%Y-%m")
+    text_for_embedding = (
+        f"{title}. {description or ''}. "
+        f"Start: {start_at.isoformat()}. End: {end_at.isoformat()}. "
+        f"Calendar: {calendar_id}. Type: {calendar_type}."
+    ).strip()
+
+    vector = embedder.embed(text_for_embedding)
+    if not vector:
+        log.warning("store_calendar_event: embedding failed for event %s", event_id)
+        return
+
+    if not _ensure_calendar_collection():
+        return
+
+    qdrant = _cal_qdrant_client()
+    deps   = memory_service._deps()
+    if not qdrant or not deps:
+        return
+
+    point_id = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"numa:cal_event:{user_id}:{calendar_id}:{event_id}",
+    ).hex
+
+    payload: Dict = {
+        "user_id":       user_id,
+        "user_email":    user_email,
+        "app":           "google_calendar",
+        "calendar_id":   calendar_id,
+        "event_id":      event_id,
+        "calendar_type": calendar_type,
+        "title":         title,
+        "description":   description or "",
+        "start_at":      start_at.isoformat(),
+        "end_at":        end_at.isoformat(),
+        "is_all_day":    is_all_day,
+        "month":         month_str,
+        "text":          text_for_embedding,
+        "created_at":    datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        point = deps["PointStruct"](id=point_id, vector=vector, payload=payload)
+        qdrant.upsert(
+            collection_name=_CALENDAR_COLLECTION,
+            points=[point],
+            wait=False,
+        )
+    except Exception as exc:
+        log.warning("store_calendar_event upsert failed: %s", exc)
+
+
+def search_calendar_events(
+    user_id: str,
+    query: str,
+    limit: int = 6,
+) -> List[Dict]:
+    """
+    Semantic search over the user's calendar events stored in Qdrant.
+
+    Returns a list of event dicts in order of relevance. Each dict has:
+    title, start_at, end_at, description, calendar_id, is_all_day.
+    """
+    if not user_id or not query.strip():
+        return []
+
+    try:
+        from src.embedder import embedder  # type: ignore
+    except ImportError:
+        try:
+            from ..embedder import embedder  # type: ignore
+        except ImportError:
+            return []
+
+    vector = embedder.embed(query.strip())
+    if not vector:
+        return []
+
+    qdrant = _cal_qdrant_client()
+    deps   = memory_service._deps()
+    if not qdrant or not deps:
+        return []
+
+    try:
+        if not qdrant.collection_exists(_CALENDAR_COLLECTION):
+            return []
+
+        user_filter = deps["Filter"](
+            must=[
+                deps["FieldCondition"](
+                    key="user_id",
+                    match=deps["MatchValue"](value=user_id),
+                ),
+                deps["FieldCondition"](
+                    key="app",
+                    match=deps["MatchValue"](value="google_calendar"),
+                ),
+            ]
+        )
+
+        hits = qdrant.search(
+            collection_name=_CALENDAR_COLLECTION,
+            query_vector=vector,
+            query_filter=user_filter,
+            limit=limit,
+            with_payload=True,
+        )
+
+        results: List[Dict] = []
+        for hit in hits:
+            payload = getattr(hit, "payload", None) or {}
+            results.append({
+                "title":       payload.get("title", ""),
+                "start_at":    payload.get("start_at", ""),
+                "end_at":      payload.get("end_at", ""),
+                "description": payload.get("description", ""),
+                "calendar_id": payload.get("calendar_id", ""),
+                "is_all_day":  payload.get("is_all_day", False),
+                "calendar_type": payload.get("calendar_type", "personal"),
+            })
+        return results
+
+    except Exception as exc:
+        log.warning("search_calendar_events failed: %s", exc)
+        return []
+
+
+def delete_month_calendar_events(user_id: str, month_str: str) -> None:
+    """
+    Delete all Qdrant calendar vectors for *user_id* in *month_str* ("YYYY-MM").
+    Called during monthly purge to keep the vector store in sync with Supabase.
+    """
+    if not user_id or not month_str:
+        return
+
+    qdrant = _cal_qdrant_client()
+    deps   = memory_service._deps()
+    if not qdrant or not deps:
+        return
+
+    try:
+        if not qdrant.collection_exists(_CALENDAR_COLLECTION):
+            return
+
+        month_filter = deps["Filter"](
+            must=[
+                deps["FieldCondition"](
+                    key="user_id",
+                    match=deps["MatchValue"](value=user_id),
+                ),
+                deps["FieldCondition"](
+                    key="app",
+                    match=deps["MatchValue"](value="google_calendar"),
+                ),
+                deps["FieldCondition"](
+                    key="month",
+                    match=deps["MatchValue"](value=month_str),
+                ),
+            ]
+        )
+        qdrant.delete(
+            collection_name=_CALENDAR_COLLECTION,
+            points_selector=deps["Filter"](**{
+                "must": month_filter.must
+            }),
+            wait=False,
+        )
+        log.info(
+            "Purged Qdrant calendar events for user %s month %s",
+            user_id, month_str,
+        )
+    except Exception as exc:
+        log.warning("delete_month_calendar_events failed: %s", exc)
