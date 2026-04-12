@@ -125,6 +125,7 @@
   html {
     scroll-behavior: smooth;
     overflow-x: clip;
+    position: relative;
   }
   body {
     @apply bg-background text-foreground font-sans;

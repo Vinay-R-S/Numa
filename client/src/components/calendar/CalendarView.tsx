@@ -397,13 +397,13 @@ function DayEventBlock({
   return (
     <div
       className={cn(
-        "group absolute left-1 right-1 cursor-grab rounded-lg border px-2 py-1 transition-all duration-200 active:cursor-grabbing sm:px-2.5 sm:py-1.5",
+        "group absolute left-0.5 right-0.5 cursor-grab overflow-hidden rounded-md border-0 border-l-2 px-2 py-1 transition-all duration-150 active:cursor-grabbing sm:px-2.5 sm:py-1.5",
         isReadonly && "cursor-default",
         onTap && "cursor-pointer",
-        "hover:-translate-y-px hover:shadow-lg",
+        "bg-white/[0.05] hover:bg-white/[0.08]",
         isSecondary
-          ? "border-secondary/20 bg-linear-to-br from-secondary/25 to-primary/10 hover:border-secondary/50"
-          : "border-primary/20 bg-linear-to-br from-primary/25 to-secondary/10 hover:border-primary/50"
+          ? "border-l-secondary/70"
+          : "border-l-primary/70"
       )}
       style={{ top, height: Math.max(height, 24), zIndex: 10 }}
       onMouseDown={handleDragStart}
@@ -706,8 +706,8 @@ export default function CalendarView({
                             className={cn(
                               "truncate rounded border px-1 py-0.5 text-[8px] font-medium transition-all hover:-translate-y-px sm:px-1.5 sm:text-[10px]",
                               event.color === "secondary"
-                                ? "border-secondary/20 bg-linear-to-r from-secondary/25 to-primary/15"
-                                : "border-primary/20 bg-linear-to-r from-primary/25 to-secondary/15"
+                                ? "border-secondary/25 bg-secondary/15"
+                                : "border-primary/25 bg-primary/15"
                             )}
                           >
                             {event.title}
@@ -775,8 +775,8 @@ export default function CalendarView({
                           className={cn(
                             "cursor-pointer rounded border px-1 py-0.5 text-[8px] font-medium transition-all hover:-translate-y-px sm:px-1.5 sm:py-1 sm:text-[10px]",
                             calendarEvent.color === "secondary"
-                              ? "border-secondary/20 bg-linear-to-r from-secondary/25 to-primary/15"
-                              : "border-primary/20 bg-linear-to-r from-primary/25 to-secondary/15"
+                              ? "border-secondary/25 bg-secondary/15"
+                              : "border-primary/25 bg-primary/15"
                           )}
                         >
                           <div className="truncate">{calendarEvent.title}</div>
@@ -792,33 +792,35 @@ export default function CalendarView({
       )}
 
       {view === "day" && (
-        <div className="flex-1 overflow-auto rounded-lg border border-border/40 bg-card/40 p-1 sm:rounded-xl sm:p-2">
-          <div className="grid grid-cols-[40px_1fr] gap-px sm:grid-cols-[50px_1fr]">
+        <div className="relative flex-1 overflow-auto rounded-lg border border-white/[0.06] bg-black p-0 sm:rounded-xl">
+          <div className="grid grid-cols-[44px_1fr] sm:grid-cols-[52px_1fr]">
+            {/* Hour labels column */}
             <div className="relative" style={{ height: HOURS.length * SLOT_HEIGHT }}>
               {HOURS.map((hour) => (
                 <div
                   key={hour}
-                  className="absolute w-full pr-1 text-right text-[8px] text-muted-foreground sm:pr-2 sm:text-[10px]"
-                  style={{ top: (hour - 7) * SLOT_HEIGHT }}
+                  className="absolute w-full pr-2 text-right text-[9px] text-white/25 sm:text-[10px]"
+                  style={{ top: (hour - 7) * SLOT_HEIGHT - 7 }}
                 >
                   {formatHour(hour)}
                 </div>
               ))}
             </div>
-            <div className="relative" style={{ height: HOURS.length * SLOT_HEIGHT }}>
+            {/* Event column */}
+            <div className="relative border-l border-white/[0.06]" style={{ height: HOURS.length * SLOT_HEIGHT }}>
               {HOURS.map((hour) => (
                 <div
                   key={hour}
-                  className="absolute left-0 right-0 h-14 cursor-pointer border-t border-border/15 transition-colors hover:bg-accent/10"
-                  style={{ top: (hour - 7) * SLOT_HEIGHT }}
+                  className="absolute left-0 right-0 cursor-pointer border-t border-white/[0.06] transition-colors hover:bg-white/[0.02]"
+                  style={{ top: (hour - 7) * SLOT_HEIGHT, height: SLOT_HEIGHT }}
                   onClick={(event) => handleSlotClick(currentDate, hour, event)}
                 />
               ))}
 
               {showNowLine && isSameDay(currentDate, today) && (
                 <div className="absolute left-0 right-0 z-20 flex items-center" style={{ top: nowTop }}>
-                  <div className="h-2 w-2 rounded-full bg-destructive" />
-                  <div className="h-px flex-1 bg-destructive/60" />
+                  <div className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                  <div className="h-px flex-1 bg-red-500/50" />
                 </div>
               )}
 

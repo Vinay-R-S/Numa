@@ -15,10 +15,15 @@ SYSTEM_PROMPT = (
     "You are Numa, a smart calendar assistant with access to the user's Google Calendar data.\n"
     "You receive relevant calendar events as context in the system message — use them to answer"
     " questions directly and accurately.\n"
-    "Only call tools when you need to CREATE, EDIT, or DELETE events, search for something not"
+    "RULES:\n"
+    "1. To DELETE or MODIFY an event: ALWAYS call get_events_on_date or get_events FIRST to get"
+    " the real event ID. Never invent or guess an event_id.\n"
+    "2. Only call tools when you need to CREATE, EDIT, or DELETE events, search for something not"
     " in the provided context, or add an event to the Task list.\n"
-    "If required fields are missing, ask a short clarification question.\n"
-    "Never invent event IDs or datetimes."
+    "3. If required fields are missing, ask a short clarification question.\n"
+    "4. Never invent event IDs or datetimes — always fetch them from the tools first.\n"
+    "5. For deletions by description/name (e.g. 'delete the meeting at 10am'), prefer"
+    " delete_by_description which matches by title — no ID needed.\n"
 )
 
 
@@ -169,7 +174,9 @@ def _toolset(tool_decorator, user_id: str | None):
 
     @tool_decorator
     def get_events(days: int = 8) -> str:
-        """List events in a time window: past 7 days and future N days (excludes holidays/festivals)."""
+        """List events in a time window: past 7 days and future N days (excludes holidays/festivals).
+        Returns each event's ID, title, start time, and calendar name.
+        Use the returned event ID when calling delete_event or modify_event."""
         try:
             events = calendar_service.list_events_in_window(
                 lookback_days=7,
@@ -181,7 +188,7 @@ def _toolset(tool_decorator, user_id: str | None):
             lines = [f"Events in window ({len(events)}):"]
             for event in events:
                 lines.append(
-                    f"- {event['summary']} at {event['start']} [{event.get('calendar', 'Primary')}]"
+                    f"- ID={event['id']} | {event['summary']} at {event['start']} [{event.get('calendar', 'Primary')}]"
                 )
             return "\n".join(lines)
         except Exception as exc:
@@ -189,7 +196,9 @@ def _toolset(tool_decorator, user_id: str | None):
 
     @tool_decorator
     def get_events_on_date(date: str) -> str:
-        """List all events scheduled on a specific date (YYYY-MM-DD)."""
+        """List all events scheduled on a specific date (YYYY-MM-DD).
+        Returns each event's ID, title, and start time.
+        ALWAYS call this first before calling delete_event — use the returned event ID."""
         try:
             events = calendar_service.get_events_on_date(date, user_id=user_id)
             if not events:
@@ -197,7 +206,7 @@ def _toolset(tool_decorator, user_id: str | None):
             lines = [f"Events on {date}:"]
             for event in events:
                 lines.append(
-                    f"- {event['summary']} at {event['start']} [{event.get('calendar', 'Primary')}]"
+                    f"- ID={event['id']} | {event['summary']} at {event['start']} [{event.get('calendar', 'Primary')}]"
                 )
             return "\n".join(lines)
         except Exception as exc:
@@ -205,7 +214,10 @@ def _toolset(tool_decorator, user_id: str | None):
 
     @tool_decorator
     def delete_event(event_id: str) -> str:
-        """Delete a calendar event by id."""
+        """Delete a calendar event by its exact event ID.
+        IMPORTANT: The event_id must be obtained from get_events_on_date or get_events first.
+        Never pass 'primary' or any guessed value — always use the ID returned by a fetch tool.
+        Prefer delete_by_description if you only know the event name/title."""
         try:
             result = calendar_service.delete_calendar_event(event_id, user_id=user_id)
             return f"Event deleted successfully. ID: {result['deleted_event_id']}"

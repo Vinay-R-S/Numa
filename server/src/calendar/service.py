@@ -1588,8 +1588,24 @@ def update_event_from_payload(event_id: str, payload, user_id: Optional[str] = N
 def delete_event_by_id(event_id: str, user_id: Optional[str] = None) -> None:
     service = get_calendar_service(user_id=user_id)
     calendar_id, actual_event_id = _parse_calendar_event_id(event_id)
-    service.events().delete(calendarId=calendar_id, eventId=actual_event_id).execute()
+
+    try:
+        service.events().delete(calendarId=calendar_id, eventId=actual_event_id).execute()
+    except Exception as exc:
+        # HTTP 410 Gone means the event was already deleted on Google's side.
+        # Treat as success and proceed with local DB / task / Qdrant cleanup.
+        err_str = str(exc)
+        if "410" in err_str or "Resource has been deleted" in err_str:
+            log.info(
+                "Event %s/%s already deleted on Google (410) — proceeding with local cleanup.",
+                calendar_id, actual_event_id,
+            )
+        else:
+            raise  # Re-raise unexpected errors
+
+    # Always clean up PostgreSQL, tasks, and Qdrant regardless of Google's response
     _delete_cal_event_cleanup(user_id, calendar_id, actual_event_id)
+
 
 
 def _delete_cal_event_cleanup(

@@ -43,7 +43,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* On desktop when not locked, the sidebar is fixed-overlay so we need a spacer to reserve the rail width */}
       {!locked && <div className="hidden lg:block lg:w-14 shrink-0" />}
 
-      <main className="flex-1 overflow-y-auto min-w-0">
+      <main className="relative flex-1 overflow-y-auto min-w-0">
         {/* Mobile-only topbar with hamburger */}
         <div className="sticky top-0 z-10 flex items-center h-12 px-4 border-b border-border/50 bg-background/95 backdrop-blur-sm lg:hidden">
           <button

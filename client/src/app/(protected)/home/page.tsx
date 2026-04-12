@@ -124,7 +124,7 @@ export default function HomePage() {
           )}
         </div>
 
-        <div className="mb-3 min-h-0 flex-1 space-y-2 overflow-y-auto rounded-xl border border-border/30 bg-background/40 p-2 sm:p-3">
+        <div className="relative mb-3 min-h-0 flex-1 space-y-2 overflow-y-auto rounded-xl border border-border/30 bg-background/40 p-2 sm:p-3">
           {messages.map((message, index) => (
             <div
               key={`${message.role}-${index}`}

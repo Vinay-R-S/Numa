@@ -50,7 +50,7 @@ export default function LandingPage() {
   return (
     // overflow-x:clip clips horizontal overflow WITHOUT creating a scroll container
     // so position:sticky on children still works correctly (unlike overflow:hidden)
-    <div style={{ background: "#0a0a0b", overflowX: "clip" }}>
+    <div style={{ background: "#0a0a0b", overflowX: "clip", position: "relative" }}>
       <Navbar />
       <div
         ref={containerRef}

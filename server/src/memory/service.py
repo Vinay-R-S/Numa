@@ -331,7 +331,7 @@ class SemanticMemoryService:
             return
 
         try:
-            point = deps["PointStruct"](id=point_id, vector=vector, payload=payload)
+            point = deps["PointStruct"](id=uuid.UUID(point_id), vector=vector, payload=payload)
             qdrant.upsert(collection_name=self.collection_name, points=[point], wait=False)
         except Exception as exc:
             log.warning("Failed to upsert semantic memory point: %s", exc)
@@ -452,7 +452,7 @@ class SemanticMemoryService:
         try:
             qdrant.delete(
                 collection_name=self.collection_name,
-                points_selector=deps["PointIdsList"](points=[point_id]),
+                points_selector=deps["PointIdsList"](points=[uuid.UUID(point_id)]),
                 wait=False,
             )
         except Exception as exc:
