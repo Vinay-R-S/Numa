@@ -10,14 +10,16 @@ from typing import Annotated, Dict, List, Optional, Sequence, Tuple, TypedDict
 from ..calendar_agent.service import run_agent_chat
 from ..memory import memory_service
 from ..tasks import service as task_service
+from ..slack_agent.service import run_slack_agent_chat
 
 
 MASTER_ROUTER_PROMPT = (
     "You are NUMA master agent router. "
-    "Choose exactly one route for the user's request: calendar, tasks, or general. "
-    "Return strict JSON only with shape: {\"route\":\"calendar|tasks|general\",\"reason\":\"short\"}. "
+    "Choose exactly one route for the user's request: calendar, tasks, slack, or general. "
+    "Return strict JSON only with shape: {\"route\":\"calendar|tasks|slack|general\",\"reason\":\"short\"}. "
     "Use calendar for meeting/event/calendar operations. "
     "Use tasks for task list operations. "
+    "Use slack for Slack messages, Slack channels, sending Slack messages, or Slack-sourced task questions. "
     "Use general for small talk or questions that do not require tool actions."
 )
 
@@ -47,6 +49,7 @@ class MasterAgentState(TypedDict):
     delegated_to: Optional[str]
     refreshCalendar: bool
     refreshTasks: bool
+    refreshSlack: bool
 
 
 def _require_master_dependencies() -> Dict[str, object]:
@@ -172,7 +175,7 @@ def _invoke_json(llm, prompt: str, user_query: str, semantic_context: str = "") 
 def _route_query(query: str, semantic_context: str, llm) -> str:
     data = _invoke_json(llm, MASTER_ROUTER_PROMPT, query, semantic_context)
     route = str(data.get("route", "")).strip().lower()
-    if route in {"calendar", "tasks", "general"}:
+    if route in {"calendar", "tasks", "slack", "general"}:
         return route
 
     q = query.lower()
@@ -180,6 +183,8 @@ def _route_query(query: str, semantic_context: str, llm) -> str:
         return "calendar"
     if any(word in q for word in ("task", "todo", "to-do", "kanban", "list tasks")):
         return "tasks"
+    if any(word in q for word in ("slack", "channel", "message", "#general", "dm", "post to")):
+        return "slack"
     return "general"
 
 
@@ -476,7 +481,7 @@ def _answer_general(query: str, semantic_context: str, llm) -> str:
 
     prompt = (
         "You are NUMA master agent. Keep responses concise and action-oriented. "
-        "Mention that you can operate the Calendar sub-agent and Task sub-agent. "
+        "Mention that you can operate the Calendar sub-agent, Task sub-agent, and Slack sub-agent. "
         f"{context_block}\n\nUser: {query}"
     )
     response = llm.invoke(prompt)
@@ -535,6 +540,28 @@ def _build_master_graph(model_override: Optional[str] = None):
             "delegated_to": "task-subagent",
             "refreshCalendar": False,
             "refreshTasks": refresh_tasks,
+            "refreshSlack": False,
+        }
+
+    def delegate_slack(state: MasterAgentState) -> Dict:
+        result = run_slack_agent_chat(
+            query=state["query"],
+            history=state.get("history", []),
+            user_id=state["user_id"],
+            model=model_override,
+        )
+
+        response_text = str(result.get("response", "Done."))
+        if state["user_id"] and response_text.strip():
+            memory_service.store_turn(state["user_id"], state["query"], response_text)
+
+        return {
+            "response":      response_text,
+            "success":       bool(result.get("success", True)),
+            "delegated_to": "slack-subagent",
+            "refreshCalendar": False,
+            "refreshTasks":    bool(result.get("refresh_slack", False)),
+            "refreshSlack":    bool(result.get("refresh_slack", False)),
         }
 
     def answer_general(state: MasterAgentState) -> Dict:
@@ -545,11 +572,12 @@ def _build_master_graph(model_override: Optional[str] = None):
             memory_service.store_turn(state["user_id"], state["query"], response_text)
 
         return {
-            "response": response_text,
-            "success": True,
+            "response":      response_text,
+            "success":       True,
             "delegated_to": "master",
             "refreshCalendar": False,
-            "refreshTasks": False,
+            "refreshTasks":    False,
+            "refreshSlack":    False,
         }
 
     def choose_route(state: MasterAgentState):
@@ -558,13 +586,16 @@ def _build_master_graph(model_override: Optional[str] = None):
             return "calendar"
         if route == "tasks":
             return "tasks"
+        if route == "slack":
+            return "slack"
         return "general"
 
     workflow = StateGraph(MasterAgentState)
-    workflow.add_node("route_intent", route_intent)
+    workflow.add_node("route_intent",      route_intent)
     workflow.add_node("delegate_calendar", delegate_calendar)
-    workflow.add_node("delegate_tasks", delegate_tasks)
-    workflow.add_node("answer_general", answer_general)
+    workflow.add_node("delegate_tasks",    delegate_tasks)
+    workflow.add_node("delegate_slack",    delegate_slack)
+    workflow.add_node("answer_general",    answer_general)
 
     workflow.set_entry_point("route_intent")
     workflow.add_conditional_edges(
@@ -572,13 +603,15 @@ def _build_master_graph(model_override: Optional[str] = None):
         choose_route,
         {
             "calendar": "delegate_calendar",
-            "tasks": "delegate_tasks",
-            "general": "answer_general",
+            "tasks":    "delegate_tasks",
+            "slack":    "delegate_slack",
+            "general":  "answer_general",
         },
     )
     workflow.add_edge("delegate_calendar", END)
-    workflow.add_edge("delegate_tasks", END)
-    workflow.add_edge("answer_general", END)
+    workflow.add_edge("delegate_tasks",    END)
+    workflow.add_edge("delegate_slack",    END)
+    workflow.add_edge("answer_general",    END)
 
     return workflow.compile()
 
@@ -596,6 +629,7 @@ def run_master_agent_chat(
             "delegated_to": None,
             "refreshCalendar": False,
             "refreshTasks": False,
+            "refreshSlack": False,
         }
 
     if not _is_groq_configured():
@@ -608,6 +642,7 @@ def run_master_agent_chat(
             "delegated_to": None,
             "refreshCalendar": False,
             "refreshTasks": False,
+            "refreshSlack": False,
         }
 
     try:
@@ -625,6 +660,7 @@ def run_master_agent_chat(
             "delegated_to": None,
             "refreshCalendar": False,
             "refreshTasks": False,
+            "refreshSlack": False,
         }
 
         result = graph.invoke(initial_state)
@@ -635,6 +671,7 @@ def run_master_agent_chat(
             "delegated_to": result.get("delegated_to"),
             "refreshCalendar": bool(result.get("refreshCalendar", False)),
             "refreshTasks": bool(result.get("refreshTasks", False)),
+            "refreshSlack": bool(result.get("refreshSlack", False)),
         }
     except Exception as exc:
         return {
@@ -643,4 +680,5 @@ def run_master_agent_chat(
             "delegated_to": None,
             "refreshCalendar": False,
             "refreshTasks": False,
+            "refreshSlack": False,
         }

@@ -416,6 +416,84 @@ TABLES: list[str] = [
         UNIQUE (user_id)
     )
     """,
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SLACK INTEGRATION
+    # Rolling 7-day message window — old rows deleted nightly by scheduler.
+    # Slack tasks reuse public.tasks with source_name='Slack'.
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # ── slack_channels ────────────────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS public.slack_channels (
+        id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        slack_id      TEXT        NOT NULL UNIQUE,
+        name          TEXT,
+        team_id       TEXT        NOT NULL,
+        is_private    BOOLEAN     NOT NULL DEFAULT FALSE,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_slack_channels_slack_id ON public.slack_channels(slack_id)",
+    "CREATE INDEX IF NOT EXISTS idx_slack_channels_team_id  ON public.slack_channels(team_id)",
+
+    # ── slack_messages ────────────────────────────────────────────────────────
+    # 7-day rolling window. Qdrant vectors share the same ts as payload key.
+    """
+    CREATE TABLE IF NOT EXISTS public.slack_messages (
+        id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id          UUID        REFERENCES auth.users(id) ON DELETE SET NULL,
+        slack_user_id    TEXT        NOT NULL,
+        slack_team_id    TEXT        NOT NULL,
+        channel_id       UUID        REFERENCES public.slack_channels(id) ON DELETE SET NULL,
+        slack_channel_id TEXT        NOT NULL,
+        channel_name     TEXT,
+        text             TEXT,
+        ts               TEXT        NOT NULL UNIQUE,
+        thread_ts        TEXT,
+        message_type     TEXT        NOT NULL DEFAULT 'message',
+        raw_payload      JSONB,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_slack_messages_user       ON public.slack_messages(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_slack_messages_created_at ON public.slack_messages(created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_slack_messages_channel    ON public.slack_messages(slack_channel_id)",
+    "CREATE INDEX IF NOT EXISTS idx_slack_messages_ts         ON public.slack_messages(ts)",
+
+    # ── slack_auth ────────────────────────────────────────────────────────────
+    # One row per user — stores their Slack OAuth token.
+    """
+    CREATE TABLE IF NOT EXISTS public.slack_auth (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+        slack_user_id   TEXT        NOT NULL,
+        slack_team_id   TEXT        NOT NULL,
+        access_token    TEXT        NOT NULL,
+        bot_token       TEXT,
+        team_name       TEXT,
+        authed_user_obj JSONB,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_slack_auth_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_slack_auth_updated_at
+            BEFORE UPDATE ON public.slack_auth
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_slack_auth_user_id ON public.slack_auth(user_id)",
 ]
 
 

@@ -14,6 +14,7 @@ from src.tasks.router import router as tasks_router
 from src.calendar.router import router as calendar_router
 from src.calendar_agent.router import router as calendar_agent_router
 from src.master_agent.router import router as master_agent_router
+from src.slack_agent.router import router as slack_router
 from src.db import init_db
 
 log = logging.getLogger(__name__)
@@ -73,13 +74,29 @@ def _start_nightly_sync_scheduler():
             except Exception as exc:
                 log.warning("Nightly sync failed for user %s: %s", uid, exc)
 
+    def _slack_purge_job():
+        """Nightly purge of Slack messages older than 7 days (Qdrant + PostgreSQL)."""
+        try:
+            from src.slack_agent.router import purge_old_slack_messages
+            purge_old_slack_messages()
+            log.info("Nightly Slack purge complete.")
+        except Exception as exc:
+            log.warning("Nightly Slack purge failed: %s", exc)
+
     scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
     scheduler.add_job(
         _nightly_job,
         trigger=CronTrigger(hour=scheduler_hour, minute=scheduler_minute),
         id="nightly_calendar_sync",
         replace_existing=True,
-        misfire_grace_time=300,  # allow up to 5 min late start
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        _slack_purge_job,
+        trigger=CronTrigger(hour=3, minute=0),   # 03:00 IST — after calendar sync
+        id="nightly_slack_purge",
+        replace_existing=True,
+        misfire_grace_time=300,
     )
     scheduler.start()
     log.info(
@@ -87,6 +104,7 @@ def _start_nightly_sync_scheduler():
         scheduler_hour,
         scheduler_minute,
     )
+    log.info("Nightly Slack purge scheduled at 03:00 IST.")
 
 
 @app.on_event("startup")
@@ -100,6 +118,7 @@ app.include_router(tasks_router)
 app.include_router(calendar_router)
 app.include_router(calendar_agent_router)
 app.include_router(master_agent_router)
+app.include_router(slack_router)
 
 
 # ── Public ────────────────────────────────────────────────────────────────────

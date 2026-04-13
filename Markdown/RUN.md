@@ -1,7 +1,7 @@
 # NUMA - Project Setup & Run Guide
 
 > Complete instructions for setting up and running the NUMA productivity platform locally.
-> Stack: **Next.js 16** (frontend) · **FastAPI** (backend) · **Supabase** (Postgres) · **Qdrant local** (vector DB) · **Groq** (LLM) · **Google Calendar OAuth**
+> Stack: **Next.js 16** (frontend) · **FastAPI** (backend) · **Supabase** (Postgres) · **Qdrant local** (vector DB) · **Groq** (LLM) · **Google Calendar OAuth** · **Slack Events API**
 
 ## Table of Contents
 
@@ -11,10 +11,11 @@
 4. [Database Setup (Supabase)](#4-database-setup-supabase)
 5. [Vector DB Setup (Qdrant - no Docker)](#5-vector-db-setup-qdrant--no-docker)
 6. [Google Calendar OAuth Setup](#6-google-calendar-oauth-setup)
-7. [Running the Backend](#7-running-the-backend)
-8. [Running the Frontend](#8-running-the-frontend)
-9. [First-Time Usage Flow](#9-first-time-usage-flow)
-10. [Troubleshooting](#10-troubleshooting)
+7. [Slack Integration Setup](#7-slack-integration-setup)
+8. [Running the Backend](#8-running-the-backend)
+9. [Running the Frontend](#9-running-the-frontend)
+10. [First-Time Usage Flow](#10-first-time-usage-flow)
+11. [Troubleshooting](#11-troubleshooting)
 
 ## 1. Prerequisites
 
@@ -44,11 +45,14 @@ Numa/
 │       ├── auth/            ← JWT auth, Supabase integration
 │       ├── calendar/        ← Google Calendar sync, cache, normalized DB
 │       ├── calendar_agent/  ← LangGraph calendar AI agent  
-│       ├── master_agent/    ← Master orchestrator agent
+│       ├── master_agent/    ← Master orchestrator agent (routes to sub-agents)
+│       ├── slack_agent/     ← Slack sub-agent (LangGraph ReAct + Qdrant RAG)
 │       ├── memory/          ← Qdrant semantic memory service
 │       ├── tasks/           ← Task management
 │       └── db.py            ← DB schema init (auto-runs on startup)
-└── RUN.md                   ← This file
+├── Markdown/
+│   └── RUN.md               ← This file
+└── .gitignore
 ```
 
 ## 3. Environment Variables
@@ -148,7 +152,7 @@ Tables created on first run:
 | Table | Purpose |
 |---|---|
 | `public.profiles` | User profile (linked to Supabase auth.users) |
-| `public.tasks` | Task management with calendar sync |
+| `public.tasks` | Task management with calendar sync + Slack-sourced tasks |
 | `public.cal_calendars` | One row per Google calendar per user |
 | `public.cal_events` | Normalized calendar events (no raw JSON blobs) |
 | `public.cal_attendees` | One row per attendee per event |
@@ -156,6 +160,9 @@ Tables created on first run:
 | `public.google_calendars` | Legacy calendar list (kept for compat) |
 | `public.google_calendar_events` | Legacy events (raw_event blob removed) |
 | `public.google_calendar_sync_state` | Sync state tracking |
+| `public.slack_channels` | Tracked Slack channels |
+| `public.slack_messages` | Slack messages — 7-day rolling window |
+| `public.slack_auth` | Per-user Slack OAuth tokens |
 
 > **No manual SQL needed.** Just start the server and tables are created automatically.
 
@@ -240,7 +247,108 @@ If you see `invalid_grant: Bad Request`:
 - The code **automatically** deletes the stale token and returns a 401
 - Just re-connect from the UI (step 3 above)
 
-## 7. Running the Backend
+## 7. Slack Integration Setup
+
+Slack is integrated as a full sub-agent. The master agent routes Slack queries to the
+`slack_agent` which uses LangGraph + Groq and stores message vectors in Qdrant (7-day window).
+
+### 7a. Create a Slack App
+
+1. Go to [https://api.slack.com/apps](https://api.slack.com/apps) → **Create New App → From scratch**
+2. Name: `NUMA` | Workspace: your workspace
+
+### 7b. Configure OAuth & Permissions
+
+In your Slack App → **OAuth & Permissions**:
+
+**Bot Token Scopes** (add all):
+
+| Scope | Reason |
+|---|---|
+| `channels:history` | Read public channel messages |
+| `channels:read` | List channels |
+| `chat:write` | Post messages |
+| `users:read` | Resolve user names |
+| `team:read` | Get workspace info |
+
+**User Token Scopes**: `channels:history`, `chat:write`
+
+Add **Redirect URL**:
+```
+http://localhost:8000/slack/callback
+```
+
+### 7c. Enable Event Subscriptions (HTTP Events — industry standard)
+
+1. Install **ngrok**: `ngrok http 8000`
+2. Slack App → **Event Subscriptions** → Enable Events → ON
+3. Request URL: `https://<your-ngrok-id>.ngrok.io/slack/events`
+4. Wait for green ✓ **Verified** (NUMA auto-responds to URL verification challenge)
+5. Under **Subscribe to Bot Events**, add: `message.channels`, `message.groups`
+6. Save Changes
+
+> NUMA uses **HMAC-SHA256 signature verification** on every incoming event — the industry-standard security pattern for Slack apps.
+
+### 7d. Get your credentials
+
+| Variable | Where to find it |
+|---|---|
+| `SLACK_BOT_TOKEN` | OAuth & Permissions → Bot User OAuth Token (`xoxb-...`) |
+| `SLACK_SIGNING_SECRET` | Basic Information → App Credentials → Signing Secret |
+| `SLACK_CLIENT_ID` | Basic Information → App Credentials → Client ID |
+| `SLACK_CLIENT_SECRET` | Basic Information → App Credentials → Client Secret |
+
+### 7e. Add to `server/.env`
+
+```env
+# ====== SLACK ======
+SLACK_BOT_TOKEN=xoxb-your-bot-token-here
+SLACK_SIGNING_SECRET=your-signing-secret-here
+SLACK_CLIENT_ID=your-client-id-here
+SLACK_CLIENT_SECRET=your-client-secret-here
+SLACK_REDIRECT_URI=http://localhost:8000/slack/callback
+
+# Qdrant collection for Slack message vectors (7-day rolling window)
+QDRANT_SLACK_COLLECTION=numa_slack_messages
+SLACK_MESSAGE_RETENTION_DAYS=7
+```
+
+### 7f. Install Slack dependencies
+
+```bash
+cd server
+uv pip install slack_sdk httpx
+```
+
+### 7g. Connect from the NUMA UI
+
+1. Open NUMA → **Slack** (sidebar)
+2. Click **Connect Slack** → authorize in the OAuth popup
+3. You'll be redirected to the Slack page with `?connected=1`
+4. Messages from your workspace will now sync automatically
+
+### 7h. Slack API Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/slack/events` | HMAC | Slack Events API webhook |
+| `POST` | `/slack/chat` | JWT | Chat with Slack sub-agent |
+| `GET` | `/slack/messages` | JWT | List recent messages (7-day) |
+| `GET` | `/slack/channels` | JWT | List tracked channels |
+| `GET` | `/slack/status` | JWT | Check connection status |
+| `GET` | `/slack/connect` | JWT | Initiate OAuth flow |
+| `GET` | `/slack/callback` | — | OAuth callback |
+
+### 7i. 7-Day Data Retention
+
+| Store | Retention mechanism |
+|---|---|
+| **PostgreSQL** `slack_messages` | `WHERE created_at > NOW() - INTERVAL '7 days'` on reads; nightly DELETE |
+| **Qdrant** `numa_slack_messages` | Nightly purge via `created_at < cutoff` filter |
+
+The nightly purge runs at **03:00 IST** via APScheduler.
+
+## 8. Running the Backend
 
 ```bash
 # From the server/ directory
@@ -257,14 +365,15 @@ uvicorn main:app --reload --port 8000
 
 The server will:
 1. Load `server/.env`
-2. Auto-create/migrate all DB tables (`init_db()`)
+2. Auto-create/migrate all DB tables including Slack tables (`init_db()`)
 3. Start Qdrant in local file mode (creates `qdrant_storage/` if not exists)
 4. Download the embedding model on **first request** (~90MB, cached after)
+5. Schedule the nightly Slack purge job at 03:00 IST
 
 **API docs:** http://localhost:8000/docs  
 **Health check:** http://localhost:8000/health
 
-## 8. Running the Frontend
+## 9. Running the Frontend
 
 ```bash
 # From the client/ directory
@@ -278,7 +387,7 @@ npm run dev
 
 Open http://localhost:3000
 
-## 9. First-Time Usage Flow
+## 10. First-Time Usage Flow
 
 Follow these steps the very first time you set up the project:
 
@@ -288,18 +397,29 @@ Follow these steps the very first time you set up the project:
 3. Open Browser         →  http://localhost:3000
 4. Sign Up / Log In     →  via Supabase Auth (Google or email)
 5. Connect Calendar     →  Calendar page → "Connect Google Calendar" → OAuth flow
-6. Wait for first sync  →  Backend fetches current month's events, stores in DB + Qdrant
-7. Done                 →  Chat with the AI agent about your schedule
+6. Connect Slack        →  Slack page → "Connect Slack" → OAuth flow
+7. Start ngrok          →  ngrok http 8000  (then update Slack Event Subscriptions URL)
+8. Done                 →  Chat with the AI agent about your schedule and Slack messages
 ```
 
 > On subsequent runs, steps 1–2 are enough. Calendar data is cached (30-min TTL) and
 > Qdrant memory is persistent on disk.
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### `invalid_grant: Bad Request` (Calendar)
 - Token expired or revoked
 - Fix: Re-connect Google Calendar from the UI → Calendar page → Connect
+
+### Slack signature verification fails (`403`)
+- Check `SLACK_SIGNING_SECRET` in `server/.env` matches your Slack App's signing secret
+- Check the timestamp isn't more than 5 minutes old (clock skew)
+
+### Slack bot can't find channel
+- Invite the bot: in Slack type `/invite @NUMA` in the target channel
+
+### ngrok URL expired
+- Restart ngrok and update the Request URL in Slack App → Event Subscriptions
 
 ### Qdrant not working
 ```bash
@@ -350,8 +470,10 @@ uv sync
 |---|---|---|
 | Backend | `uv run uvicorn main:app --reload --port 8000` | http://localhost:8000 |
 | Frontend | `npm run dev` | http://localhost:3000 |
-| API Docs | - | http://localhost:8000/docs |
-| Health | - | http://localhost:8000/health |
+| API Docs | — | http://localhost:8000/docs |
+| Health | — | http://localhost:8000/health |
 | Vector DB | auto-started by backend | `qdrant_storage/` on disk |
 | DB Schema | auto-applied on startup | Supabase dashboard |
+| Slack Events | ngrok → `/slack/events` | HMAC-verified webhook |
+| Slack OAuth | `/slack/connect` → Slack | Per-user token in `slack_auth` |
 

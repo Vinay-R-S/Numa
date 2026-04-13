@@ -23,3 +23,4 @@ class MasterAgentChatResponse(BaseModel):
     delegated_to: Optional[str] = None
     refreshCalendar: bool = False
     refreshTasks: bool = False
+    refreshSlack: bool = False
