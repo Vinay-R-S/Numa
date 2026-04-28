@@ -1,0 +1,174 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-deep: #080d14;
+  --bg-card: rgba(16, 25, 40, 0.85);
+  --bg-card-hover: rgba(20, 32, 52, 0.95);
+  --border-subtle: rgba(148, 163, 184, 0.08);
+  --border-hover: rgba(148, 163, 184, 0.15);
+  --glow-cyan: rgba(6, 182, 212, 0.35);
+  --glow-green: rgba(16, 185, 129, 0.35);
+  --glow-orange: rgba(249, 115, 22, 0.35);
+  --glow-purple: rgba(168, 85, 247, 0.35);
+  --glow-indigo: rgba(99, 102, 241, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: radial-gradient(ellipse at 20% 10%, rgba(6,182,212,0.06) 0%, transparent 50%),
+              radial-gradient(ellipse at 80% 90%, rgba(99,102,241,0.06) 0%, transparent 50%),
+              linear-gradient(135deg, #080d14 0%, #0c1520 40%, #0f172a 100%);
+  min-height: 100vh;
+  color: #e2e8f0;
+  overflow-x: hidden;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(100,116,139,0.4); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(100,116,139,0.6); }
+
+@layer utilities {
+  /* Glass morphism cards */
+  .glass-effect {
+    background: var(--bg-card);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .glass-effect:hover {
+    border-color: var(--border-hover);
+  }
+
+  /* Neumorphic shadows */
+  .shadow-neumorphic {
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.04) inset,
+      0 20px 60px rgba(0,0,0,0.5),
+      0 8px 16px rgba(0,0,0,0.3),
+      0 1px 3px rgba(0,0,0,0.2);
+  }
+
+  .shadow-neumorphic-hover {
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.06) inset,
+      0 30px 80px rgba(0,0,0,0.6),
+      0 12px 24px rgba(0,0,0,0.35),
+      0 2px 4px rgba(0,0,0,0.25);
+  }
+
+  .shadow-neumorphic-inset {
+    box-shadow:
+      inset 0 2px 4px rgba(0,0,0,0.4),
+      inset 0 1px 2px rgba(0,0,0,0.3),
+      0 1px 0 rgba(255,255,255,0.03);
+  }
+
+  /* Text gradients */
+  .text-gradient {
+    background: linear-gradient(135deg, #67e8f9 0%, #818cf8 50%, #a78bfa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-gradient-cyan {
+    background: linear-gradient(135deg, #06b6d4 0%, #0ea5e9 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Glow effects */
+  .glow-cyan { filter: drop-shadow(0 0 12px var(--glow-cyan)); }
+  .glow-green { filter: drop-shadow(0 0 12px var(--glow-green)); }
+  .glow-orange { filter: drop-shadow(0 0 12px var(--glow-orange)); }
+
+  /* Animated background pulse */
+  .pulse-glow {
+    animation: pulseGlow 3s ease-in-out infinite;
+  }
+
+  /* Number font */
+  .font-mono-data {
+    font-family: 'JetBrains Mono', monospace;
+    font-feature-settings: 'tnum';
+  }
+
+  /* Ring track */
+  .ring-track {
+    stroke: rgba(100, 116, 139, 0.15);
+  }
+}
+
+/* Custom keyframes */
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes floatUp {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Metric card ring glow on hover */
+.metric-ring-container:hover svg circle:last-child {
+  filter: brightness(1.2);
+}
+
+/* Loading skeleton */
+.skeleton {
+  background: linear-gradient(90deg,
+    rgba(30,41,59,0.5) 25%,
+    rgba(51,65,85,0.5) 50%,
+    rgba(30,41,59,0.5) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Chart tooltip */
+.chart-tooltip {
+  backdrop-filter: blur(12px);
+  background: rgba(15,23,42,0.95);
+  border: 1px solid rgba(148,163,184,0.15);
+}
+
+/* Health score orbit rings */
+.orbit-ring {
+  animation: orbit 20s linear infinite;
+}
+
+@keyframes orbit {
+  from { transform: rotate(0deg) translateX(80px) rotate(0deg); }
+  to { transform: rotate(360deg) translateX(80px) rotate(-360deg); }
+}
