@@ -13,7 +13,7 @@ from ..tasks import service as task_service
 
 SYSTEM_PROMPT = (
     "You are Numa, a smart calendar assistant with access to the user's Google Calendar data.\n"
-    "You receive relevant calendar events as context in the system message — use them to answer"
+    "You receive relevant calendar events as context in the system message - use them to answer"
     " questions directly and accurately.\n"
     "RULES:\n"
     "1. To DELETE or MODIFY an event: ALWAYS call get_events_on_date or get_events FIRST to get"
@@ -21,9 +21,9 @@ SYSTEM_PROMPT = (
     "2. Only call tools when you need to CREATE, EDIT, or DELETE events, search for something not"
     " in the provided context, or add an event to the Task list.\n"
     "3. If required fields are missing, ask a short clarification question.\n"
-    "4. Never invent event IDs or datetimes — always fetch them from the tools first.\n"
+    "4. Never invent event IDs or datetimes - always fetch them from the tools first.\n"
     "5. For deletions by description/name (e.g. 'delete the meeting at 10am'), prefer"
-    " delete_by_description which matches by title — no ID needed.\n"
+    " delete_by_description which matches by title - no ID needed.\n"
 )
 
 
@@ -37,69 +37,36 @@ def _require_agent_dependencies():
     try:
         messages_module = importlib.import_module("langchain_core.messages")
         tools_module = importlib.import_module("langchain_core.tools")
-        groq_module = importlib.import_module("langchain_groq")
         graph_module = importlib.import_module("langgraph.graph")
 
-        AIMessage = getattr(messages_module, "AIMessage")
-        HumanMessage = getattr(messages_module, "HumanMessage")
-        SystemMessage = getattr(messages_module, "SystemMessage")
-        ToolMessage = getattr(messages_module, "ToolMessage")
-        tool = getattr(tools_module, "tool")
-        ChatGroq = getattr(groq_module, "ChatGroq")
-        END = getattr(graph_module, "END")
-        StateGraph = getattr(graph_module, "StateGraph")
+        return {
+            "AIMessage": getattr(messages_module, "AIMessage"),
+            "HumanMessage": getattr(messages_module, "HumanMessage"),
+            "SystemMessage": getattr(messages_module, "SystemMessage"),
+            "ToolMessage": getattr(messages_module, "ToolMessage"),
+            "tool": getattr(tools_module, "tool"),
+            "StateGraph": getattr(graph_module, "StateGraph"),
+            "END": getattr(graph_module, "END"),
+        }
     except ImportError as exc:
         raise RuntimeError(
-            "Agent dependencies are missing. Install langchain, langgraph, langchain-core, and langchain-groq."
+            "Agent dependencies are missing. Install langchain, langgraph, and langchain-core."
         ) from exc
 
-    return {
-        "AIMessage": AIMessage,
-        "HumanMessage": HumanMessage,
-        "SystemMessage": SystemMessage,
-        "ToolMessage": ToolMessage,
-        "tool": tool,
-        "ChatGroq": ChatGroq,
-        "StateGraph": StateGraph,
-        "END": END,
-    }
 
-def _resolve_groq_model(model_override: Optional[str]) -> str:
-    default_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-    if not model_override:
-        return default_model
-
-    selected = model_override.strip().lower()
-    aliases = {
-        "70b": "llama-3.3-70b-versatile",
-        "8b": "llama-3.1-8b-instant",
-        "llama-3.3-70b-versatile": "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant": "llama-3.1-8b-instant",
-    }
-
-    return aliases.get(selected, default_model)
+def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None):
+    from ..llm_factory import get_llm
+    kwargs = {}
+    if user_id:
+        kwargs["user_id"] = user_id
+    if model_override:
+        kwargs["model"] = model_override
+    return get_llm(**kwargs)
 
 
-def _get_llm(chat_groq_cls, model_override: Optional[str] = None):
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY is not configured")
-
-    model = _resolve_groq_model(model_override)
-    temperature = float(os.getenv("GROQ_TEMPERATURE", "0.2"))
-    return chat_groq_cls(model=model, temperature=temperature, api_key=api_key)
-
-
-def _is_groq_configured() -> bool:
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key:
-        return False
-
-    lower = api_key.lower()
-    if lower in {"your_groq_api_key_here", "gsk_your_groq_api_key_here", "your_groq_key"}:
-        return False
-
-    return True
+def _is_llm_configured(user_id: Optional[str] = None) -> bool:
+    from ..llm_factory import is_any_llm_configured
+    return is_any_llm_configured(user_id)
 
 
 def _build_rag_context(user_id: str, query: str) -> str:
@@ -115,7 +82,7 @@ def _build_rag_context(user_id: str, query: str) -> str:
         if not hits:
             return ""
 
-        lines = ["\n[Your Calendar — Relevant Events from this month]"]
+        lines = ["\n[Your Calendar - Relevant Events from this month]"]
         for evt in hits:
             title = evt.get("title") or "(No title)"
             start = evt.get("start_at") or ""
@@ -198,7 +165,7 @@ def _toolset(tool_decorator, user_id: str | None):
     def get_events_on_date(date: str) -> str:
         """List all events scheduled on a specific date (YYYY-MM-DD).
         Returns each event's ID, title, and start time.
-        ALWAYS call this first before calling delete_event — use the returned event ID."""
+        ALWAYS call this first before calling delete_event - use the returned event ID."""
         try:
             events = calendar_service.get_events_on_date(date, user_id=user_id)
             if not events:
@@ -216,7 +183,7 @@ def _toolset(tool_decorator, user_id: str | None):
     def delete_event(event_id: str) -> str:
         """Delete a calendar event by its exact event ID.
         IMPORTANT: The event_id must be obtained from get_events_on_date or get_events first.
-        Never pass 'primary' or any guessed value — always use the ID returned by a fetch tool.
+        Never pass 'primary' or any guessed value - always use the ID returned by a fetch tool.
         Prefer delete_by_description if you only know the event name/title."""
         try:
             result = calendar_service.delete_calendar_event(event_id, user_id=user_id)
@@ -292,7 +259,7 @@ def _toolset(tool_decorator, user_id: str | None):
         does not already contain the answer. Returns the top matching events.
         """
         if not user_id:
-            return "User not authenticated — cannot search calendar."
+            return "User not authenticated - cannot search calendar."
         try:
             hits = _qdrant_search(user_id, query, limit=8)
             if not hits:
@@ -324,7 +291,7 @@ def _toolset(tool_decorator, user_id: str | None):
         event_start_time should be in ISO format (YYYY-MM-DDTHH:MM:SS).
         """
         if not user_id:
-            return "User not authenticated — cannot add task."
+            return "User not authenticated - cannot add task."
         try:
             now = datetime.now(calendar_service.TIMEZONE)
             today_str = now.date().isoformat()
@@ -398,7 +365,7 @@ def _build_agent_graph(user_id: str | None, model_override: Optional[str] = None
         return None
 
     def call_model(state: AgentState) -> AgentState:
-        llm = _get_llm(deps["ChatGroq"], model_override=model_override)
+        llm = _get_llm(model_override=model_override, user_id=user_id)
         llm_with_tools = llm.bind_tools(tools)
 
         now = datetime.now(calendar_service.TIMEZONE)
@@ -488,11 +455,11 @@ def run_agent_chat(
     user_id: str | None = None,
     model: Optional[str] = None,
 ):
-    if not _is_groq_configured():
+    if not _is_llm_configured(user_id):
         return {
             "response": (
-                "Calendar sub-agent is unavailable right now because GROQ_API_KEY is not configured on the backend. "
-                "Add GROQ_API_KEY in server/.env and restart the backend server."
+                "Calendar sub-agent is unavailable - no LLM provider is configured. "
+                "Go to Settings and add an API key for your preferred AI provider."
             ),
             "success": True,
             "refreshCalendar": False,

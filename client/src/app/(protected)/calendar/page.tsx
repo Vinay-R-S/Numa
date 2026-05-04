@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CalendarDays, Search, Sparkles, X } from "lucide-react"
 
 import CalendarView from "@/components/calendar/CalendarView"
+import DayTimeline from "@/components/calendar/DayTimeline"
 import { EventEditDialog } from "@/components/calendar/EventEditDialog"
 import { AgentSuggestions } from "@/components/calendar/AgentSuggestions"
 import { Button } from "@/components/ui/button"
@@ -164,8 +165,28 @@ export default function CalendarPage() {
     )
   }, [events, searchQuery])
 
+  const todayEvents = useMemo(() => {
+    const now = new Date()
+    return events.filter(
+      (e) =>
+        e.date.getFullYear() === now.getFullYear() &&
+        e.date.getMonth() === now.getMonth() &&
+        e.date.getDate() === now.getDate()
+    )
+  }, [events])
+
+  const timelineSettings = useMemo(() => {
+    if (typeof window === "undefined") return {}
+    try {
+      const raw = localStorage.getItem("numa_timeline_settings")
+      return raw ? JSON.parse(raw) : {}
+    } catch {
+      return {}
+    }
+  }, [])
+
   return (
-    <div className="mx-auto flex h-[calc(100dvh-3rem)] w-full max-w-[1200px] flex-col gap-3 overflow-hidden px-3 py-3 sm:h-[100dvh] sm:gap-4 sm:px-6 sm:py-4">
+    <div className="mx-auto flex h-[calc(100dvh-3rem)] w-full flex-col gap-3 overflow-hidden px-3 py-3 sm:h-dvh sm:gap-4 sm:px-6 sm:py-4">
       <header className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20 sm:h-10 sm:w-10">
@@ -197,7 +218,7 @@ export default function CalendarPage() {
             className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-primary/35 bg-card/95 px-3 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-card sm:h-10 sm:gap-2 sm:px-4"
           >
             <Sparkles className="h-4 w-4 text-primary" />
-            <span className="hidden xs:inline">Agent</span>
+            <span className="hidden sm:inline">Agent</span>
           </button>
         </div>
       </header>
@@ -208,7 +229,7 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {/* Calendar not connected — show a clean prompt, not a red error */}
+      {/* Calendar not connected - show a clean prompt, not a red error */}
       {!loading && !calendarConnected && (
         <div className="shrink-0 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 sm:p-4">
           <div className="mb-2 flex items-center gap-2">
@@ -238,15 +259,26 @@ export default function CalendarPage() {
       )}
 
       {!loading && (
-        <section className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border/40 bg-card/40 p-2 sm:rounded-2xl sm:p-4">
-          <CalendarView
-            events={filteredEvents}
-            onCreateEvent={handleCreateEvent}
-            onUpdateEvent={handleUpdateEvent}
-            onDeleteEvent={handleDeleteEvent}
-            onEditEvent={setEditingEvent}
-          />
-        </section>
+        <div className="flex min-h-0 flex-1 gap-3 overflow-hidden sm:gap-4">
+          <section className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border border-border/40 bg-card/40 p-2 sm:rounded-2xl sm:p-4">
+            <CalendarView
+              events={filteredEvents}
+              onCreateEvent={handleCreateEvent}
+              onUpdateEvent={handleUpdateEvent}
+              onDeleteEvent={handleDeleteEvent}
+              onEditEvent={setEditingEvent}
+            />
+          </section>
+
+          <aside className="hidden h-full w-[320px] shrink-0 lg:block">
+            <DayTimeline
+              calendarEvents={todayEvents}
+              updateIntervalMs={timelineSettings.updateIntervalMs}
+              waterConfig={timelineSettings.waterEnabled === false ? { startHour: 0, endHour: 0, stepMinutes: 60 } : timelineSettings.waterConfig}
+              mealTimes={timelineSettings.mealTimes}
+            />
+          </aside>
+        </div>
       )}
 
       {editingEvent && (

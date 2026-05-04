@@ -1,47 +1,80 @@
-export type AiModelPreset = "70b" | "8b"
+export type AiProvider = "groq" | "openai" | "anthropic" | "gemini" | "ollama"
 
 export interface AiSettings {
-  enabled: boolean
-  modelPreset: AiModelPreset
+  provider: AiProvider
+  model_id: string
+  has_api_key: boolean
+  ollama_base_url?: string | null
+  temperature: number
 }
 
-const AI_ENABLED_KEY = "numa_ai_enabled"
-const AI_MODEL_PRESET_KEY = "numa_ai_model_preset"
-
-const DEFAULT_AI_SETTINGS: AiSettings = {
-  enabled: true,
-  modelPreset: "70b",
+export interface ProviderInfo {
+  id: AiProvider
+  name: string
+  configured_via_env: boolean
+  models: string[]
+  default_model: string
 }
 
-function normalizeModelPreset(value: string | null): AiModelPreset {
-  return value === "8b" ? "8b" : "70b"
+export interface ProvidersListResponse {
+  providers: ProviderInfo[]
+  current: AiSettings | null
 }
 
-export function getAiSettings(): AiSettings {
-  if (typeof window === "undefined") {
-    return DEFAULT_AI_SETTINGS
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+function getAuthHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {}
+  const token = localStorage.getItem("numa_token")
+  if (!token) return {}
+  return { Authorization: `Bearer ${token}` }
+}
+
+export async function fetchAiSettings(): Promise<ProvidersListResponse> {
+  const res = await fetch(`${API_BASE}/api/ai-settings`, {
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+  })
+  if (!res.ok) throw new Error(`Failed to fetch AI settings: ${res.status}`)
+  return res.json()
+}
+
+export async function updateAiSettings(body: {
+  provider: AiProvider
+  model_id: string
+  api_key?: string | null
+  ollama_base_url?: string | null
+  temperature?: number
+}): Promise<AiSettings> {
+  const res = await fetch(`${API_BASE}/api/ai-settings`, {
+    method: "PUT",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || `Failed to update AI settings: ${res.status}`)
   }
-
-  const enabledRaw = localStorage.getItem(AI_ENABLED_KEY)
-  const modelRaw = localStorage.getItem(AI_MODEL_PRESET_KEY)
-
-  const enabled = enabledRaw === null ? DEFAULT_AI_SETTINGS.enabled : enabledRaw === "true"
-  const modelPreset = normalizeModelPreset(modelRaw)
-
-  return { enabled, modelPreset }
+  return res.json()
 }
 
-export function setAiSettings(next: Partial<AiSettings>): AiSettings {
-  const current = getAiSettings()
-  const merged: AiSettings = {
-    enabled: typeof next.enabled === "boolean" ? next.enabled : current.enabled,
-    modelPreset: next.modelPreset ? normalizeModelPreset(next.modelPreset) : current.modelPreset,
-  }
+export async function resetAiSettings(): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/ai-settings`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error(`Failed to reset AI settings: ${res.status}`)
+}
 
+const LOCAL_ENABLED_KEY = "numa_ai_enabled"
+
+export function getLocalAiEnabled(): boolean {
+  if (typeof window === "undefined") return true
+  const raw = localStorage.getItem(LOCAL_ENABLED_KEY)
+  return raw === null ? true : raw === "true"
+}
+
+export function setLocalAiEnabled(enabled: boolean): void {
   if (typeof window !== "undefined") {
-    localStorage.setItem(AI_ENABLED_KEY, String(merged.enabled))
-    localStorage.setItem(AI_MODEL_PRESET_KEY, merged.modelPreset)
+    localStorage.setItem(LOCAL_ENABLED_KEY, String(enabled))
   }
-
-  return merged
 }

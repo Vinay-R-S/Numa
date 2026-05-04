@@ -34,9 +34,9 @@ const MONTHS = [
   "December",
 ]
 
-const HOURS = Array.from({ length: 15 }, (_, i) => i + 7) // 7 AM – 9 PM
+const HOURS = Array.from({ length: 15 }, (_, i) => i + 7) // 7 AM - 9 PM
 const SLOT_HEIGHT = 56
-// Sidebar rail width (collapsed) in px — used to keep popups from hiding behind the sidebar
+// Sidebar rail width (collapsed) in px - used to keep popups from hiding behind the sidebar
 const SIDEBAR_RAIL_WIDTH = 56
 
 function isSameDay(a: Date, b: Date) {

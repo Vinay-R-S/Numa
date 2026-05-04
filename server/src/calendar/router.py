@@ -135,10 +135,10 @@ def token_health(current_user: dict = Depends(get_current_user)):
     Returns a JSON object so the frontend can decide whether to prompt re-auth.
 
     Response shape:
-      { "valid": true,  "connected": true }        – token exists and works
-      { "valid": false, "connected": true,          – token file exists but is expired/revoked
+      { "valid": true,  "connected": true }        - token exists and works
+      { "valid": false, "connected": true,          - token file exists but is expired/revoked
         "reason": "...", "reconnect_url": "..." }
-      { "valid": false, "connected": false }        – no token file at all
+      { "valid": false, "connected": false }        - no token file at all
     """
     user_id = current_user.get("sub") if isinstance(current_user, dict) else None
     if not user_id:
@@ -155,7 +155,7 @@ def token_health(current_user: dict = Depends(get_current_user)):
         svc.calendarList().list(maxResults=1).execute()
         return {"valid": True, "connected": True}
     except RuntimeError as exc:
-        # Token exists but is expired/revoked — generate a fresh OAuth URL
+        # Token exists but is expired/revoked - generate a fresh OAuth URL
         try:
             state = _build_oauth_state(user_id)
             reconnect_url = build_google_oauth_authorization_url(

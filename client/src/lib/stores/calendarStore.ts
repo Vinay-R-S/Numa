@@ -66,7 +66,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load calendar events"
       if (msg === "CALENDAR_NOT_CONNECTED") {
-        // Not an error — just not connected yet. Let the UI show the reconnect prompt.
+        // Not an error - just not connected yet. Let the UI show the reconnect prompt.
         set({ calendarConnected: false, events: [] })
       } else {
         set({ error: msg })

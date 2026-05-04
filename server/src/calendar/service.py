@@ -6,9 +6,9 @@ Storage strategy
 ----------------
 All calendar data is persisted in the normalized cal_* tables:
 
-  cal_calendars   — one row per Google calendar per user (incl. holidays/birthdays)
-  cal_events      — one row per event, no raw JSON blobs
-  cal_attendees   — one row per attendee per event
+  cal_calendars   - one row per Google calendar per user (incl. holidays/birthdays)
+  cal_events      - one row per event, no raw JSON blobs
+  cal_attendees   - one row per attendee per event
 
 Cache strategy
 --------------
@@ -21,11 +21,11 @@ cal_events with SQL instead of re-fetching JSON, saving Groq context tokens.
 
 Calendar types
 --------------
-  personal  — user's own writeable calendars
-  shared    — calendars shared with the user (read-only or limited write)
-  holiday   — public holiday / festival calendars
-  birthday  — birthday / anniversary calendars
-  other     — everything else
+  personal  - user's own writeable calendars
+  shared    - calendars shared with the user (read-only or limited write)
+  holiday   - public holiday / festival calendars
+  birthday  - birthday / anniversary calendars
+  other     - everything else
 
 The frontend uses calendar_type for colour-coding.
 The agent tools use it to filter (e.g. skip holidays when listing meetings).
@@ -264,7 +264,7 @@ def get_credentials(user_id: Optional[str] = None):
                 err_str = str(refresh_err).lower()
                 if "invalid_grant" in err_str or "bad request" in err_str:
                     log.warning(
-                        "Google refresh token invalid for user %s — deleting stale token file. "
+                        "Google refresh token invalid for user %s - deleting stale token file. "
                         "User must reconnect via OAuth.",
                         user_id,
                     )
@@ -291,7 +291,7 @@ def get_credentials(user_id: Optional[str] = None):
 def _get_user_email(user_id: Optional[str]) -> str:
     """
     Read the authenticated Google user's email from the stored token JSON.
-    Returns empty string if unavailable (non-fatal — used only for Qdrant payload).
+    Returns empty string if unavailable (non-fatal - used only for Qdrant payload).
     """
     if not user_id:
         return ""
@@ -514,7 +514,7 @@ def list_all_calendars(service) -> List[Dict[str, Any]]:
     for cal in response.get("items", []):
         google_cal_id = str(cal.get("id") or "").strip().lower()
 
-        # Contacts calendar has no standalone events — skip always
+        # Contacts calendar has no standalone events - skip always
         if CONTACTS_CALENDAR_MARKER in google_cal_id:
             continue
 
@@ -600,7 +600,7 @@ def _is_supported_user_calendar(cal: Dict[str, Any]) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CACHE LAYER — read from cal_events DB before hitting Google API
+# CACHE LAYER - read from cal_events DB before hitting Google API
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _is_cache_fresh_for_month(user_id: str, month_start: datetime, month_end: datetime) -> bool:
@@ -748,7 +748,7 @@ def _read_month_events_from_db(user_id: str, month_start: datetime, month_end: d
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NORMALIZED STORAGE — cal_calendars / cal_events / cal_attendees
+# NORMALIZED STORAGE - cal_calendars / cal_events / cal_attendees
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _ensure_cal_calendar(user_id: str, cal: Dict, calendar_type: str = "personal") -> str:
@@ -894,7 +894,7 @@ def _upsert_cal_event(user_id: str, calendar_uuid: str, event: Dict) -> Optional
 def _upsert_cal_attendees(event_uuid: str, attendees_raw: Any) -> None:
     """
     Parse attendees list from a Google event and upsert into cal_attendees.
-    One row per attendee — no JSON blobs — so the agent can query RSVP status
+    One row per attendee - no JSON blobs - so the agent can query RSVP status
     with plain SQL instead of re-fetching from Google.
     """
     if not isinstance(attendees_raw, list) or not attendees_raw:
@@ -1083,7 +1083,7 @@ def _calendar_event_due_date(event: Dict) -> Optional[datetime]:
 
 def _sync_calendar_event_to_task(user_id: Optional[str], event: Dict) -> None:
     """
-    Sync a personal calendar event to the tasks table — TODAY's timed events only.
+    Sync a personal calendar event to the tasks table - TODAY's timed events only.
 
     Rules:
     - Holiday and birthday calendars are always skipped.
@@ -1107,22 +1107,22 @@ def _sync_calendar_event_to_task(user_id: Optional[str], event: Dict) -> None:
     today_local = datetime.now(TIMEZONE).date()
 
     if start_dt_raw:
-        # Timed event — must start today
+        # Timed event - must start today
         event_start = _to_local(_iso_to_datetime(start_dt_raw))
         if event_start.date() != today_local:
-            return  # Not today — skip
+            return  # Not today - skip
         is_all_day_event = False
     elif start_date_raw:
-        # All-day event — only sync if it's today AND from a personal (non-holiday) calendar
+        # All-day event - only sync if it's today AND from a personal (non-holiday) calendar
         try:
             event_date = datetime.fromisoformat(start_date_raw).date()
         except ValueError:
             return
         if event_date != today_local:
-            return  # Not today — skip
+            return  # Not today - skip
         is_all_day_event = True
     else:
-        return  # No usable date — skip
+        return  # No usable date - skip
 
     ical_uid    = str(event.get("iCalUID")         or "").strip()
     event_id    = str(event.get("id")              or "").strip()
@@ -1337,7 +1337,7 @@ def get_events_for_frontend(
     Cache behaviour
     ---------------
     If the DB cache is fresh (last_synced_at < CACHE_TTL_MINUTES ago) AND
-    there are events in the DB, serve from cal_events — no Google API call.
+    there are events in the DB, serve from cal_events - no Google API call.
     Pass force_refresh=True (or ?refresh=true on the endpoint) to bypass.
 
     This saves both Google API quota and Groq context tokens, because the
@@ -1410,7 +1410,7 @@ def get_events_on_date(date_str: str, user_id: Optional[str] = None) -> List[Dic
         day_start   = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=TIMEZONE)
         day_end     = datetime.combine(target_date, datetime.max.time()).replace(tzinfo=TIMEZONE)
 
-        # Try DB read — only personal events for the agent
+        # Try DB read - only personal events for the agent
         if user_id:
             conn = _get_conn()
             try:
@@ -1597,7 +1597,7 @@ def delete_event_by_id(event_id: str, user_id: Optional[str] = None) -> None:
         err_str = str(exc)
         if "410" in err_str or "Resource has been deleted" in err_str:
             log.info(
-                "Event %s/%s already deleted on Google (410) — proceeding with local cleanup.",
+                "Event %s/%s already deleted on Google (410) - proceeding with local cleanup.",
                 calendar_id, actual_event_id,
             )
         else:

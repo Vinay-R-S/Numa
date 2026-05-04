@@ -1,4 +1,4 @@
-import { getAiSettings } from "@/lib/aiSettings"
+import { getLocalAiEnabled } from "@/lib/aiSettings"
 
 export interface CalendarEvent {
   id: string
@@ -92,7 +92,7 @@ export async function fetchCalendarEvents(opts?: { refresh?: boolean }): Promise
     cache: "no-store",
   })
 
-  // If calendar is not connected the backend returns 401 — surface a friendly error
+  // If calendar is not connected the backend returns 401 - surface a friendly error
   if (response.status === 401) {
     throw new Error("CALENDAR_NOT_CONNECTED")
   }
@@ -234,15 +234,14 @@ export async function sendAgentCommand(
   query: string,
   history: AgentChatMessage[] = []
 ): Promise<AgentApiResponse> {
-  const aiSettings = getAiSettings()
-  if (!aiSettings.enabled) {
+  if (!getLocalAiEnabled()) {
     throw new Error("AI agents are disabled in Settings.")
   }
 
   const response = await fetch(`/api/agent/chat`, {
     method: "POST",
     headers: authHeaders(),
-    body: JSON.stringify({ query, history, model: aiSettings.modelPreset }),
+    body: JSON.stringify({ query, history }),
   })
 
   const data = await parseJsonResponse<AgentApiResponse>(response, "Agent request failed")
