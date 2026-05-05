@@ -1,19 +1,17 @@
 "use client"
 
 import React, { useState, useEffect, useRef, useCallback } from "react"
-import { motion, AnimatePresence } from "framer-motion"
 
 type BreathPhase = "inhale" | "hold" | "exhale"
 
 const phaseConfig = {
-  inhale: { duration: 4000, label: "Inhale...", color: "#7ec8c8", frequency: 396 },
-  hold: { duration: 2000, label: "Hold...", color: "#a78bfa", frequency: 528 },
-  exhale: { duration: 4000, label: "Exhale...", color: "#6366f1", frequency: 417 },
+  inhale: { duration: 4000, label: "Inhale...", frequency: 396 },
+  hold: { duration: 2000, label: "Hold...", frequency: 528 },
+  exhale: { duration: 4000, label: "Exhale...", frequency: 417 },
 }
 
 const phaseSequence: BreathPhase[] = ["inhale", "hold", "exhale"]
 
-// Play a gentle bell sound at phase transitions
 function playBreathBell(frequency: number) {
   if (typeof window === "undefined") return
 
@@ -38,7 +36,6 @@ function playBreathBell(frequency: number) {
     osc.start(ctx.currentTime)
     osc.stop(ctx.currentTime + 1.5)
 
-    // Clean up after sound finishes
     setTimeout(() => ctx.close(), 2000)
   } catch {}
 }
@@ -58,89 +55,74 @@ export function BreathingGuide({ isActive = true }: BreathingGuideProps) {
 
     setPhaseIndex(nextIndex)
     setCurrentPhase(nextPhase)
-
-    // Play bell sound at phase transition
     playBreathBell(phaseConfig[nextPhase].frequency)
   }, [phaseIndex])
 
   useEffect(() => {
     if (!isActive) return
 
-    // Play initial bell
     playBreathBell(phaseConfig[currentPhase].frequency)
 
-    // Set up timer for phase transitions
     timerRef.current = setTimeout(() => {
       advancePhase()
     }, phaseConfig[currentPhase].duration)
 
     return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current)
-      }
+      if (timerRef.current) clearTimeout(timerRef.current)
     }
   }, [currentPhase, isActive, advancePhase])
 
   const config = phaseConfig[currentPhase]
 
-  // Calculate orb size based on phase
-  const orbSize = currentPhase === "inhale" || currentPhase === "hold" ? 120 : 80
+  const orbClass =
+    currentPhase === "inhale"
+      ? "h-20 w-20 sm:h-28 sm:w-28"
+      : currentPhase === "hold"
+        ? "h-20 w-20 sm:h-28 sm:w-28"
+        : "h-14 w-14 sm:h-20 sm:w-20"
 
   return (
     <div className="flex flex-col items-center">
-      {/* Pulsing orb */}
-      <div className="relative mb-4">
-        {/* Glow effect */}
-        <motion.div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full blur-xl"
-          animate={{
-            width: orbSize + 40,
-            height: orbSize + 40,
-            backgroundColor: config.color,
-            opacity: 0.3,
-          }}
-          transition={{
-            duration: currentPhase === "inhale" ? 4 : currentPhase === "exhale" ? 4 : 0.3,
-            ease: "easeInOut",
-          }}
-        />
+      <style jsx>{`
+        @keyframes breathe-inhale {
+          0% { transform: scale(0.7); opacity: 0.5; }
+          100% { transform: scale(1); opacity: 0.8; }
+        }
+        @keyframes breathe-hold {
+          0%, 100% { transform: scale(1); opacity: 0.8; }
+        }
+        @keyframes breathe-exhale {
+          0% { transform: scale(1); opacity: 0.8; }
+          100% { transform: scale(0.7); opacity: 0.5; }
+        }
+        .breathe-inhale {
+          animation: breathe-inhale 4s ease-in-out forwards;
+        }
+        .breathe-hold {
+          animation: breathe-hold 2s ease-in-out forwards;
+        }
+        .breathe-exhale {
+          animation: breathe-exhale 4s ease-in-out forwards;
+        }
+      `}</style>
 
-        {/* Main orb */}
-        <motion.div
-          className="relative rounded-full"
-          style={{
-            boxShadow: `0 0 30px ${config.color}40`,
-          }}
-          animate={{
-            width: orbSize,
-            height: orbSize,
-            backgroundColor: config.color,
-          }}
-          transition={{
-            duration: currentPhase === "inhale" ? 4 : currentPhase === "exhale" ? 4 : 0.3,
-            ease: "easeInOut",
-          }}
+      <div className="relative mb-4 flex items-center justify-center" style={{ width: 120, height: 120 }}>
+        <div
+          key={`${currentPhase}-${phaseIndex}`}
+          className={`rounded-full bg-primary ${
+            currentPhase === "inhale"
+              ? "breathe-inhale"
+              : currentPhase === "hold"
+                ? "breathe-hold"
+                : "breathe-exhale"
+          }`}
+          style={{ width: 80, height: 80 }}
         />
       </div>
 
-      {/* Phase text */}
-      <AnimatePresence mode="wait">
-        <motion.p
-          key={currentPhase}
-          initial={{ opacity: 0, y: 5 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -5 }}
-          transition={{ duration: 0.3 }}
-          className="text-lg"
-          style={{
-            fontFamily: "'Crimson Pro', serif",
-            fontStyle: "italic",
-            color: config.color,
-          }}
-        >
-          {config.label}
-        </motion.p>
-      </AnimatePresence>
+      <p className={`text-sm sm:text-base text-primary italic ${orbClass ? "" : ""}`}>
+        {config.label}
+      </p>
     </div>
   )
 }

@@ -1,8 +1,8 @@
 "use client"
 
 import React, { useState } from "react"
-import { motion } from "framer-motion"
 import { Heart, Sparkles } from "lucide-react"
+import { Button } from "@/components/ui/button"
 
 interface ReflectionCardProps {
   onComplete: () => void
@@ -28,68 +28,42 @@ export function ReflectionCard({ onComplete }: ReflectionCardProps) {
     }
   }
 
-  const handleSkip = () => {
-    onComplete()
-  }
-
   return (
-    <div className="min-h-screen bg-[#0d0f14] flex items-center justify-center p-6">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.5 }}
-        className="max-w-lg w-full"
-      >
-        {/* Congratulations header */}
-        <div className="text-center mb-8">
-          <motion.div
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ delay: 0.2, type: "spring", stiffness: 200 }}
-            className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-r from-[#7ec8c8] to-[#a78bfa] flex items-center justify-center"
-          >
-            <Sparkles className="w-8 h-8 text-[#0d0f14]" />
-          </motion.div>
-          <h2
-            className="text-3xl font-light text-[#f0f0f0] mb-2"
-            style={{ fontFamily: "'Cinzel', serif" }}
-          >
+    <div className="min-h-screen flex items-center justify-center bg-background px-3 sm:px-6">
+      <div className="w-full max-w-lg">
+        {/* Header */}
+        <div className="mb-8 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border/40 bg-card/40">
+            <Sparkles className="h-7 w-7 text-primary" />
+          </div>
+          <h2 className="text-xl font-bold text-foreground sm:text-2xl">
             Beautiful Practice
           </h2>
-          <p className="text-[#9ca3af]" style={{ fontFamily: "'Crimson Pro', serif" }}>
+          <p className="mt-1 text-sm text-muted-foreground">
             Take a moment to reflect on your experience
           </p>
         </div>
 
         {/* Reflection card */}
-        <motion.div
-          key={currentPrompt}
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="rounded-2xl p-6 mb-6"
-          style={{
-            background: "rgba(255, 255, 255, 0.03)",
-            backdropFilter: "blur(12px)",
-            border: "1px solid rgba(255, 255, 255, 0.08)",
-          }}
-        >
+        <div className="mb-6 rounded-2xl border border-border/40 bg-card/40 p-4 sm:p-6">
           {/* Progress dots */}
-          <div className="flex justify-center gap-2 mb-6">
+          <div className="mb-6 flex justify-center gap-2">
             {reflectionPrompts.map((_, i) => (
               <div
                 key={i}
-                className={`w-2 h-2 rounded-full transition-colors duration-300 ${
-                  i === currentPrompt ? "bg-[#7ec8c8]" : i < currentPrompt ? "bg-[#7ec8c8]/50" : "bg-[rgba(126,200,200,0.15)]"
+                className={`h-2 w-2 rounded-full transition-colors ${
+                  i === currentPrompt
+                    ? "bg-primary"
+                    : i < currentPrompt
+                      ? "bg-primary/50"
+                      : "bg-border/40"
                 }`}
               />
             ))}
           </div>
 
           {/* Prompt */}
-          <h3
-            className="text-xl text-[#f0f0f0] text-center mb-6"
-            style={{ fontFamily: "'Crimson Pro', serif" }}
-          >
+          <h3 className="mb-6 text-center text-lg font-medium text-foreground">
             {reflectionPrompts[currentPrompt]}
           </h3>
 
@@ -98,55 +72,37 @@ export function ReflectionCard({ onComplete }: ReflectionCardProps) {
             value={reflection}
             onChange={(e) => setReflection(e.target.value)}
             placeholder="Write your thoughts here... (optional)"
-            className="w-full h-32 bg-[#0d0f14] border border-[rgba(255,255,255,0.08)] rounded-xl p-4 text-[#f0f0f0] placeholder-[#9ca3af]/60 resize-none focus:outline-none focus:border-[#7ec8c8]/50 transition-colors duration-300"
-            style={{ fontFamily: "'Crimson Pro', serif" }}
+            className="h-28 w-full resize-none rounded-xl border border-border/40 bg-background p-3 text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none sm:h-32 sm:p-4"
           />
-        </motion.div>
-
-        {/* Actions */}
-        <div className="flex gap-4">
-          <motion.button
-            onClick={handleSkip}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className="flex-1 py-3 rounded-xl text-[#9ca3af] hover:text-[#f0f0f0] transition-colors duration-300"
-            style={{
-              fontFamily: "'Cinzel', serif",
-              background: "rgba(255, 255, 255, 0.03)",
-              backdropFilter: "blur(12px)",
-              border: "1px solid rgba(255, 255, 255, 0.08)",
-            }}
-          >
-            Skip Reflection
-          </motion.button>
-          <motion.button
-            onClick={handleNext}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className="flex-1 py-3 rounded-xl bg-gradient-to-r from-[#7ec8c8] to-[#a78bfa] text-[#0d0f14] font-medium flex items-center justify-center gap-2"
-            style={{ fontFamily: "'Cinzel', serif" }}
-          >
-            {currentPrompt < reflectionPrompts.length - 1 ? (
-              "Next →"
-            ) : (
-              <>
-                <Heart className="w-4 h-4" /> Complete
-              </>
-            )}
-          </motion.button>
         </div>
 
-        {/* Namaste message */}
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          className="text-center text-[#9ca3af] text-sm mt-8"
-          style={{ fontFamily: "'Noto Serif Devanagari', serif" }}
-        >
-          🙏 नमस्ते — The light in me honors the light in you
-        </motion.p>
-      </motion.div>
+        {/* Actions */}
+        <div className="flex gap-3 sm:gap-4">
+          <Button
+            variant="outline"
+            onClick={onComplete}
+            className="flex-1"
+          >
+            Skip Reflection
+          </Button>
+          <Button
+            onClick={handleNext}
+            className="flex-1 gap-2"
+          >
+            {currentPrompt < reflectionPrompts.length - 1 ? (
+              "Next"
+            ) : (
+              <>
+                <Heart className="h-4 w-4" /> Complete
+              </>
+            )}
+          </Button>
+        </div>
+
+        <p className="mt-8 text-center text-sm text-muted-foreground">
+          The light in me honors the light in you
+        </p>
+      </div>
     </div>
   )
 }

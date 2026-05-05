@@ -57,7 +57,7 @@ export default function CTASection() {
             className="text-lg text-gray-400 max-w-xl mx-auto mb-10 leading-relaxed"
           >
             Connect your health trackers, calendars, repos, and communication
-            tools. Intelligent agents do the rest — surfacing insights and
+            tools. Intelligent agents do the rest - surfacing insights and
             automating your workflows across every platform.
           </motion.p>
 

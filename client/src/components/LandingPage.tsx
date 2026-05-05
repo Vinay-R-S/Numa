@@ -29,7 +29,7 @@ export default function LandingPage() {
   const text = "NUMA";
 
   // All chars start revealing at scroll 0 simultaneously (so A is never invisible).
-  // Each char completes at a staggered end point — N first, A last.
+  // Each char completes at a staggered end point - N first, A last.
   // Full reveal done by 15% scroll progress so ContentBox appears well after.
   const useCharReveal = (index: number) => {
     const totalRevealEnd = 0.15;

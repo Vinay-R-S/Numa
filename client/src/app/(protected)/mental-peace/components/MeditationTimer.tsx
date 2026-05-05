@@ -1,8 +1,8 @@
 "use client"
 
 import React, { useState, useEffect, useRef } from "react"
-import { motion } from "framer-motion"
 import { Play, Pause, RotateCcw } from "lucide-react"
+import { Button } from "@/components/ui/button"
 
 const presetTimes = [
   { label: "5 min", seconds: 5 * 60 },
@@ -23,7 +23,6 @@ export function MeditationTimer() {
         setTimeLeft((prev) => {
           if (prev <= 1) {
             setIsRunning(false)
-            // Play completion sound
             if (typeof window !== "undefined") {
               const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
               if (AudioContextClass) {
@@ -48,9 +47,7 @@ export function MeditationTimer() {
     }
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-      }
+      if (intervalRef.current) clearInterval(intervalRef.current)
     }
   }, [isRunning, timeLeft])
 
@@ -72,88 +69,58 @@ export function MeditationTimer() {
   }
 
   const progress = ((selectedTime - timeLeft) / selectedTime) * 100
+  const circumference = 2 * Math.PI * 54
 
   return (
-    <div
-      className="w-[280px] rounded-2xl p-6"
-      style={{
-        background: "rgba(255, 255, 255, 0.03)",
-        backdropFilter: "blur(12px)",
-        border: "1px solid rgba(255, 255, 255, 0.08)",
-      }}
-    >
-      <h3
-        className="text-sm font-medium mb-4"
-        style={{
-          fontFamily: "'Cinzel', serif",
-          color: "#a78bfa",
-        }}
-      >
+    <div className="w-full max-w-[280px] rounded-2xl border border-border/40 bg-card/40 p-4 sm:p-6">
+      <h3 className="mb-4 text-sm font-medium text-foreground">
         Meditation Timer
       </h3>
 
       {/* Timer display */}
       <div className="relative mb-6">
-        {/* Progress ring */}
-        <svg className="w-full h-auto" viewBox="0 0 120 120">
+        <svg className="h-auto w-full" viewBox="0 0 120 120">
           <circle
             cx="60"
             cy="60"
             r="54"
             fill="none"
-            stroke="rgba(126,200,200,0.15)"
+            className="stroke-border/40"
             strokeWidth="4"
           />
-          <motion.circle
+          <circle
             cx="60"
             cy="60"
             r="54"
             fill="none"
-            stroke="url(#timerGradientCool)"
+            className="stroke-primary"
             strokeWidth="4"
             strokeLinecap="round"
-            strokeDasharray={339.292}
-            strokeDashoffset={339.292 * (1 - progress / 100)}
+            strokeDasharray={circumference}
+            strokeDashoffset={circumference * (1 - progress / 100)}
             transform="rotate(-90 60 60)"
-            initial={false}
-            animate={{ strokeDashoffset: 339.292 * (1 - progress / 100) }}
-            transition={{ duration: 0.5 }}
+            style={{ transition: "stroke-dashoffset 0.5s ease" }}
           />
-          <defs>
-            <linearGradient id="timerGradientCool" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#7ec8c8" />
-              <stop offset="100%" stopColor="#a78bfa" />
-            </linearGradient>
-          </defs>
         </svg>
 
-        {/* Time display */}
         <div className="absolute inset-0 flex items-center justify-center">
-          <span
-            className="text-3xl font-light tabular-nums"
-            style={{
-              fontFamily: "'Cinzel', serif",
-              color: "#f0f0f0",
-            }}
-          >
+          <span className="text-2xl font-light tabular-nums text-foreground sm:text-3xl">
             {formatTime(timeLeft)}
           </span>
         </div>
       </div>
 
       {/* Preset buttons */}
-      <div className="flex gap-2 mb-4">
+      <div className="mb-4 flex gap-2">
         {presetTimes.map((preset) => (
           <button
             key={preset.seconds}
             onClick={() => handlePresetClick(preset.seconds)}
-            className="flex-1 py-1.5 text-xs rounded-lg transition-all duration-300"
-            style={{
-              fontFamily: "'Crimson Pro', serif",
-              background: selectedTime === preset.seconds ? "rgba(126,200,200,0.2)" : "rgba(255, 255, 255, 0.02)",
-              color: selectedTime === preset.seconds ? "#7ec8c8" : "#9ca3af",
-              border: selectedTime === preset.seconds ? "1px solid rgba(126,200,200,0.4)" : "1px solid rgba(255, 255, 255, 0.05)",
-            }}
+            className={`flex-1 rounded-lg border py-1.5 text-xs transition-colors ${
+              selectedTime === preset.seconds
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-border/30 bg-card/20 text-muted-foreground"
+            }`}
           >
             {preset.label}
           </button>
@@ -162,41 +129,23 @@ export function MeditationTimer() {
 
       {/* Controls */}
       <div className="flex gap-3">
-        <motion.button
+        <Button
           onClick={() => setIsRunning(!isRunning)}
-          whileHover={{ scale: 1.02, boxShadow: "0 0 20px rgba(126,200,200,0.3)" }}
-          whileTap={{ scale: 0.98 }}
-          className="flex-1 py-3 rounded-lg text-white font-medium flex items-center justify-center gap-2"
-          style={{
-            fontFamily: "'Cinzel', serif",
-            letterSpacing: "0.1em",
-            fontSize: "0.875rem",
-            background: "linear-gradient(135deg, #7ec8c8 0%, #6366f1 100%)",
-          }}
+          className="flex-1 gap-2"
         >
           {isRunning ? (
-            <>
-              <Pause className="w-4 h-4" /> PAUSE
-            </>
+            <><Pause className="h-4 w-4" /> Pause</>
           ) : (
-            <>
-              <Play className="w-4 h-4" /> START
-            </>
+            <><Play className="h-4 w-4" /> Start</>
           )}
-        </motion.button>
-        <motion.button
+        </Button>
+        <Button
+          variant="outline"
+          size="icon"
           onClick={handleReset}
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          className="p-3 rounded-lg transition-colors duration-300"
-          style={{
-            background: "rgba(255, 255, 255, 0.02)",
-            border: "1px solid rgba(255, 255, 255, 0.08)",
-            color: "#9ca3af",
-          }}
         >
-          <RotateCcw className="w-4 h-4" />
-        </motion.button>
+          <RotateCcw className="h-4 w-4" />
+        </Button>
       </div>
     </div>
   )

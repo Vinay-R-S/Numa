@@ -65,7 +65,7 @@ export default function Navbar() {
               </div>
             </div>
 
-            {/* Hamburger — shown below xl (1280px) */}
+            {/* Hamburger - shown below xl (1280px) */}
             <button
               className="xl:hidden text-white p-1"
               onClick={() => setMobileOpen(!mobileOpen)}
@@ -90,7 +90,7 @@ export default function Navbar() {
             transition={{ duration: 0.2 }}
             className="fixed inset-0 z-200 bg-[#0a0a0b]/95 backdrop-blur-2xl"
           >
-            {/* Header strip — same height as navbar */}
+            {/* Header strip - same height as navbar */}
             <div className="flex items-center justify-between px-4 h-14 border-b border-white/6">
               <span className="text-lg font-bold text-white tracking-tight">NUMA</span>
               <button

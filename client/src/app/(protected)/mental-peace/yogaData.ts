@@ -437,7 +437,7 @@ export const moodConfig: Record<MoodType, MoodConfig> = {
     gradient: "from-[#ec4899] to-[#be185d]",
     sequenceName: "Awakening Flow",
     flowSubtitle: "Feel & Connect",
-    therapeuticReason: "Numbness is the body's protective response to overwhelm. These poses are intentionally intense—Lion's breath breaks through emotional walls, while deep stretches and inversions flood the body with sensation. The sequence gently but firmly invites you back into feeling.",
+    therapeuticReason: "Numbness is the body's protective response to overwhelm. These poses are intentionally intense-Lion's breath breaks through emotional walls, while deep stretches and inversions flood the body with sensation. The sequence gently but firmly invites you back into feeling.",
     poses: [
       { poseId: "lion", moodReason: "Forceful breath and expression breaks through emotional numbness" },
       { poseId: "spinal-twist", moodReason: "Wrings out stagnation and awakens the spine's energy channels" },
