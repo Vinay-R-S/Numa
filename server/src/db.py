@@ -1,5 +1,5 @@
 """
-Database initialization — runs CREATE TABLE IF NOT EXISTS on every startup.
+Database initialization - runs CREATE TABLE IF NOT EXISTS on every startup.
 Add new table DDL to the TABLES list to have them auto-created.
 """
 import os
@@ -151,7 +151,7 @@ TABLES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_tasks_user_external_ref ON public.tasks(user_id, external_ref)",
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # GOOGLE CALENDAR — NORMALIZED SCHEMA
+    # GOOGLE CALENDAR - NORMALIZED SCHEMA
     # ═══════════════════════════════════════════════════════════════════════════
 
     # ── cal_calendars ─────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ TABLES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_cal_calendars_user_primary ON public.cal_calendars(user_id, is_primary)",
 
     # ── cal_events ────────────────────────────────────────────────────────────
-    # One row per calendar event — no raw JSON blobs.
+    # One row per calendar event - no raw JSON blobs.
     # user_id is denormalized (redundant FK) for fast single-table range queries
     # without needing to join through cal_calendars.
     """
@@ -327,7 +327,7 @@ TABLES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_cal_watch_expires_at ON public.cal_watch_channels(expires_at) WHERE status = 'active'",
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # LEGACY TABLES — kept for backward compatibility; no longer written to.
+    # LEGACY TABLES - kept for backward compatibility; no longer written to.
     # google_calendar_events.raw_event is dropped to free up storage.
     # ═══════════════════════════════════════════════════════════════════════════
 
@@ -419,7 +419,7 @@ TABLES: list[str] = [
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SLACK INTEGRATION
-    # Rolling 7-day message window — old rows deleted nightly by scheduler.
+    # Rolling 7-day message window - old rows deleted nightly by scheduler.
     # Slack tasks reuse public.tasks with source_name='Slack'.
     # ═══════════════════════════════════════════════════════════════════════════
 
@@ -464,7 +464,7 @@ TABLES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_slack_messages_ts         ON public.slack_messages(ts)",
 
     # ── slack_auth ────────────────────────────────────────────────────────────
-    # One row per user — stores their Slack OAuth token.
+    # One row per user - stores their Slack OAuth token.
     """
     CREATE TABLE IF NOT EXISTS public.slack_auth (
         id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -494,6 +494,150 @@ TABLES: list[str] = [
     """,
 
     "CREATE INDEX IF NOT EXISTS idx_slack_auth_user_id ON public.slack_auth(user_id)",
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # HEALTH INTEGRATION - Google Fit + Strava
+    # Rolling 7+1 day window. Rows older than 8 days are purged daily at 8 AM.
+    # One snapshot per user per day per source (google_fit / strava).
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    """
+    CREATE TABLE IF NOT EXISTS public.health_snapshots (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        source          TEXT        NOT NULL CHECK (source IN ('google_fit', 'strava')),
+        snapshot_date   DATE        NOT NULL,
+        steps           INTEGER,
+        active_minutes  INTEGER,
+        calories        INTEGER,
+        distance_km     REAL,
+        sleep_hours     REAL,
+        sleep_stages    JSONB,
+        activities      JSONB,
+        raw_data        JSONB,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, source, snapshot_date)
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_health_snapshots_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_health_snapshots_updated_at
+            BEFORE UPDATE ON public.health_snapshots
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_health_snapshots_user_date   ON public.health_snapshots(user_id, snapshot_date DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_health_snapshots_user_source ON public.health_snapshots(user_id, source, snapshot_date DESC)",
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # USER AI SETTINGS - per-user LLM provider, model, encrypted API key
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    """
+    CREATE TABLE IF NOT EXISTS public.user_ai_settings (
+        id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id           UUID        NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+        provider          TEXT        NOT NULL DEFAULT 'groq'
+                                      CHECK (provider IN ('groq', 'openai', 'anthropic', 'gemini', 'ollama')),
+        model_id          TEXT        NOT NULL DEFAULT 'llama-3.3-70b-versatile',
+        encrypted_api_key TEXT,
+        ollama_base_url   TEXT        DEFAULT 'http://localhost:11434',
+        temperature       REAL        NOT NULL DEFAULT 0.1,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_user_ai_settings_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_user_ai_settings_updated_at
+            BEFORE UPDATE ON public.user_ai_settings
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_user_ai_settings_user ON public.user_ai_settings(user_id)",
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # JOURNAL ENTRIES - user daily journal / notes
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    """
+    CREATE TABLE IF NOT EXISTS public.journal_entries (
+        id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        title       TEXT        NOT NULL DEFAULT '',
+        content     TEXT        NOT NULL DEFAULT '',
+        mood        TEXT        CHECK (mood IN ('great', 'good', 'okay', 'bad', 'terrible')),
+        entry_date  DATE        NOT NULL DEFAULT CURRENT_DATE,
+        tags        TEXT[]      DEFAULT '{}',
+        ai_summary  TEXT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, entry_date)
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_journal_entries_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_journal_entries_updated_at
+            BEFORE UPDATE ON public.journal_entries
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_journal_entries_user_date ON public.journal_entries(user_id, entry_date DESC)",
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # GITHUB INTEGRATION - OAuth token + cached contribution data
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    """
+    CREATE TABLE IF NOT EXISTS public.github_auth (
+        id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id          UUID        NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+        github_username  TEXT        NOT NULL,
+        github_user_id   INTEGER     NOT NULL,
+        access_token     TEXT        NOT NULL,
+        scope            TEXT,
+        avatar_url       TEXT,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_github_auth_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_github_auth_updated_at
+            BEFORE UPDATE ON public.github_auth
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_github_auth_user_id ON public.github_auth(user_id)",
 ]
 
 
@@ -512,4 +656,4 @@ def init_db() -> None:
         log.info("✓ Database tables verified / created.")
     except Exception as exc:
         log.error("✗ Database init failed: %s", exc)
-        # Non-fatal — app continues; fix the DB and restart
+        # Non-fatal - app continues; fix the DB and restart

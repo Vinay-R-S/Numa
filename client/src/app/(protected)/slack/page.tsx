@@ -2,8 +2,15 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { Bot, Hash, MessageSquare, RefreshCw, Send, Slack, Wifi, WifiOff, Zap } from "lucide-react"
+import { AtSign, Bot, Hash, Lock, Megaphone, MessageSquare, RefreshCw, Send, Slack, Sparkles, User, Wifi, WifiOff, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   SlackAgentMessage,
   SlackChannel,
@@ -15,6 +22,8 @@ import {
   getSlackMessages,
   getSlackStatus,
   sendSlackAgentCommand,
+  sendSlackMessage,
+  syncSlack,
 } from "@/components/agents/slackAgentApi"
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -35,9 +44,27 @@ function formatTime(dateStr: string | null | undefined): string {
   return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
+function getRelevance(text: string, slackUserId?: string | null) {
+  const isDirect = Boolean(slackUserId && text.includes(`<@${slackUserId}>`))
+  const isBroadcast =
+    text.includes("<!channel>") || text.includes("<!here>") || text.includes("<!everyone>")
+  return { isDirect, isBroadcast }
+}
+
+function channelIcon(ch: SlackChannel) {
+  if (ch.is_private) return <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+  if (ch.name?.startsWith("dm-") || ch.name?.startsWith("mpdm-"))
+    return <User className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+  return <Hash className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+}
+
+function channelDisplayName(ch: SlackChannel) {
+  return ch.name || ch.slack_id
+}
+
 // ── Connection Banner ────────────────────────────────────────────────────────────
 
-function ConnectionBanner({ status, onConnect }: { status: SlackStatus | null; onConnect: () => void }) {
+function ConnectionBanner({ status, onConnect }: { status: SlackStatus | null; onConnect: () => void | Promise<void> }) {
   if (!status) {
     return (
       <div className="flex items-center gap-3 rounded-xl border border-border/30 bg-card/60 px-5 py-3 text-sm text-muted-foreground">
@@ -75,7 +102,7 @@ function ConnectionBanner({ status, onConnect }: { status: SlackStatus | null; o
       <Button
         id="slack-connect-btn"
         size="sm"
-        onClick={onConnect}
+        onClick={() => { void onConnect() }}
         className="shrink-0 bg-[#E01E5A] text-white hover:bg-[#c91a4d] border-none"
       >
         <Slack className="mr-2 h-3.5 w-3.5" />
@@ -85,50 +112,65 @@ function ConnectionBanner({ status, onConnect }: { status: SlackStatus | null; o
   )
 }
 
-// ── Message Item ───────────────────────────────────────────────────────────────
+// ── Channel Sidebar Item ────────────────────────────────────────────────────────
 
-function MessageItem({ msg }: { msg: SlackMessage }) {
+function ChannelItem({ ch, active, onClick }: { ch: SlackChannel; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm transition-colors ${
+        active
+          ? "bg-primary/15 text-primary font-medium"
+          : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+      }`}
+    >
+      {channelIcon(ch)}
+      <span className="truncate">{channelDisplayName(ch)}</span>
+    </button>
+  )
+}
+
+// ── Message Item (channel-scoped) ───────────────────────────────────────────────
+
+function ChannelMessageItem({ msg }: { msg: SlackMessage }) {
   const displayText = formatSlackText(msg.text || "")
   const isThread = Boolean(msg.thread_ts && msg.thread_ts !== msg.ts)
+  const senderName = msg.slack_user_id
 
   return (
-    <div className="group flex items-start gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-accent/30">
-      {/* Channel avatar */}
-      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-primary/20">
-        <span className="text-[11px] font-bold text-primary">{isThread ? "↩" : "#"}</span>
+    <div className={`group flex items-start gap-3 px-4 py-2 transition-colors hover:bg-accent/20 ${isThread ? "ml-8 border-l-2 border-primary/20 pl-4" : ""}`}>
+      {/* Avatar */}
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20 mt-0.5">
+        <span className="text-xs font-bold text-primary">
+          {senderName?.slice(0, 2).toUpperCase() || "?"}
+        </span>
       </div>
 
       {/* Body */}
       <div className="flex-1 min-w-0">
-        <div className="mb-0.5 flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-semibold text-primary/80">
-            #{msg.channel_name || msg.slack_channel_id}
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm font-semibold text-foreground">
+            {senderName || "Unknown"}
+          </span>
+          <span className="text-[11px] text-muted-foreground/60">
+            {formatTime(msg.created_at) || timeAgo(msg.created_at)}
           </span>
           {isThread && (
-            <span className="text-[10px] text-muted-foreground/60 border border-border/40 rounded px-1.5 py-px">
+            <span className="text-[10px] text-muted-foreground/50 border border-border/30 rounded px-1 py-px">
               thread
             </span>
           )}
-          {msg.message_type !== "message" && (
-            <span className="text-[10px] text-muted-foreground/60 border border-border/40 rounded px-1.5 py-px">
-              {msg.message_type}
-            </span>
-          )}
         </div>
-        <p className="text-sm text-foreground/90 whitespace-pre-line break-words leading-relaxed">
+        <p className="mt-0.5 text-sm text-foreground/90 whitespace-pre-line wrap-break-word leading-relaxed">
           {displayText || <span className="italic text-muted-foreground/50">(empty)</span>}
         </p>
       </div>
-
-      {/* Time */}
-      <span className="shrink-0 pt-0.5 text-[11px] text-muted-foreground/50 group-hover:text-muted-foreground/70 transition-colors">
-        {timeAgo(msg.created_at)}
-      </span>
     </div>
   )
 }
 
-// ── Chat Bubble ────────────────────────────────────────────────────────────────
+// ── Chat Bubble (Agent panel) ───────────────────────────────────────────────────
 
 function ChatBubble({ msg }: { msg: SlackAgentMessage }) {
   const isUser = msg.role === "user"
@@ -165,6 +207,17 @@ export default function SlackPage() {
   const [channels, setChannels] = useState<SlackChannel[]>([])
   const [activeChannel, setActiveChannel] = useState<string>("")
   const [loadingMsgs, setLoadingMsgs] = useState(false)
+  const [filterMentions, setFilterMentions] = useState(false)
+  const [filterBroadcasts, setFilterBroadcasts] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+
+  // Compose (inline at bottom of messages area)
+  const [composeText, setComposeText] = useState("")
+  const [composeSending, setComposeSending] = useState(false)
+  const [composeError, setComposeError] = useState<string | null>(null)
+
+  // Agent panel
+  const [agentOpen, setAgentOpen] = useState(false)
 
   // Agent chat
   const [chatMessages, setChatMessages] = useState<SlackAgentMessage[]>([
@@ -178,6 +231,7 @@ export default function SlackPage() {
   const [sending, setSending] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // ── Status check ─────────────────────────────────────────────────────────────
 
@@ -190,52 +244,113 @@ export default function SlackPage() {
     }
   }, [])
 
-  // ── Load messages ─────────────────────────────────────────────────────────────
+  // ── Load channels ────────────────────────────────────────────────────────────
 
-  const loadMessages = useCallback(async () => {
-    setLoadingMsgs(true)
+  const loadChannels = useCallback(async () => {
     try {
-      const [msgs, chs] = await Promise.all([
-        getSlackMessages({ channel: activeChannel || undefined, limit: 60 }),
-        getSlackChannels(),
-      ])
-      setMessages(msgs)
+      const chs = await getSlackChannels()
       setChannels(chs)
     } catch {
-      // fail silently — messages may be empty if Slack not connected
+      // fail silently
+    }
+  }, [])
+
+  // ── Load messages for active channel ─────────────────────────────────────────
+
+  const loadMessages = useCallback(async () => {
+    if (!activeChannel) {
+      setMessages([])
+      return
+    }
+    setLoadingMsgs(true)
+    try {
+      const msgs = await getSlackMessages({ channel: activeChannel, limit: 60 })
+      setMessages(msgs)
+    } catch {
+      // fail silently
     } finally {
       setLoadingMsgs(false)
     }
   }, [activeChannel])
 
+  const syncMessages = useCallback(async () => {
+    setSyncing(true)
+    try {
+      await syncSlack()
+    } catch {
+      // ignore sync failures
+    } finally {
+      setSyncing(false)
+      await loadChannels()
+      await loadMessages()
+    }
+  }, [loadChannels, loadMessages])
+
   // ── Boot ──────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     checkStatus()
-  }, [checkStatus])
+    loadChannels()
+  }, [checkStatus, loadChannels])
 
   useEffect(() => {
+    if (!activeChannel) return
     loadMessages()
-    const id = setInterval(loadMessages, 15_000)
+    const id = setInterval(loadMessages, 30_000)
     return () => clearInterval(id)
-  }, [loadMessages])
+  }, [loadMessages, activeChannel])
 
-  // ── Scroll chat to bottom ─────────────────────────────────────────────────────
+  // ── Auto-scroll to bottom of messages ────────────────────────────────────────
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages])
+
+  // ── Scroll agent chat to bottom ──────────────────────────────────────────────
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [chatMessages])
 
-  // ── URL param: ?connected=1 after OAuth callback ──────────────────────────────
+  // ── URL param: ?connected=1 after OAuth callback ─────────────────────────────
 
   useEffect(() => {
     if (searchParams.get("connected") === "1") {
       checkStatus()
-      loadMessages()
+      loadChannels()
     }
-  }, [searchParams, checkStatus, loadMessages])
+  }, [searchParams, checkStatus, loadChannels])
 
-  // ── Send chat ─────────────────────────────────────────────────────────────────
+  // ── Select channel ───────────────────────────────────────────────────────────
+
+  const selectChannel = useCallback((slackId: string) => {
+    setActiveChannel(slackId)
+    setComposeText("")
+    setComposeError(null)
+  }, [])
+
+  // ── Send message to active channel ───────────────────────────────────────────
+
+  const handleComposeSend = async () => {
+    if (!activeChannel || !composeText.trim() || composeSending) return
+    setComposeSending(true)
+    setComposeError(null)
+    try {
+      const result = await sendSlackMessage(activeChannel, composeText.trim())
+      if (!result.ok) {
+        setComposeError(result.error || "Failed to send message")
+      } else {
+        setComposeText("")
+        void loadMessages()
+      }
+    } catch (err) {
+      setComposeError(err instanceof Error ? err.message : "Failed to send")
+    } finally {
+      setComposeSending(false)
+    }
+  }
+
+  // ── Send agent chat ──────────────────────────────────────────────────────────
 
   const handleSend = async () => {
     const q = chatInput.trim()
@@ -267,13 +382,31 @@ export default function SlackPage() {
 
   const canSend = useMemo(() => chatInput.trim().length > 0 && !sending, [chatInput, sending])
 
+  const filteredMessages = useMemo(() => {
+    if (!filterMentions && !filterBroadcasts) return messages
+
+    const slackUserId = status?.slack_user_id || ""
+    return messages.filter((msg) => {
+      const { isDirect, isBroadcast } = getRelevance(msg.text || "", slackUserId)
+      return (
+        (filterMentions && isDirect) ||
+        (filterBroadcasts && isBroadcast)
+      )
+    })
+  }, [messages, filterMentions, filterBroadcasts, status?.slack_user_id])
+
+  const activeChannelObj = useMemo(
+    () => channels.find((ch) => ch.slack_id === activeChannel),
+    [channels, activeChannel]
+  )
+
   // ── Render ─────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-7xl flex-col gap-4 px-3 py-4 sm:px-6 sm:py-6">
+    <div className="flex h-full w-full flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5">
 
       {/* ── Header ─────────────────────────────────────────────────────────────── */}
-      <header className="flex flex-col gap-3 rounded-2xl border border-border/40 bg-card/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+      <header className="flex flex-col gap-3 rounded-2xl border border-border/40 bg-card/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 shrink-0">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#E01E5A]/10 ring-1 ring-[#E01E5A]/20">
             <Slack className="h-5 w-5 text-[#E01E5A]" />
@@ -283,108 +416,247 @@ export default function SlackPage() {
               Slack Integration
             </h1>
             <p className="text-xs text-muted-foreground sm:text-sm">
-              AI-powered Slack agent • 7-day rolling message window • HMAC-verified webhooks
+              AI-powered Slack agent • 7-day rolling message window
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           <Button
+            id="slack-sync-btn"
+            variant="ghost"
+            size="sm"
+            onClick={() => { void syncMessages() }}
+            className="gap-2 text-muted-foreground hover:text-foreground"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">Sync</span>
+          </Button>
+          <Button
             id="slack-refresh-btn"
             variant="ghost"
             size="sm"
-            onClick={() => { void checkStatus(); void loadMessages() }}
+            onClick={() => { void checkStatus(); void loadChannels(); void loadMessages() }}
             className="gap-2 text-muted-foreground hover:text-foreground"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loadingMsgs ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
+          <Button
+            id="slack-agent-toggle"
+            variant={agentOpen ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setAgentOpen((v) => !v)}
+            className="gap-2"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Agent</span>
+          </Button>
         </div>
       </header>
 
       {/* ── Connection banner ────────────────────────────────────────────────── */}
-      <ConnectionBanner status={status} onConnect={connectSlack} />
+      <div className="shrink-0">
+        <ConnectionBanner status={status} onConnect={connectSlack} />
+      </div>
 
-      {/* ── Main two-panel grid ──────────────────────────────────────────────── */}
-      <div className="grid flex-1 grid-cols-1 gap-4 lg:grid-cols-5 min-h-0">
+      {/* ── Main chat area: sidebar + messages ───────────────────────────────── */}
+      <div className="flex flex-1 min-h-0 rounded-2xl border border-border/40 bg-card/40 overflow-hidden">
 
-        {/* ── LEFT: Message feed ────────────────────────────────────────────── */}
-        <section className="flex flex-col rounded-2xl border border-border/40 bg-card/40 overflow-hidden lg:col-span-3">
+        {/* ── Channel sidebar (desktop) ──────────────────────────────────────── */}
+        <aside className="hidden md:flex w-[240px] shrink-0 flex-col border-r border-border/40 bg-card/60">
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-border/30 shrink-0">
+            <MessageSquare className="h-4 w-4 text-primary/70" />
+            <span className="text-sm font-semibold text-foreground">Channels</span>
+            <span className="ml-auto rounded-full bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground">
+              {channels.length}
+            </span>
+          </div>
+          <div className="flex-1 overflow-y-auto px-2 py-2 space-y-0.5">
+            {channels.length === 0 ? (
+              <p className="px-3 py-6 text-xs text-muted-foreground/60 text-center">
+                {status?.connected ? "No channels found. Try syncing." : "Connect Slack to see channels."}
+              </p>
+            ) : (
+              channels.map((ch) => (
+                <ChannelItem
+                  key={ch.id}
+                  ch={ch}
+                  active={activeChannel === ch.slack_id}
+                  onClick={() => selectChannel(ch.slack_id)}
+                />
+              ))
+            )}
+          </div>
+        </aside>
 
-          {/* Feed header */}
-          <div className="flex items-center justify-between border-b border-border/40 px-4 py-3 shrink-0">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 text-primary/70" />
-              <span className="text-sm font-semibold text-foreground">Recent Messages</span>
-              <span className="rounded-full bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground">
-                7-day window
-              </span>
+        {/* ── Right: messages + input ────────────────────────────────────────── */}
+        <div className="flex flex-1 flex-col min-w-0">
+
+          {/* Channel header */}
+          <div className="flex flex-col gap-2 border-b border-border/30 px-4 py-3 shrink-0">
+            <div className="flex items-center gap-2 justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                {/* Mobile channel selector */}
+                <div className="md:hidden">
+                  <Select
+                    value={activeChannel || "__none__"}
+                    onValueChange={(v) => selectChannel(v === "__none__" ? "" : v)}
+                  >
+                    <SelectTrigger className="h-8 text-xs w-[180px]">
+                      <SelectValue placeholder="Select channel" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Select a channel</SelectItem>
+                      {channels.map((ch) => (
+                        <SelectItem key={ch.id} value={ch.slack_id}>
+                          {ch.is_private ? "🔒 " : "# "}{channelDisplayName(ch)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Desktop channel name */}
+                <div className="hidden md:flex items-center gap-2">
+                  {activeChannelObj ? (
+                    <>
+                      {channelIcon(activeChannelObj)}
+                      <span className="text-sm font-semibold text-foreground truncate">
+                        {channelDisplayName(activeChannelObj)}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">
+                      Select a channel to start chatting
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Filter pills */}
+              {activeChannel && (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setFilterMentions((prev) => !prev)}
+                    disabled={!status?.slack_user_id}
+                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                      filterMentions
+                        ? "bg-primary/15 text-primary"
+                        : "bg-muted/40 text-muted-foreground hover:bg-muted/70"
+                    } ${!status?.slack_user_id ? "opacity-50 cursor-not-allowed" : ""}`}
+                  >
+                    <AtSign className="h-3 w-3" />
+                    <span className="hidden sm:inline">Mentions</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterBroadcasts((prev) => !prev)}
+                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                      filterBroadcasts
+                        ? "bg-primary/15 text-primary"
+                        : "bg-muted/40 text-muted-foreground hover:bg-muted/70"
+                    }`}
+                  >
+                    <Megaphone className="h-3 w-3" />
+                    <span className="hidden sm:inline">@channel</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Channel chips */}
-          {channels.length > 0 && (
-            <div className="flex items-center gap-1.5 flex-wrap border-b border-border/30 px-4 py-2 shrink-0">
-              <button
-                id="slack-channel-all"
-                onClick={() => setActiveChannel("")}
-                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
-                  activeChannel === ""
-                    ? "bg-primary/15 text-primary"
-                    : "bg-muted/40 text-muted-foreground hover:bg-muted/70"
-                }`}
-              >
-                All channels
-              </button>
-              {channels.map((ch) => (
-                <button
-                  key={ch.id}
-                  id={`slack-channel-${ch.slack_id}`}
-                  onClick={() => setActiveChannel(ch.name || ch.slack_id)}
-                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
-                    activeChannel === (ch.name || ch.slack_id)
-                      ? "bg-primary/15 text-primary"
-                      : "bg-muted/40 text-muted-foreground hover:bg-muted/70"
-                  }`}
-                >
-                  <Hash className="h-2.5 w-2.5" />
-                  {ch.name || ch.slack_id}
-                </button>
-              ))}
-            </div>
-          )}
-
           {/* Messages list */}
-          <div className="flex-1 overflow-y-auto px-2 py-2 space-y-0.5">
-            {loadingMsgs && messages.length === 0 ? (
+          <div className="flex-1 overflow-y-auto">
+            {!activeChannel ? (
+              <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted/30">
+                  <MessageSquare className="h-8 w-8 text-muted-foreground/40" />
+                </div>
+                <div>
+                  <p className="text-base font-medium text-foreground/80">No channel selected</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {channels.length > 0
+                      ? "Pick a channel from the sidebar to view messages"
+                      : status?.connected
+                        ? "Sync your workspace to load channels"
+                        : "Connect Slack to get started"}
+                  </p>
+                </div>
+              </div>
+            ) : loadingMsgs && messages.length === 0 ? (
               <div className="flex h-40 items-center justify-center">
                 <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground/50" />
               </div>
-            ) : messages.length === 0 ? (
+            ) : filteredMessages.length === 0 ? (
               <div className="flex h-48 flex-col items-center justify-center gap-3 text-center px-6">
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted/40">
                   <MessageSquare className="h-6 w-6 text-muted-foreground/50" />
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-foreground">No messages yet</p>
+                  <p className="text-sm font-medium text-foreground">No messages</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {status?.connected
-                      ? "Messages from your Slack workspace will appear here automatically."
-                      : "Connect your Slack workspace to start seeing messages here."}
+                    {filterMentions || filterBroadcasts
+                      ? "No messages match your filters."
+                      : "No messages in this channel yet."}
                   </p>
                 </div>
               </div>
             ) : (
-              messages.map((msg) => <MessageItem key={msg.id} msg={msg} />)
+              <div className="py-2">
+                {filteredMessages.map((msg) => (
+                  <ChannelMessageItem key={msg.id} msg={msg} />
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
             )}
           </div>
-        </section>
 
-        {/* ── RIGHT: Slack sub-agent chat ──────────────────────────────────── */}
-        <section className="flex flex-col rounded-2xl border border-border/40 bg-card/40 overflow-hidden lg:col-span-2">
+          {/* Message input bar (always visible when channel selected) */}
+          {activeChannel && (
+            <div className="border-t border-border/30 px-4 py-3 shrink-0 bg-card/60">
+              {composeError && (
+                <p className="mb-2 text-xs text-destructive rounded-lg bg-destructive/10 px-3 py-2">
+                  {composeError}
+                </p>
+              )}
+              <div className="flex gap-2">
+                <input
+                  value={composeText}
+                  onChange={(e) => setComposeText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault()
+                      void handleComposeSend()
+                    }
+                  }}
+                  placeholder={`Message ${activeChannelObj ? channelDisplayName(activeChannelObj) : "channel"}…`}
+                  className="flex-1 rounded-xl border border-border/40 bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:opacity-50"
+                  disabled={composeSending}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void handleComposeSend()}
+                  disabled={composeSending || !composeText.trim()}
+                  className="shrink-0 h-[42px] px-4"
+                >
+                  <Send className="h-4 w-4 sm:mr-1.5" />
+                  <span className="hidden sm:inline">{composeSending ? "…" : "Send"}</span>
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Floating Slack Agent chat panel ──────────────────────────────── */}
+      {agentOpen && (
+        <section className="fixed inset-x-3 bottom-3 top-auto z-40 flex max-h-[70vh] flex-col rounded-2xl border border-border/40 bg-card/95 p-3 shadow-2xl backdrop-blur-md sm:inset-auto sm:right-6 sm:bottom-6 sm:h-[min(70vh,640px)] sm:w-[min(420px,calc(100vw-3rem))] sm:p-4">
 
           {/* Chat header */}
-          <div className="flex items-center gap-2 border-b border-border/40 px-4 py-3 shrink-0">
+          <div className="flex items-center gap-2 border-b border-border/40 px-1 pb-3 shrink-0">
             <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10">
               <Zap className="h-3.5 w-3.5 text-primary" />
             </div>
@@ -392,10 +664,17 @@ export default function SlackPage() {
             <span className="ml-auto rounded-full border border-border/30 bg-background/40 px-2 py-0.5 text-[10px] text-muted-foreground">
               Groq · LangGraph
             </span>
+            <button
+              type="button"
+              onClick={() => setAgentOpen(false)}
+              className="ml-1 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
 
           {/* Quick actions */}
-          <div className="border-b border-border/20 px-3 py-2 shrink-0">
+          <div className="border-b border-border/20 px-1 py-2 shrink-0">
             <div className="flex flex-wrap gap-1.5">
               {[
                 "Show recent messages",
@@ -415,7 +694,7 @@ export default function SlackPage() {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto space-y-3 p-4 min-h-0">
+          <div className="flex-1 overflow-y-auto space-y-3 px-1 py-3 min-h-0">
             {chatMessages.map((msg, i) => (
               <ChatBubble key={`${msg.role}-${i}`} msg={msg} />
             ))}
@@ -444,7 +723,7 @@ export default function SlackPage() {
           </div>
 
           {/* Input */}
-          <div className="border-t border-border/40 p-3 shrink-0">
+          <div className="border-t border-border/40 px-1 pt-3 shrink-0">
             <div className="flex gap-2">
               <input
                 id="slack-chat-input"
@@ -474,7 +753,7 @@ export default function SlackPage() {
             </div>
           </div>
         </section>
-      </div>
+      )}
     </div>
   )
 }

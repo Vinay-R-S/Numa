@@ -1,4 +1,4 @@
-import { getAiSettings } from "@/lib/aiSettings"
+import { getLocalAiEnabled } from "@/lib/aiSettings"
 
 export interface MasterAgentMessage {
   role: "user" | "assistant"
@@ -11,6 +11,22 @@ export interface MasterAgentResponse {
   delegated_to?: string | null
   refreshCalendar?: boolean
   refreshTasks?: boolean
+  refreshSlack?: boolean
+  refreshHealth?: boolean
+  refreshGithub?: boolean
+  refreshJournal?: boolean
+}
+
+export interface MasterAgentFetchLatestResponse {
+  ok: boolean
+  scope: string
+  users: number
+  results: Array<{
+    user_id: string
+    calendar: { ok: boolean; fetched: number; detail: string }
+    slack: { ok: boolean; fetched: number; channels?: number; detail: string }
+  }>
+  retention: Record<string, unknown>
 }
 
 function authHeaders() {
@@ -42,15 +58,14 @@ export async function sendMasterAgentCommand(
   query: string,
   history: MasterAgentMessage[] = []
 ): Promise<MasterAgentResponse> {
-  const aiSettings = getAiSettings()
-  if (!aiSettings.enabled) {
+  if (!getLocalAiEnabled()) {
     throw new Error("AI agents are disabled in Settings.")
   }
 
   const response = await fetch(`/api/master-agent/chat`, {
     method: "POST",
     headers: authHeaders(),
-    body: JSON.stringify({ query, history, model: aiSettings.modelPreset }),
+    body: JSON.stringify({ query, history }),
   })
 
   const data = await parseJsonResponse<MasterAgentResponse>(response, "Master agent request failed")
@@ -59,4 +74,16 @@ export async function sendMasterAgentCommand(
   }
 
   return data
+}
+
+export async function fetchLatestAgentData(): Promise<MasterAgentFetchLatestResponse> {
+  const response = await fetch(`/api/master-agent/fetch-latest`, {
+    method: "POST",
+    headers: authHeaders(),
+  })
+
+  return parseJsonResponse<MasterAgentFetchLatestResponse>(
+    response,
+    "Failed to fetch latest app data"
+  )
 }

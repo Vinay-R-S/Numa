@@ -64,6 +64,29 @@ class SlackStatusOut(BaseModel):
     bot_configured: bool = False   # True when SLACK_BOT_TOKEN env var is set
 
 
+# ── Sync ─────────────────────────────────────────────────────────────────────
+
+class SlackSyncOut(BaseModel):
+    ok: bool
+    fetched: int = 0
+    channels: int = 0
+    detail: Optional[str] = None
+
+
+# ── Send Message ──────────────────────────────────────────────────────────────
+
+class SlackSendMessageRequest(BaseModel):
+    channel_id: str
+    text: str
+    thread_ts: Optional[str] = None
+
+
+class SlackSendMessageResponse(BaseModel):
+    ok: bool
+    ts: Optional[str] = None
+    error: Optional[str] = None
+
+
 # ── Events (incoming webhook from Slack) ──────────────────────────────────────
 
 class SlackEventPayload(BaseModel):

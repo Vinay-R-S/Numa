@@ -1,9 +1,7 @@
 import importlib
-import json
 import operator
 import os
-import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Annotated, Dict, List, Optional, Sequence, Tuple, TypedDict
 
@@ -11,16 +9,32 @@ from ..calendar_agent.service import run_agent_chat
 from ..memory import memory_service
 from ..tasks import service as task_service
 from ..slack_agent.service import run_slack_agent_chat
+from ..health_agent.service import run_health_agent_chat
+from ..github_agent.service import run_github_agent_chat
+from ..leetcode.service import run_leetcode_agent_chat
 
 
-MASTER_ROUTER_PROMPT = (
-    "You are NUMA master agent router. "
-    "Choose exactly one route for the user's request: calendar, tasks, slack, or general. "
-    "Return strict JSON only with shape: {\"route\":\"calendar|tasks|slack|general\",\"reason\":\"short\"}. "
-    "Use calendar for meeting/event/calendar operations. "
-    "Use tasks for task list operations. "
-    "Use slack for Slack messages, Slack channels, sending Slack messages, or Slack-sourced task questions. "
-    "Use general for small talk or questions that do not require tool actions."
+MASTER_AGENT_SYSTEM_PROMPT = (
+    "You are NUMA, a unified AI assistant that orchestrates specialized sub-agents "
+    "to help users manage their digital life.\n\n"
+    "DELEGATION TOOLS (pass the user's query to a specialized sub-agent):\n"
+    "- delegate_to_calendar: For scheduling, viewing, modifying, or deleting calendar events\n"
+    "- delegate_to_slack: For searching Slack messages, sending messages, Slack-sourced tasks\n"
+    "- delegate_to_health: For health metrics, fitness data, diet plans, yoga suggestions\n"
+    "- delegate_to_journal: For journal summaries, reflections, reading journal entries\n"
+    "- auto_generate_journal: Auto-generate today's journal from all connected apps\n"
+    "- delegate_to_github: For GitHub commits, pull requests, repositories, contribution stats\n"
+    "- delegate_to_leetcode: For LeetCode stats, problem progress, rankings\n\n"
+    "DIRECT TOOLS:\n"
+    "- create_task / update_task / delete_task / list_tasks: Manage tasks directly\n"
+    "- get_dashboard_overview: Get a summary of tasks, calendar, health stats\n\n"
+    "RULES:\n"
+    "1. Use delegation tools when the query belongs to a sub-agent domain.\n"
+    "2. Use task tools directly for task operations.\n"
+    "3. For general or small-talk queries, respond directly without tools.\n"
+    "4. When delegating, pass the user's full query for best results.\n"
+    "5. Never fabricate data - always use tools to fetch real information.\n"
+    "Keep responses concise and action-oriented."
 )
 
 TASK_SUBAGENT_SYSTEM_PROMPT = (
@@ -50,13 +64,22 @@ class MasterAgentState(TypedDict):
     refreshCalendar: bool
     refreshTasks: bool
     refreshSlack: bool
+    refreshHealth: bool
+    refreshGithub: bool
+    refreshJournal: bool
+
+
+class MasterToolState(TypedDict):
+    messages: Annotated[Sequence[object], operator.add]
+    user_query: str
+    user_id: str
+    semantic_context: str
 
 
 def _require_master_dependencies() -> Dict[str, object]:
     try:
         messages_module = importlib.import_module("langchain_core.messages")
         tools_module = importlib.import_module("langchain_core.tools")
-        groq_module = importlib.import_module("langchain_groq")
         graph_module = importlib.import_module("langgraph.graph")
 
         return {
@@ -65,79 +88,28 @@ def _require_master_dependencies() -> Dict[str, object]:
             "SystemMessage": getattr(messages_module, "SystemMessage"),
             "ToolMessage": getattr(messages_module, "ToolMessage"),
             "tool": getattr(tools_module, "tool"),
-            "ChatGroq": getattr(groq_module, "ChatGroq"),
             "StateGraph": getattr(graph_module, "StateGraph"),
             "END": getattr(graph_module, "END"),
         }
     except Exception as exc:
         raise RuntimeError(
-            "Master agent dependencies are missing. Install langchain, langgraph, langchain-core, and langchain-groq."
+            "Master agent dependencies are missing. Install langchain, langgraph, and langchain-core."
         ) from exc
 
-def _resolve_groq_model(model_override: Optional[str]) -> str:
-    default_model = os.getenv("GROQ_MASTER_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")).strip()
-    if not model_override:
-        return default_model
 
-    selected = model_override.strip().lower()
-    aliases = {
-        "70b": "llama-3.3-70b-versatile",
-        "8b": "llama-3.1-8b-instant",
-        "llama-3.3-70b-versatile": "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant": "llama-3.1-8b-instant",
-    }
-
-    return aliases.get(selected, default_model)
+def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None):
+    from ..llm_factory import get_llm
+    kwargs: Dict = {}
+    if user_id:
+        kwargs["user_id"] = user_id
+    if model_override:
+        kwargs["model"] = model_override
+    return get_llm(**kwargs)
 
 
-def _get_llm(chat_groq_cls, model_override: Optional[str] = None):
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY is not configured")
-
-    model = _resolve_groq_model(model_override)
-    temperature = float(os.getenv("GROQ_MASTER_TEMPERATURE", "0.1"))
-    return chat_groq_cls(model=model, temperature=temperature, api_key=api_key)
-
-
-def _is_groq_configured() -> bool:
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key:
-        return False
-
-    lower = api_key.lower()
-    if lower in {"your_groq_api_key_here", "gsk_your_groq_api_key_here", "your_groq_key"}:
-        return False
-
-    return True
-
-
-def _extract_json_object(text: str) -> Dict:
-    content = (text or "").strip()
-    if not content:
-        return {}
-
-    try:
-        return json.loads(content)
-    except Exception:
-        pass
-
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, flags=re.S)
-    if fenced:
-        try:
-            return json.loads(fenced.group(1))
-        except Exception:
-            pass
-
-    first = content.find("{")
-    last = content.rfind("}")
-    if first != -1 and last != -1 and last > first:
-        try:
-            return json.loads(content[first : last + 1])
-        except Exception:
-            return {}
-
-    return {}
+def _is_llm_configured(user_id: Optional[str] = None) -> bool:
+    from ..llm_factory import is_any_llm_configured
+    return is_any_llm_configured(user_id)
 
 
 def _history_to_messages(history: List[dict], HumanMessage, AIMessage) -> List[object]:
@@ -154,38 +126,6 @@ def _history_to_messages(history: List[dict], HumanMessage, AIMessage) -> List[o
             messages.append(AIMessage(content=content))
 
     return messages
-
-
-def _invoke_json(llm, prompt: str, user_query: str, semantic_context: str = "") -> Dict:
-    context_block = ""
-    if semantic_context:
-        context_block = (
-            "\nRelevant semantic memory (user-scoped retrieved context):\n"
-            f"{semantic_context}\n"
-            "Use this only if relevant."
-        )
-
-    response = llm.invoke(f"{prompt}{context_block}\n\nUser request:\n{user_query}")
-    content = getattr(response, "content", "")
-    if isinstance(content, list):
-        content = "\n".join(str(part) for part in content)
-    return _extract_json_object(str(content))
-
-
-def _route_query(query: str, semantic_context: str, llm) -> str:
-    data = _invoke_json(llm, MASTER_ROUTER_PROMPT, query, semantic_context)
-    route = str(data.get("route", "")).strip().lower()
-    if route in {"calendar", "tasks", "slack", "general"}:
-        return route
-
-    q = query.lower()
-    if any(word in q for word in ("calendar", "meeting", "event", "schedule", "reschedule")):
-        return "calendar"
-    if any(word in q for word in ("task", "todo", "to-do", "kanban", "list tasks")):
-        return "tasks"
-    if any(word in q for word in ("slack", "channel", "message", "#general", "dm", "post to")):
-        return "slack"
-    return "general"
 
 
 def _parse_due_datetime(value: str | None):
@@ -335,7 +275,7 @@ def _build_task_subagent_graph(user_id: str, model_override: Optional[str] = Non
         return None
 
     def call_model(state: TaskAgentState) -> TaskAgentState:
-        llm = _get_llm(deps["ChatGroq"], model_override=model_override)
+        llm = _get_llm(model_override=model_override, user_id=user_id)
         llm_with_tools = llm.bind_tools(tools)
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -470,6 +410,224 @@ def _run_task_subagent(
         return f"Error running task sub-agent: {exc}", False
 
 
+# ---------------------------------------------------------------------------
+# Master agent delegation + direct tools
+# ---------------------------------------------------------------------------
+
+def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] = None):
+    """Create delegation + task + dashboard tools for the master agent."""
+    refresh = {
+        "refreshCalendar": False,
+        "refreshTasks": False,
+        "refreshSlack": False,
+        "refreshHealth": False,
+        "refreshGithub": False,
+        "refreshJournal": False,
+        "delegated_to": [],
+    }
+
+    @tool_decorator
+    def delegate_to_calendar(query: str) -> str:
+        """Delegate a calendar-related query to the Calendar sub-agent.
+        Use for: creating events, checking schedule, managing meetings, finding free slots,
+        rescheduling, deleting events, or any Google Calendar operations."""
+        try:
+            result = run_agent_chat(
+                query=query, history=[], user_id=user_id, model=model_override,
+            )
+            if result.get("refreshCalendar"):
+                refresh["refreshCalendar"] = True
+                refresh["refreshTasks"] = True
+            refresh["delegated_to"].append("calendar-subagent")
+            return result.get("response", "No response from Calendar agent")
+        except Exception as exc:
+            return f"Calendar agent error: {exc}"
+
+    @tool_decorator
+    def delegate_to_slack(query: str) -> str:
+        """Delegate a Slack-related query to the Slack sub-agent.
+        Use for: searching Slack messages, sending messages to channels,
+        creating tasks from Slack content, listing Slack-sourced tasks."""
+        try:
+            result = run_slack_agent_chat(
+                query=query, history=[], user_id=user_id, model=model_override,
+            )
+            if result.get("refresh_slack"):
+                refresh["refreshSlack"] = True
+                refresh["refreshTasks"] = True
+            refresh["delegated_to"].append("slack-subagent")
+            return result.get("response", "No response from Slack agent")
+        except Exception as exc:
+            return f"Slack agent error: {exc}"
+
+    @tool_decorator
+    def delegate_to_health(query: str) -> str:
+        """Delegate a health query to the Health sub-agent.
+        Use for: health metrics, step count, calories, sleep data, diet recommendations,
+        yoga suggestions, syncing Google Fit or Strava data."""
+        try:
+            result = run_health_agent_chat(
+                query=query, history=[], user_id=user_id, model=model_override,
+            )
+            if result.get("refresh_health"):
+                refresh["refreshHealth"] = True
+            refresh["delegated_to"].append("health-subagent")
+            return result.get("response", "No response from Health agent")
+        except Exception as exc:
+            return f"Health agent error: {exc}"
+
+    @tool_decorator
+    def delegate_to_journal(query: str) -> str:
+        """Delegate a journal-related query to the Journal sub-agent.
+        Use for: reading journal entries, getting daily summaries, daily reflections,
+        or any journal content questions. For auto-generation use auto_generate_journal."""
+        try:
+            from ..journal.service import generate_daily_summary
+            from datetime import date as _date
+
+            q_lower = query.lower()
+            if any(w in q_lower for w in ("summarize", "summary", "wrap up", "recap")):
+                response_text = generate_daily_summary(user_id, _date.today())
+            else:
+                llm = _get_llm(model_override=model_override, user_id=user_id)
+                response_text = _answer_general(
+                    f"The user wants to interact with their journal. Help them: {query}",
+                    "",
+                    llm,
+                )
+            refresh["refreshJournal"] = True
+            refresh["delegated_to"].append("journal-subagent")
+            return response_text
+        except Exception as exc:
+            return f"Journal agent error: {exc}"
+
+    @tool_decorator
+    def auto_generate_journal() -> str:
+        """Auto-generate today's journal entry from all connected apps data
+        (calendar, tasks, health, Slack, GitHub). Use when the user asks to
+        create or auto-generate a journal entry for today."""
+        try:
+            from ..journal.service import auto_generate_journal_entry
+
+            result = auto_generate_journal_entry(user_id)
+            refresh["refreshJournal"] = True
+            refresh["delegated_to"].append("journal-subagent")
+            title = result.get("title", "Untitled")
+            mood = result.get("mood", "okay")
+            return f"Journal generated: '{title}' (mood: {mood})"
+        except Exception as exc:
+            return f"Journal generation error: {exc}"
+
+    @tool_decorator
+    def delegate_to_github(query: str) -> str:
+        """Delegate a GitHub-related query to the GitHub sub-agent.
+        Use for: GitHub commits, pull requests, repositories, coding contribution stats,
+        or any GitHub activity questions."""
+        try:
+            result = run_github_agent_chat(
+                query=query, history=[], user_id=user_id, model=model_override,
+            )
+            if result.get("refresh_github"):
+                refresh["refreshGithub"] = True
+            refresh["delegated_to"].append("github-subagent")
+            return result.get("response", "No response from GitHub agent")
+        except Exception as exc:
+            return f"GitHub agent error: {exc}"
+
+    @tool_decorator
+    def delegate_to_leetcode(query: str) -> str:
+        """Delegate a LeetCode-related query to the LeetCode sub-agent.
+        Use for: LeetCode stats, problem progress, rankings, submissions,
+        or competitive programming questions."""
+        try:
+            result = run_leetcode_agent_chat(
+                query=query, history=[], user_id=user_id, model=model_override,
+            )
+            refresh["delegated_to"].append("leetcode-subagent")
+            return result.get("response", "No response from LeetCode agent")
+        except Exception as exc:
+            return f"LeetCode agent error: {exc}"
+
+    @tool_decorator
+    def get_dashboard_overview() -> str:
+        """Get a dashboard overview of all stats: tasks, calendar events, health metrics.
+        Use when the user asks for a general overview, status summary, or how their day looks."""
+        try:
+            from ..db import _get_conn
+            from datetime import date as _date
+
+            conn = _get_conn()
+            lines = ["Dashboard Overview:"]
+            try:
+                cur = conn.cursor()
+
+                cur.execute(
+                    "SELECT status, COUNT(*) FROM public.tasks "
+                    "WHERE user_id = %s GROUP BY status",
+                    (user_id,),
+                )
+                task_rows = cur.fetchall()
+                if task_rows:
+                    total = sum(c for _, c in task_rows)
+                    summary = ", ".join(f"{s}: {c}" for s, c in task_rows)
+                    lines.append(f"Tasks ({total}): {summary}")
+                else:
+                    lines.append("Tasks: none")
+
+                today = _date.today()
+                start_of_day = datetime.combine(
+                    today, datetime.min.time()
+                ).replace(tzinfo=timezone.utc)
+                end_of_day = start_of_day + timedelta(days=1)
+                cur.execute(
+                    "SELECT COUNT(*) FROM public.cal_events "
+                    "WHERE user_id = %s AND start_at >= %s AND start_at < %s "
+                    "AND deleted_at IS NULL",
+                    (user_id, start_of_day, end_of_day),
+                )
+                event_count = cur.fetchone()[0]
+                lines.append(f"Today's Calendar Events: {event_count}")
+
+                cur.execute(
+                    "SELECT steps, calories, active_minutes, sleep_hours "
+                    "FROM public.health_snapshots "
+                    "WHERE user_id = %s AND snapshot_date = %s LIMIT 1",
+                    (user_id, today),
+                )
+                health_row = cur.fetchone()
+                if health_row:
+                    steps, cal, active, sleep = health_row
+                    lines.append(
+                        f"Health: {steps or 0:,} steps, {cal or 0:,} kcal, "
+                        f"{active or 0} min active, {sleep or 0}h sleep"
+                    )
+                else:
+                    lines.append("Health: no data for today")
+
+                cur.close()
+            finally:
+                conn.close()
+
+            return "\n".join(lines)
+        except Exception as exc:
+            return f"Dashboard error: {exc}"
+
+    task_tools = _task_toolset(tool_decorator, user_id)
+
+    delegation_tools = [
+        delegate_to_calendar,
+        delegate_to_slack,
+        delegate_to_health,
+        delegate_to_journal,
+        auto_generate_journal,
+        delegate_to_github,
+        delegate_to_leetcode,
+        get_dashboard_overview,
+    ]
+
+    return delegation_tools + task_tools, refresh
+
+
 def _answer_general(query: str, semantic_context: str, llm) -> str:
     context_block = ""
     if semantic_context:
@@ -481,7 +639,7 @@ def _answer_general(query: str, semantic_context: str, llm) -> str:
 
     prompt = (
         "You are NUMA master agent. Keep responses concise and action-oriented. "
-        "Mention that you can operate the Calendar sub-agent, Task sub-agent, and Slack sub-agent. "
+        "Mention that you can operate Calendar, Task, Slack, Health, GitHub, LeetCode, and Journal sub-agents. "
         f"{context_block}\n\nUser: {query}"
     )
     response = llm.invoke(prompt)
@@ -491,129 +649,93 @@ def _answer_general(query: str, semantic_context: str, llm) -> str:
     return str(content).strip() or "How can I help with your calendar or tasks?"
 
 
-@lru_cache(maxsize=8)
-def _build_master_graph(model_override: Optional[str] = None):
+# ---------------------------------------------------------------------------
+# Master agent tool-calling graph
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=64)
+def _build_master_graph(user_id: str, model_override: Optional[str] = None):
     deps = _require_master_dependencies()
+
+    AIMessage = deps["AIMessage"]
+    SystemMessage = deps["SystemMessage"]
+    ToolMessage = deps["ToolMessage"]
     StateGraph = deps["StateGraph"]
     END = deps["END"]
 
-    def route_intent(state: MasterAgentState) -> Dict:
-        llm = _get_llm(deps["ChatGroq"], model_override=model_override)
-        route = _route_query(state["query"], state.get("semantic_context", ""), llm)
-        return {"route": route}
+    tools, refresh_tracker = _master_toolset(deps["tool"], user_id, model_override)
+    tool_map = {t.name: t for t in tools}
+    task_mutation_tools = {"create_task", "update_task", "delete_task"}
 
-    def delegate_calendar(state: MasterAgentState) -> Dict:
-        delegated = run_agent_chat(
-            query=state["query"],
-            history=state.get("history", []),
-            user_id=state["user_id"],
-            model=model_override,
+    def call_model(state: MasterToolState) -> MasterToolState:
+        llm = _get_llm(model_override=model_override, user_id=user_id)
+        llm_with_tools = llm.bind_tools(tools)
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        sem = (state.get("semantic_context") or "").strip()
+        context = (
+            f"\nRelevant semantic memory:\n{sem}\nUse only if relevant."
+            if sem else ""
         )
 
-        response_text = str(delegated.get("response", "Done."))
-        success = bool(delegated.get("success", True))
-        refresh_calendar = bool(delegated.get("refreshCalendar", False))
-
-        if state["user_id"] and response_text.strip():
-            memory_service.store_turn(state["user_id"], state["query"], response_text)
+        system = f"{MASTER_AGENT_SYSTEM_PROMPT}\nCurrent time: {now}{context}"
+        full_messages = [SystemMessage(content=system)] + list(state["messages"])
+        response = llm_with_tools.invoke(full_messages)
 
         return {
-            "response": response_text,
-            "success": success,
-            "delegated_to": "calendar-subagent",
-            "refreshCalendar": refresh_calendar,
-            "refreshTasks": refresh_calendar,
+            "messages": [response],
+            "user_query": state["user_query"],
+            "user_id": state["user_id"],
+            "semantic_context": state["semantic_context"],
         }
 
-    def delegate_tasks(state: MasterAgentState) -> Dict:
-        response_text, refresh_tasks = _run_task_subagent(
-            query=state["query"],
-            history=state.get("history", []),
-            user_id=state["user_id"],
-            semantic_context=state.get("semantic_context", ""),
-            model=model_override,
+    def call_tools(state: MasterToolState) -> MasterToolState:
+        last = state["messages"][-1]
+        out = []
+        for tc in getattr(last, "tool_calls", []):
+            name = tc.get("name")
+            args = tc.get("args", {})
+            tid = tc.get("id")
+            if name not in tool_map:
+                result = f"Unknown tool '{name}'."
+            else:
+                try:
+                    result = tool_map[name].invoke(args)
+                    if name in task_mutation_tools and not str(result).lower().startswith("error"):
+                        refresh_tracker["refreshTasks"] = True
+                except Exception as exc:
+                    result = f"Error running {name}: {exc}"
+            out.append(ToolMessage(content=str(result), tool_call_id=tid))
+        return {
+            "messages": out,
+            "user_query": state["user_query"],
+            "user_id": state["user_id"],
+            "semantic_context": state["semantic_context"],
+        }
+
+    def should_continue(state: MasterToolState):
+        last = state["messages"][-1]
+        rounds = sum(
+            1 for m in state["messages"]
+            if hasattr(m, "tool_calls") and m.tool_calls
         )
+        if rounds >= 8:
+            return "end"
+        if hasattr(last, "tool_calls") and last.tool_calls:
+            return "call_tools"
+        return "end"
 
-        return {
-            "response": response_text,
-            "success": not response_text.lower().startswith("error running task sub-agent:"),
-            "delegated_to": "task-subagent",
-            "refreshCalendar": False,
-            "refreshTasks": refresh_tasks,
-            "refreshSlack": False,
-        }
-
-    def delegate_slack(state: MasterAgentState) -> Dict:
-        result = run_slack_agent_chat(
-            query=state["query"],
-            history=state.get("history", []),
-            user_id=state["user_id"],
-            model=model_override,
-        )
-
-        response_text = str(result.get("response", "Done."))
-        if state["user_id"] and response_text.strip():
-            memory_service.store_turn(state["user_id"], state["query"], response_text)
-
-        return {
-            "response":      response_text,
-            "success":       bool(result.get("success", True)),
-            "delegated_to": "slack-subagent",
-            "refreshCalendar": False,
-            "refreshTasks":    bool(result.get("refresh_slack", False)),
-            "refreshSlack":    bool(result.get("refresh_slack", False)),
-        }
-
-    def answer_general(state: MasterAgentState) -> Dict:
-        llm = _get_llm(deps["ChatGroq"], model_override=model_override)
-        response_text = _answer_general(state["query"], state.get("semantic_context", ""), llm)
-
-        if state["user_id"] and response_text.strip():
-            memory_service.store_turn(state["user_id"], state["query"], response_text)
-
-        return {
-            "response":      response_text,
-            "success":       True,
-            "delegated_to": "master",
-            "refreshCalendar": False,
-            "refreshTasks":    False,
-            "refreshSlack":    False,
-        }
-
-    def choose_route(state: MasterAgentState):
-        route = str(state.get("route") or "general").lower()
-        if route == "calendar":
-            return "calendar"
-        if route == "tasks":
-            return "tasks"
-        if route == "slack":
-            return "slack"
-        return "general"
-
-    workflow = StateGraph(MasterAgentState)
-    workflow.add_node("route_intent",      route_intent)
-    workflow.add_node("delegate_calendar", delegate_calendar)
-    workflow.add_node("delegate_tasks",    delegate_tasks)
-    workflow.add_node("delegate_slack",    delegate_slack)
-    workflow.add_node("answer_general",    answer_general)
-
-    workflow.set_entry_point("route_intent")
-    workflow.add_conditional_edges(
-        "route_intent",
-        choose_route,
-        {
-            "calendar": "delegate_calendar",
-            "tasks":    "delegate_tasks",
-            "slack":    "delegate_slack",
-            "general":  "answer_general",
-        },
+    wf = StateGraph(MasterToolState)
+    wf.add_node("call_model", call_model)
+    wf.add_node("call_tools", call_tools)
+    wf.set_entry_point("call_model")
+    wf.add_conditional_edges(
+        "call_model", should_continue,
+        {"call_tools": "call_tools", "end": END},
     )
-    workflow.add_edge("delegate_calendar", END)
-    workflow.add_edge("delegate_tasks",    END)
-    workflow.add_edge("delegate_slack",    END)
-    workflow.add_edge("answer_general",    END)
+    wf.add_edge("call_tools", "call_model")
 
-    return workflow.compile()
+    return wf.compile(), AIMessage, refresh_tracker
 
 
 def run_master_agent_chat(
@@ -622,63 +744,69 @@ def run_master_agent_chat(
     user_id: Optional[str],
     model: Optional[str] = None,
 ) -> Dict:
-    if not user_id:
-        return {
-            "response": "Please sign in again. Your user session is missing.",
-            "success": False,
-            "delegated_to": None,
-            "refreshCalendar": False,
-            "refreshTasks": False,
-            "refreshSlack": False,
-        }
+    _empty = {
+        "refreshCalendar": False, "refreshTasks": False, "refreshSlack": False,
+        "refreshHealth": False, "refreshGithub": False, "refreshJournal": False,
+    }
 
-    if not _is_groq_configured():
+    if not user_id:
+        return {"response": "Please sign in again. Your user session is missing.",
+                "success": False, "delegated_to": None, **_empty}
+
+    if not _is_llm_configured(user_id):
         return {
             "response": (
-                "Master agent is unavailable right now because GROQ_API_KEY is not configured on the backend. "
-                "Add GROQ_API_KEY in server/.env and restart the backend server."
+                "Master agent is unavailable - no LLM provider is configured. "
+                "Go to Settings and add an API key for Groq, OpenAI, Anthropic, or Gemini, "
+                "or configure an Ollama instance."
             ),
-            "success": True,
-            "delegated_to": None,
-            "refreshCalendar": False,
-            "refreshTasks": False,
-            "refreshSlack": False,
+            "success": True, "delegated_to": None, **_empty,
         }
 
     try:
         semantic_context = memory_service.build_context_for_query(user_id, query)
-        graph = _build_master_graph(model)
+        graph, AIMsg, refresh_tracker = _build_master_graph(user_id, model)
 
-        initial_state: MasterAgentState = {
-            "query": query,
-            "history": history,
+        for k in _empty:
+            refresh_tracker[k] = False
+        refresh_tracker["delegated_to"] = []
+
+        deps = _require_master_dependencies()
+        HumanMessage = deps["HumanMessage"]
+        AIMessage_cls = deps["AIMessage"]
+
+        history_messages = _history_to_messages(history, HumanMessage, AIMessage_cls)
+
+        initial_state: MasterToolState = {
+            "messages": history_messages + [HumanMessage(content=query)],
+            "user_query": query,
             "user_id": user_id,
             "semantic_context": semantic_context,
-            "route": "general",
-            "response": "",
-            "success": True,
-            "delegated_to": None,
-            "refreshCalendar": False,
-            "refreshTasks": False,
-            "refreshSlack": False,
         }
 
         result = graph.invoke(initial_state)
 
+        messages = result.get("messages", [])
+        response_text = "How can I help you?"
+        if messages:
+            final = messages[-1]
+            content = getattr(final, "content", str(final))
+            if isinstance(content, list):
+                content = "\n".join(str(part) for part in content)
+            response_text = str(content).strip() or response_text
+
+        if user_id and response_text.strip():
+            memory_service.store_turn(user_id, query, response_text)
+
+        delegated = refresh_tracker.get("delegated_to", [])
+        delegated_to = ", ".join(delegated) if delegated else "master"
+
         return {
-            "response": str(result.get("response") or "Done."),
-            "success": bool(result.get("success", True)),
-            "delegated_to": result.get("delegated_to"),
-            "refreshCalendar": bool(result.get("refreshCalendar", False)),
-            "refreshTasks": bool(result.get("refreshTasks", False)),
-            "refreshSlack": bool(result.get("refreshSlack", False)),
+            "response": response_text,
+            "success": True,
+            "delegated_to": delegated_to,
+            **{k: bool(refresh_tracker.get(k, False)) for k in _empty},
         }
     except Exception as exc:
-        return {
-            "response": f"Error running master agent: {exc}",
-            "success": False,
-            "delegated_to": None,
-            "refreshCalendar": False,
-            "refreshTasks": False,
-            "refreshSlack": False,
-        }
+        return {"response": f"Error running master agent: {exc}",
+                "success": False, "delegated_to": None, **_empty}

@@ -1,11 +1,11 @@
 """
 Slack Qdrant Store
 ==================
-Manages the `numa_slack_messages` Qdrant collection.
+Manages per-user `{user_id}_slack` Qdrant collections.
 
 Schema
 ------
-- dim: 384  (all-MiniLM-L6-v2 — same embedder used by calendar & task agents)
+- dim: 384  (all-MiniLM-L6-v2 - same embedder used by calendar & task agents)
 - distance: Cosine
 - retention: 7 days  (enforced by nightly purge_old_messages scheduler job)
 
@@ -26,7 +26,6 @@ log = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-SLACK_COLLECTION = os.getenv("QDRANT_SLACK_COLLECTION", "numa_slack_messages")
 _SLACK_EMBED_DIM = 384          # all-MiniLM-L6-v2
 _RETENTION_DAYS  = int(os.getenv("SLACK_MESSAGE_RETENTION_DAYS", "7"))
 
@@ -52,26 +51,53 @@ def _embedder():
     return embedder
 
 
+def _slack_collection_name(user_id: str) -> str:
+    return _memory().user_collection_name(user_id, "slack")
+
+
+def _slack_collection_names(qdrant) -> List[str]:
+    try:
+        collections = getattr(qdrant.get_collections(), "collections", [])
+        return [
+            getattr(collection, "name", "")
+            for collection in collections
+            if getattr(collection, "name", "").endswith("_slack")
+        ]
+    except Exception as exc:
+        log.warning("Slack Qdrant purge: failed to list collections: %s", exc)
+        return []
+
+
 # ── Collection bootstrap ───────────────────────────────────────────────────────
 
-def ensure_slack_collection() -> bool:
+def ensure_slack_collection(user_id: str) -> bool:
     """Create the Qdrant collection if it doesn't exist yet. Idempotent."""
     qdrant = _client()
     deps   = _deps()
     if not qdrant or not deps:
-        log.warning("Qdrant client not available — Slack collection skipped.")
+        log.warning("Qdrant client not available - Slack collection skipped.")
         return False
 
     try:
-        if not qdrant.collection_exists(SLACK_COLLECTION):
+        collection_name = _slack_collection_name(user_id)
+        if not qdrant.collection_exists(collection_name):
             qdrant.create_collection(
-                collection_name=SLACK_COLLECTION,
+                collection_name=collection_name,
                 vectors_config=deps["VectorParams"](
                     size=_SLACK_EMBED_DIM,
                     distance=deps["Distance"].COSINE,
                 ),
             )
-            log.info("Created Qdrant collection '%s'", SLACK_COLLECTION)
+            for field in ("user_id", "channel_name", "message_type"):
+                try:
+                    qdrant.create_payload_index(
+                        collection_name=collection_name,
+                        field_name=field,
+                        field_schema="keyword",
+                    )
+                except Exception:
+                    pass
+            log.info("Created Qdrant collection '%s' with payload indexes", collection_name)
         return True
     except Exception as exc:
         log.warning("ensure_slack_collection failed: %s", exc)
@@ -106,7 +132,8 @@ def ingest_message(
         log.warning("Slack ingest: embedding failed for ts=%s", ts)
         return
 
-    if not ensure_slack_collection():
+    collection_name = _slack_collection_name(user_id)
+    if not ensure_slack_collection(user_id):
         return
 
     qdrant = _client()
@@ -136,9 +163,13 @@ def ingest_message(
     }
 
     try:
-        point = deps["PointStruct"](id=point_id, vector=vector, payload=payload)
+        point = deps["PointStruct"](
+            id=_memory()._qdrant_point_id(point_id),
+            vector=vector,
+            payload=payload,
+        )
         qdrant.upsert(
-            collection_name=SLACK_COLLECTION,
+            collection_name=collection_name,
             points=[point],
             wait=False,
         )
@@ -173,7 +204,8 @@ def search_messages(
         return []
 
     try:
-        if not qdrant.collection_exists(SLACK_COLLECTION):
+        collection_name = _slack_collection_name(user_id)
+        if not qdrant.collection_exists(collection_name):
             return []
 
         user_filter = deps["Filter"](
@@ -190,7 +222,7 @@ def search_messages(
         )
 
         hits = qdrant.search(
-            collection_name=SLACK_COLLECTION,
+            collection_name=collection_name,
             query_vector=vector,
             query_filter=user_filter,
             limit=limit,
@@ -231,7 +263,8 @@ def purge_old_messages(cutoff: Optional[datetime] = None) -> int:
         return 0
 
     try:
-        if not qdrant.collection_exists(SLACK_COLLECTION):
+        collection_names = _slack_collection_names(qdrant)
+        if not collection_names:
             return 0
 
         cutoff_str = cutoff.isoformat()
@@ -260,12 +293,19 @@ def purge_old_messages(cutoff: Optional[datetime] = None) -> int:
             )
             log.info("Slack purge: using app-only filter fallback (no Range support)")
 
-        qdrant.delete(
-            collection_name=SLACK_COLLECTION,
-            points_selector=delete_filter,
-            wait=False,
+        purged = 0
+        for collection_name in collection_names:
+            qdrant.delete(
+                collection_name=collection_name,
+                points_selector=delete_filter,
+                wait=False,
+            )
+            purged += 1
+        log.info(
+            "Slack Qdrant purge: deleted vectors older than %s from %d collection(s)",
+            cutoff_str,
+            purged,
         )
-        log.info("Slack Qdrant purge: deleted vectors older than %s", cutoff_str)
         return -1  # Qdrant delete returns no count; caller logs approximate
     except Exception as exc:
         log.warning("Slack Qdrant purge failed: %s", exc)

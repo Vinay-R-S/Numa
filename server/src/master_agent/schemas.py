@@ -24,3 +24,14 @@ class MasterAgentChatResponse(BaseModel):
     refreshCalendar: bool = False
     refreshTasks: bool = False
     refreshSlack: bool = False
+    refreshHealth: bool = False
+    refreshGithub: bool = False
+    refreshJournal: bool = False
+
+
+class MasterAgentFetchLatestResponse(BaseModel):
+    ok: bool
+    scope: str
+    users: int
+    results: list[dict]
+    retention: dict

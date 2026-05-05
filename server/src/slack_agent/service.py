@@ -6,11 +6,11 @@ the Master Agent.
 
 Tools available to the LLM
 ---------------------------
-search_slack_messages   — semantic search over Qdrant
-get_recent_messages     — PostgreSQL fetch (last N rows)
-send_slack_message      — Slack Web API post
-create_task_from_slack  — insert into public.tasks (source_name='Slack')
-list_slack_tasks        — list tasks where source_name='Slack'
+search_slack_messages   - semantic search over Qdrant
+get_recent_messages     - PostgreSQL fetch (last N rows)
+send_slack_message      - Slack Web API post
+create_task_from_slack  - insert into public.tasks (source_name='Slack')
+list_slack_tasks        - list tasks where source_name='Slack'
 
 Entry point
 -----------
@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 SLACK_AGENT_SYSTEM_PROMPT = (
     "You are NUMA Slack sub-agent. You help users interact with their Slack workspace. "
     "You can search recent Slack messages, send messages to channels, and create tasks from Slack content. "
-    "Always use tools to fetch real data — never fabricate messages or channel names. "
+    "Always use tools to fetch real data - never fabricate messages or channel names. "
     "If Slack credentials are not configured, inform the user politely and guide them to Settings → Connect Slack. "
     "Keep responses concise and action-oriented."
 )
@@ -55,7 +55,6 @@ def _require_deps() -> Dict:
     try:
         msgs_mod  = importlib.import_module("langchain_core.messages")
         tools_mod = importlib.import_module("langchain_core.tools")
-        groq_mod  = importlib.import_module("langchain_groq")
         graph_mod = importlib.import_module("langgraph.graph")
 
         return {
@@ -64,7 +63,6 @@ def _require_deps() -> Dict:
             "SystemMessage": getattr(msgs_mod, "SystemMessage"),
             "ToolMessage":  getattr(msgs_mod,  "ToolMessage"),
             "tool":         getattr(tools_mod, "tool"),
-            "ChatGroq":     getattr(groq_mod,  "ChatGroq"),
             "StateGraph":   getattr(graph_mod, "StateGraph"),
             "END":          getattr(graph_mod, "END"),
         }
@@ -72,13 +70,14 @@ def _require_deps() -> Dict:
         raise RuntimeError(f"Slack agent dependencies missing: {exc}") from exc
 
 
-def _get_llm(chat_groq_cls, model_override: Optional[str] = None):
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY not configured")
-    model = (model_override or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")).strip()
-    temperature = float(os.getenv("GROQ_MASTER_TEMPERATURE", "0.1"))
-    return chat_groq_cls(model=model, temperature=temperature, api_key=api_key)
+def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None):
+    from ..llm_factory import get_llm
+    kwargs: Dict = {}
+    if user_id:
+        kwargs["user_id"] = user_id
+    if model_override:
+        kwargs["model"] = model_override
+    return get_llm(**kwargs)
 
 
 # ── PostgreSQL helpers ────────────────────────────────────────────────────────
@@ -214,7 +213,7 @@ def _get_slack_client():
         from slack_sdk import WebClient  # type: ignore
         return WebClient(token=bot_token)
     except ImportError:
-        log.warning("slack_sdk not installed — Slack send actions disabled.")
+        log.warning("slack_sdk not installed - Slack send actions disabled.")
         return None
 
 
@@ -279,7 +278,7 @@ def _slack_toolset(tool_decorator, user_id: str):
                 return "No recent Slack messages found (last 7 days)."
             lines = [
                 f"[{m['channel_name'] or m['slack_channel_id']}] {m['text'] or '(empty)'} "
-                f"— {str(m['created_at'])[:16]}"
+                f"- {str(m['created_at'])[:16]}"
                 for m in msgs
             ]
             return f"Recent messages ({len(lines)}):\n" + "\n".join(lines)
@@ -364,7 +363,7 @@ def _build_slack_graph(user_id: str, model_override: Optional[str] = None):
     mutation_tools = {"create_task_from_slack", "send_slack_message"}
 
     def call_model(state: SlackAgentState) -> SlackAgentState:
-        llm = _get_llm(deps["ChatGroq"], model_override=model_override)
+        llm = _get_llm(model_override=model_override, user_id=user_id)
         llm_with_tools = llm.bind_tools(tools)
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -460,12 +459,12 @@ def run_slack_agent_chat(
             "refresh_slack": False,
         }
 
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key:
+    from ..llm_factory import is_any_llm_configured
+    if not is_any_llm_configured(user_id):
         return {
             "response": (
-                "Slack sub-agent is unavailable — GROQ_API_KEY not configured. "
-                "Add it to server/.env and restart."
+                "Slack sub-agent is unavailable - no LLM provider is configured. "
+                "Go to Settings and add an API key for your preferred AI provider."
             ),
             "success":       True,
             "delegated_to":  "slack-subagent",

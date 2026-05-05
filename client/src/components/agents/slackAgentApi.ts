@@ -48,6 +48,13 @@ export interface SlackStatus {
   bot_configured: boolean
 }
 
+export interface SlackSyncResult {
+  ok: boolean
+  fetched: number
+  channels: number
+  detail?: string | null
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function authHeaders(): HeadersInit {
@@ -120,13 +127,63 @@ export async function getSlackStatus(): Promise<SlackStatus> {
   return parseJson<SlackStatus>(res, "Failed to fetch Slack status")
 }
 
+// ── Sync ─────────────────────────────────────────────────────────────────────
+
+export async function syncSlack(): Promise<SlackSyncResult> {
+  const res = await fetch("/api/slack/sync", {
+    method: "POST",
+    headers: authHeaders(),
+  })
+  return parseJson<SlackSyncResult>(res, "Failed to sync Slack")
+}
+
+// ── Send Message ───────────────────────────────────────────────────────────────
+
+export interface SlackSendResult {
+  ok: boolean
+  ts?: string | null
+  error?: string | null
+}
+
+export async function sendSlackMessage(
+  channelId: string,
+  text: string,
+  threadTs?: string
+): Promise<SlackSendResult> {
+  const res = await fetch("/api/slack/send", {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({
+      channel_id: channelId,
+      text,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+    }),
+  })
+  return parseJson<SlackSendResult>(res, "Failed to send Slack message")
+}
+
 // ── Connect ────────────────────────────────────────────────────────────────────
 
-export function connectSlack(): void {
+export async function connectSlack(): Promise<void> {
   const token = typeof window !== "undefined" ? localStorage.getItem("numa_token") : null
-  if (!token) return
-  // Backend redirect — opens Slack OAuth
-  window.location.href = "/api/slack/connect"
+  if (!token) {
+    window.location.href = "/auth"
+    return
+  }
+
+  const res = await fetch("/api/slack/connect-url", {
+    headers: authHeaders(),
+  })
+  const data = await parseJson<{ authorization_url: string }>(
+    res,
+    "Failed to start Slack authorization"
+  )
+
+  if (!data.authorization_url) {
+    throw new Error("Slack authorization URL was not returned")
+  }
+
+  window.location.href = data.authorization_url
 }
 
 // ── Format helpers ─────────────────────────────────────────────────────────────

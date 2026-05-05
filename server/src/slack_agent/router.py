@@ -3,13 +3,13 @@ Slack Sub-Agent FastAPI Router
 ===============================
 Endpoints
 ---------
-POST /slack/events           — Slack Events API webhook (HMAC-verified, industry-standard)
-POST /slack/chat             — Invoke Slack sub-agent (JWT-protected)
-GET  /slack/messages         — Fetch paginated messages (JWT-protected)
-GET  /slack/channels         — List tracked channels (JWT-protected)
-GET  /slack/status           — Check Slack connection status (JWT-protected)
-GET  /slack/connect          — Initiate Slack OAuth flow
-GET  /slack/callback         — OAuth callback; saves token to slack_auth table
+POST /slack/events           - Slack Events API webhook (HMAC-verified, industry-standard)
+POST /slack/chat             - Invoke Slack sub-agent (JWT-protected)
+GET  /slack/messages         - Fetch paginated messages (JWT-protected)
+GET  /slack/channels         - List tracked channels (JWT-protected)
+GET  /slack/status           - Check Slack connection status (JWT-protected)
+GET  /slack/connect          - Initiate Slack OAuth flow
+GET  /slack/callback         - OAuth callback; saves token to slack_auth table
 
 Security
 --------
@@ -25,7 +25,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -40,7 +40,10 @@ from .schemas import (
     SlackChatResponse,
     SlackChannelOut,
     SlackMessageOut,
+    SlackSendMessageRequest,
+    SlackSendMessageResponse,
     SlackStatusOut,
+    SlackSyncOut,
 )
 from .service import run_slack_agent_chat
 from .qdrant_store import ingest_message, purge_old_messages
@@ -48,6 +51,8 @@ from .qdrant_store import ingest_message, purge_old_messages
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/slack", tags=["slack"])
+
+_last_channel_backfill = 0.0
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -70,6 +75,21 @@ def _bot_token() -> str:
     return os.getenv("SLACK_BOT_TOKEN", "").strip()
 
 
+def _build_slack_authorization_url(user_id: str) -> str:
+    cid = _client_id()
+    if not cid:
+        raise HTTPException(status_code=503, detail="SLACK_CLIENT_ID not configured")
+
+    params = urlencode({
+        "client_id":    cid,
+        "scope":        "channels:history,channels:read,chat:write,users:read,team:read",
+        "user_scope":   "channels:history,chat:write",
+        "redirect_uri": _redirect_uri(),
+        "state":        user_id,
+    })
+    return f"https://slack.com/oauth/v2/authorize?{params}"
+
+
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def _row_to_dict(row, description) -> dict:
@@ -82,13 +102,20 @@ def _get_or_create_channel(slack_id: str, name: Optional[str], team_id: str) -> 
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id FROM public.slack_channels WHERE slack_id = %s LIMIT 1",
+            "SELECT id, name FROM public.slack_channels WHERE slack_id = %s LIMIT 1",
             (slack_id,),
         )
         row = cur.fetchone()
         if row:
+            channel_id, existing_name = row
+            if name and (not existing_name or existing_name != name):
+                cur.execute(
+                    "UPDATE public.slack_channels SET name = %s WHERE id = %s",
+                    (name, channel_id),
+                )
+                conn.commit()
             cur.close()
-            return str(row[0])
+            return str(channel_id)
         cur.execute(
             "INSERT INTO public.slack_channels (slack_id, name, team_id) VALUES (%s, %s, %s) RETURNING id",
             (slack_id, name, team_id),
@@ -100,6 +127,23 @@ def _get_or_create_channel(slack_id: str, name: Optional[str], team_id: str) -> 
     except Exception as exc:
         log.warning("_get_or_create_channel failed: %s", exc)
         conn.rollback()
+        return None
+    finally:
+        conn.close()
+
+
+def _get_channel_name_from_db(slack_id: str) -> Optional[str]:
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT name FROM public.slack_channels WHERE slack_id = %s LIMIT 1",
+            (slack_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return row[0] if row else None
+    except Exception:
         return None
     finally:
         conn.close()
@@ -136,7 +180,8 @@ def _save_slack_message(event: dict, channel_name: Optional[str] = None):
         return
 
     user_id    = _resolve_user_id_by_slack(slack_user_id)
-    channel_uuid = _get_or_create_channel(slack_chan_id, channel_name, slack_team_id) if slack_chan_id else None
+    resolved_channel_name = channel_name or _get_channel_name_from_db(slack_chan_id)
+    channel_uuid = _get_or_create_channel(slack_chan_id, resolved_channel_name, slack_team_id) if slack_chan_id else None
 
     conn = _get_conn()
     try:
@@ -155,7 +200,7 @@ def _save_slack_message(event: dict, channel_name: Optional[str] = None):
                 slack_team_id,
                 channel_uuid,
                 slack_chan_id,
-                channel_name,
+                resolved_channel_name,
                 text,
                 ts,
                 event.get("thread_ts"),
@@ -179,7 +224,7 @@ def _save_slack_message(event: dict, channel_name: Optional[str] = None):
                 user_id=user_id,
                 slack_user_id=slack_user_id,
                 slack_channel_id=slack_chan_id,
-                channel_name=channel_name or slack_chan_id,
+                channel_name=resolved_channel_name or slack_chan_id,
                 text=text,
                 ts=ts,
                 thread_ts=event.get("thread_ts"),
@@ -187,6 +232,199 @@ def _save_slack_message(event: dict, channel_name: Optional[str] = None):
             )
         except Exception as exc:
             log.warning("Qdrant ingest failed: %s", exc)
+
+
+def _save_slack_message_for_user(
+    user_id: str,
+    event: dict,
+    channel_name: Optional[str] = None,
+    team_id: Optional[str] = None,
+) -> bool:
+    """Persist a Slack message fetched from Web API for a connected NUMA user."""
+    slack_user_id = event.get("user") or event.get("bot_id") or ""
+    slack_team_id = team_id or event.get("team") or ""
+    ts            = event.get("ts", "")
+    text          = event.get("text", "") or ""
+    slack_chan_id = event.get("channel", "")
+
+    if not user_id or not slack_user_id or not ts or not slack_chan_id:
+        return False
+
+    resolved_channel_name = channel_name or _get_channel_name_from_db(slack_chan_id)
+    channel_uuid = _get_or_create_channel(slack_chan_id, resolved_channel_name, slack_team_id) if slack_chan_id else None
+    try:
+        created_at = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+    except Exception:
+        created_at = datetime.now(timezone.utc)
+
+    conn = _get_conn()
+    inserted = False
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.slack_messages
+                (user_id, slack_user_id, slack_team_id, channel_id, slack_channel_id,
+                 channel_name, text, ts, thread_ts, message_type, raw_payload, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ts) DO NOTHING
+            """,
+            (
+                user_id,
+                slack_user_id,
+                slack_team_id,
+                channel_uuid,
+                slack_chan_id,
+                resolved_channel_name,
+                text,
+                ts,
+                event.get("thread_ts"),
+                event.get("subtype") or "message",
+                json.dumps(event),
+                created_at,
+            ),
+        )
+        inserted = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        log.warning("_save_slack_message_for_user DB insert failed: %s", exc)
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+    if text.strip():
+        try:
+            ingest_message(
+                user_id=user_id,
+                slack_user_id=slack_user_id,
+                slack_channel_id=slack_chan_id,
+                channel_name=resolved_channel_name or slack_chan_id,
+                text=text,
+                ts=ts,
+                thread_ts=event.get("thread_ts"),
+                message_type=event.get("subtype") or "message",
+            )
+        except Exception as exc:
+            log.warning("Qdrant ingest failed: %s", exc)
+
+    return inserted
+
+
+def get_all_connected_slack_user_ids() -> list[str]:
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM public.slack_auth")
+        rows = cur.fetchall() or []
+        cur.close()
+        return [str(row[0]) for row in rows]
+    except Exception as exc:
+        log.warning("get_all_connected_slack_user_ids failed: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+
+def fetch_latest_slack_for_user(user_id: str) -> dict:
+    """Fetch the last 7 days of Slack channel messages for one connected user."""
+    if not user_id:
+        return {"ok": False, "fetched": 0, "channels": 0, "detail": "Missing user id"}
+
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT access_token, bot_token, slack_team_id
+            FROM public.slack_auth
+            WHERE user_id = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+    except Exception as exc:
+        log.warning("fetch_latest_slack_for_user auth lookup failed: %s", exc)
+        return {"ok": False, "fetched": 0, "channels": 0, "detail": str(exc)}
+    finally:
+        conn.close()
+
+    if not row:
+        return {"ok": True, "fetched": 0, "channels": 0, "detail": "Slack not connected"}
+
+    access_token, bot_token, team_id = row
+    token = (bot_token or _bot_token() or access_token or "").strip()
+    if not token:
+        return {"ok": False, "fetched": 0, "channels": 0, "detail": "Slack token not configured"}
+
+    oldest = str((datetime.now(timezone.utc) - timedelta(days=7)).timestamp())
+    headers = {"Authorization": f"Bearer {token}"}
+    fetched = 0
+    channels_seen = 0
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            channels_resp = client.get(
+                "https://slack.com/api/conversations.list",
+                headers=headers,
+                params={
+                    "types": "public_channel,private_channel",
+                    "exclude_archived": "true",
+                    "limit": "200",
+                },
+            )
+            channels_data = channels_resp.json()
+            if not channels_data.get("ok"):
+                return {
+                    "ok": False,
+                    "fetched": 0,
+                    "channels": 0,
+                    "detail": channels_data.get("error", "Slack channel fetch failed"),
+                }
+
+            for channel in channels_data.get("channels", []):
+                channel_id = channel.get("id")
+                if not channel_id:
+                    continue
+                channels_seen += 1
+                history_resp = client.get(
+                    "https://slack.com/api/conversations.history",
+                    headers=headers,
+                    params={
+                        "channel": channel_id,
+                        "oldest": oldest,
+                        "limit": "100",
+                    },
+                )
+                history_data = history_resp.json()
+                if not history_data.get("ok"):
+                    log.info(
+                        "Slack history skipped for channel %s: %s",
+                        channel_id,
+                        history_data.get("error"),
+                    )
+                    continue
+
+                channel_name = channel.get("name") or channel_id
+                for message in history_data.get("messages", []):
+                    if message.get("subtype") in {"message_changed", "message_deleted"}:
+                        continue
+                    message["channel"] = channel_id
+                    if _save_slack_message_for_user(
+                        user_id=user_id,
+                        event=message,
+                        channel_name=channel_name,
+                        team_id=team_id,
+                    ):
+                        fetched += 1
+    except Exception as exc:
+        log.warning("fetch_latest_slack_for_user failed: %s", exc)
+        return {"ok": False, "fetched": fetched, "channels": channels_seen, "detail": str(exc)}
+
+    return {"ok": True, "fetched": fetched, "channels": channels_seen, "detail": "Slack fetch complete"}
 
 
 def _upsert_slack_auth(
@@ -241,7 +479,7 @@ def _verify_slack_signature(request_body: bytes, timestamp: str, signature: str)
     secret = _signing_secret()
     if not secret:
         # If signing secret is not configured, skip verification (dev mode)
-        log.warning("SLACK_SIGNING_SECRET not configured — skipping signature check!")
+        log.warning("SLACK_SIGNING_SECRET not configured - skipping signature check!")
         return True
 
     try:
@@ -278,7 +516,7 @@ def _resolve_channel_name(channel_id: str) -> Optional[str]:
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
-# ── 1. Slack Events API (webhook – HMAC verified) ─────────────────────────────
+# ── 1. Slack Events API (webhook - HMAC verified) ─────────────────────────────
 
 @router.post("/events", include_in_schema=True,
              summary="Slack Events API webhook (HMAC-verified)")
@@ -420,6 +658,71 @@ def slack_chat(
     return SlackChatResponse(**result)
 
 
+# ── Sync ───────────────────────────────────────────────────────────────────
+
+@router.post("/sync", response_model=SlackSyncOut, summary="Sync Slack history for the current user")
+def sync_slack(current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("sub") if isinstance(current_user, dict) else None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    result = fetch_latest_slack_for_user(user_id)
+    return SlackSyncOut(**result)
+
+
+# ── Send Message ──────────────────────────────────────────────────────────────
+
+@router.post("/send", response_model=SlackSendMessageResponse, summary="Send a message to a Slack channel")
+def send_slack_message(
+    request: SlackSendMessageRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("sub") if isinstance(current_user, dict) else None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT access_token, bot_token FROM public.slack_auth WHERE user_id = %s LIMIT 1",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"DB error: {exc}")
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(status_code=400, detail="Slack not connected")
+
+    access_token, bot_token = row
+    token = (bot_token or _bot_token() or access_token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="No Slack token available")
+
+    try:
+        import httpx as _httpx
+        with _httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                "https://slack.com/api/chat.postMessage",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "channel": request.channel_id,
+                    "text": request.text,
+                    **({"thread_ts": request.thread_ts} if request.thread_ts else {}),
+                },
+            )
+        data = resp.json()
+        if not data.get("ok"):
+            return SlackSendMessageResponse(ok=False, error=data.get("error", "Unknown error"))
+        return SlackSendMessageResponse(ok=True, ts=data.get("ts"))
+    except Exception as exc:
+        return SlackSendMessageResponse(ok=False, error=str(exc))
+
+
 # ── 3. Messages ───────────────────────────────────────────────────────────────
 
 @router.get("/messages", response_model=list[SlackMessageOut], summary="List recent Slack messages")
@@ -434,7 +737,24 @@ def get_slack_messages(
 
     conn = _get_conn()
     try:
+        global _last_channel_backfill
         cur = conn.cursor()
+        import time as _time
+        if _time.time() - _last_channel_backfill > 60:
+            cur.execute(
+                """
+                UPDATE public.slack_messages sm
+                SET channel_name = sc.name
+                FROM public.slack_channels sc
+                WHERE sm.channel_id = sc.id
+                  AND sm.user_id = %s
+                  AND sm.channel_name IS NULL
+                  AND sc.name IS NOT NULL
+                """,
+                (user_id,),
+            )
+            conn.commit()
+            _last_channel_backfill = _time.time()
         if channel:
             cur.execute(
                 """
@@ -562,18 +882,17 @@ def get_slack_status(current_user: dict = Depends(get_current_user)):
 
 @router.get("/connect", summary="Initiate Slack OAuth flow")
 def slack_connect(current_user: dict = Depends(get_current_user)):
-    cid = _client_id()
-    if not cid:
-        raise HTTPException(status_code=503, detail="SLACK_CLIENT_ID not configured")
+    return RedirectResponse(
+        url=_build_slack_authorization_url(current_user.get("sub", "")),
+        status_code=302,
+    )
 
-    params = urlencode({
-        "client_id":    cid,
-        "scope":        "channels:history,channels:read,chat:write,users:read,team:read",
-        "user_scope":   "channels:history,chat:write",
-        "redirect_uri": _redirect_uri(),
-        "state":        current_user.get("sub", ""),
-    })
-    return RedirectResponse(url=f"https://slack.com/oauth/v2/authorize?{params}", status_code=302)
+
+@router.get("/connect-url", summary="Get Slack OAuth authorization URL")
+def slack_connect_url(current_user: dict = Depends(get_current_user)):
+    return {
+        "authorization_url": _build_slack_authorization_url(current_user.get("sub", "")),
+    }
 
 
 # ── 7. OAuth Callback ─────────────────────────────────────────────────────────

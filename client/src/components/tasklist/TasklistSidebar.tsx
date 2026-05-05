@@ -4,7 +4,6 @@ import React, { useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
-  LayoutDashboard,
   CheckSquare,
   Home,
   CalendarDays,
@@ -17,6 +16,9 @@ import {
   PinOff,
   X,
   MessageSquare,
+  Activity,
+  BarChart3,
+  BookOpen,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -25,9 +27,10 @@ const NAV_ITEMS = [
   { href: "/tasklist", icon: CheckSquare, label: "Task List" },
   { href: "/calendar", icon: CalendarDays, label: "Calendar" },
   { href: "/slack", icon: MessageSquare, label: "Slack" },
+  { href: "/health", icon: Activity, label: "Health" },
+  { href: "/journal", icon: BookOpen, label: "Journal" },
   { href: "/mental-peace", icon: Leaf, label: "Mental Peace" },
-  { href: "/home", icon: LayoutDashboard, label: "Dashboard", disabled: true },
-  { href: "/home", icon: Zap, label: "Agents", disabled: true },
+  { href: "/productivity", icon: BarChart3, label: "Productivity" },
   { href: "/settings", icon: Settings, label: "Settings" },
 ]
 
@@ -40,7 +43,7 @@ interface TasklistSidebarProps {
 
 export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: TasklistSidebarProps) {
   const pathname = usePathname()
-  // Desktop hover-to-expand state — only matters when not locked
+  // Desktop hover-to-expand state - only matters when not locked
   const [hovered, setHovered] = useState(false)
   const isExpanded = locked || hovered
 
@@ -62,7 +65,7 @@ export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: Taskl
         // Desktop: when locked → static in flex flow; when unlocked → fixed overlay so content never shifts
         "lg:translate-x-0",
         locked ? "lg:static lg:inset-auto lg:z-auto" : "lg:fixed lg:inset-y-0 lg:left-0 lg:z-40",
-        // Width — smooth transition on desktop
+        // Width - smooth transition on desktop
         "w-64 lg:transition-[width] lg:duration-200 lg:ease-in-out",
         isExpanded ? "lg:w-56" : "lg:w-14",
       )}
@@ -85,7 +88,7 @@ export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: Taskl
           )}
         </div>
 
-        {/* Desktop lock/pin toggle — absolute right */}
+        {/* Desktop lock/pin toggle - absolute right */}
         <button
           type="button"
           onClick={onToggleLock}
@@ -102,7 +105,7 @@ export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: Taskl
           {locked ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
         </button>
 
-        {/* Mobile close button — absolute right */}
+        {/* Mobile close button - absolute right */}
         <button
           type="button"
           onClick={onClose}
