@@ -68,7 +68,7 @@ interface KanbanBoardProps {
 
 export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
-  // Local copy for optimistic drag/edit updates — parent is notified only after confirmed API responses
+  // Local copy for optimistic drag/edit updates - parent is notified only after confirmed API responses
   const [localTasks, setLocalTasks] = useState(tasks)
   const [sortMode, setSortMode] = useState<TaskSortMode>("position")
 
@@ -159,7 +159,7 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
 
     if (!overStatus || dragging.status === overStatus) return
 
-    // Update local state only — parent is NOT notified during hover, avoiding spurious stat refreshes
+    // Update local state only - parent is NOT notified during hover, avoiding spurious stat refreshes
     setLocalTasks((prev) =>
       prev.map((t) => (t.id === dragging.id ? { ...t, status: overStatus } : t))
     )
@@ -197,7 +197,7 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
       setLocalTasks(confirmed)
       onTasksChange(confirmed)
     } catch {
-      // Revert local UI to last confirmed server state — no full skeleton reload
+      // Revert local UI to last confirmed server state - no full skeleton reload
       setLocalTasks(tasks)
       toast.error("Failed to move task")
     }

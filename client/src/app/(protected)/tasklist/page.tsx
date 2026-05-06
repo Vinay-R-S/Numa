@@ -71,7 +71,7 @@ export default function TasklistPage() {
     fetchAllStats(true)
   }, [fetchAllTasks, fetchAllStats])
 
-  // Web Push reminder scheduler
+  // Web Push reminder scheduler - only prompt once, persist choice
   useEffect(() => {
     if (!("Notification" in window)) return
 
@@ -81,11 +81,10 @@ export default function TasklistPage() {
         if (!task.reminder_at) return
         const reminderTime = new Date(task.reminder_at)
         const diff = reminderTime.getTime() - now.getTime()
-        // Fire if within the next minute
         if (diff > 0 && diff <= 60_000) {
           setTimeout(() => {
             if (Notification.permission === "granted") {
-              new Notification(`⏰ Reminder: ${task.title}`, {
+              new Notification(`Reminder: ${task.title}`, {
                 body: task.description ?? "Task reminder from NUMA",
                 icon: task.source_logo ?? undefined,
               })
@@ -95,38 +94,36 @@ export default function TasklistPage() {
       })
     }
 
-    if (Notification.permission === "default") {
-      Notification.requestPermission().then((perm) => {
-        if (perm === "granted") checkReminders()
-      })
-    } else if (Notification.permission === "granted") {
+    if (Notification.permission === "granted") {
       checkReminders()
     }
   }, [tasks])
 
   return (
-    <div className="min-h-full px-6 py-6 space-y-10 max-w-400 mx-auto">
+    <div className="min-h-full px-3 py-4 space-y-6 max-w-[1600px] mx-auto sm:px-6 sm:py-6 sm:space-y-10">
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20">
-            <CheckSquare className="h-5 w-5 text-primary" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20 sm:h-10 sm:w-10">
+            <CheckSquare className="h-4 w-4 text-primary sm:h-5 sm:w-5" />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Task List</h1>
-            <p className="text-sm text-muted-foreground">
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Task List</h1>
+            <p className="hidden text-sm text-muted-foreground sm:block">
               Manage your work across all stages
             </p>
           </div>
         </div>
-        <button
-          title="Enable notifications"
-          onClick={() => Notification.requestPermission()}
-          className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-        >
-          <Bell className="h-4 w-4" />
-          <span className="hidden sm:inline">Notifications</span>
-        </button>
+        {"Notification" in window && Notification.permission !== "granted" && (
+          <button
+            title="Enable notifications for task reminders"
+            onClick={() => { Notification.requestPermission() }}
+            className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          >
+            <Bell className="h-4 w-4" />
+            <span className="hidden sm:inline">Enable Notifications</span>
+          </button>
+        )}
       </div>
 
       {/* ── Kanban Board ─────────────────────────────────────────────────────── */}
@@ -160,11 +157,11 @@ export default function TasklistPage() {
           onClick={() => setHistoryExpanded((v) => !v)}
           className="flex w-full items-center gap-3 text-left group"
         >
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10">
-            <History className="h-5 w-5 text-emerald-400" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 sm:h-9 sm:w-9">
+            <History className="h-4 w-4 text-emerald-400 sm:h-5 sm:w-5" />
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="text-xl font-bold text-foreground">Completed History</h2>
+            <h2 className="text-lg font-bold text-foreground sm:text-xl">Completed History</h2>
             <p className="text-sm text-muted-foreground">
               Tasks completed on previous days
               {!loadingHistory && historyTasks.length > 0 && (

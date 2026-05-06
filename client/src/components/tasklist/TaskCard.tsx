@@ -57,7 +57,7 @@ export function TaskCard({ task, onEdit, onDelete, onView, overlay }: TaskCardPr
         overlay && "shadow-2xl border-border rotate-2 scale-105",
       )}
     >
-      {/* Drag Handle — always visible on mobile, hover-only on desktop */}
+      {/* Drag Handle - always visible on mobile, hover-only on desktop */}
       {!overlay && (
         <div
           ref={setActivatorNodeRef}
@@ -74,7 +74,7 @@ export function TaskCard({ task, onEdit, onDelete, onView, overlay }: TaskCardPr
         </div>
       )}
 
-      {/* Actions — always visible on mobile, hover-only on desktop */}
+      {/* Actions - always visible on mobile, hover-only on desktop */}
       <div className={cn(
         "absolute right-2 top-2 flex gap-1 transition-opacity",
         "opacity-100 sm:opacity-0 sm:group-hover:opacity-100",
@@ -93,7 +93,7 @@ export function TaskCard({ task, onEdit, onDelete, onView, overlay }: TaskCardPr
         </button>
       </div>
 
-      {/* Clickable content area — opens detail view */}
+      {/* Clickable content area - opens detail view */}
       <div
         className="pl-4 pr-8 cursor-pointer"
         onClick={() => !overlay && onView?.(task)}
