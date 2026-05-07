@@ -11,7 +11,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def signup(body: SignUpRequest):
-    """Register with email + password. Returns a 2-day JWT."""
+    """Register with email + password. Returns a 7-day JWT."""
     try:
         result = sign_up(body.email, body.password, body.full_name)
     except ValueError as e:
@@ -21,7 +21,7 @@ def signup(body: SignUpRequest):
 
 @router.post("/signin", response_model=TokenResponse)
 def signin(body: SignInRequest):
-    """Sign in with email + password. Returns a 2-day JWT."""
+    """Sign in with email + password. Returns a 7-day JWT."""
     try:
         result = sign_in(body.email, body.password)
     except ValueError as e:
@@ -35,7 +35,7 @@ def signin(body: SignInRequest):
 def exchange(body: ExchangeRequest):
     """
     Accept the Supabase access_token that the frontend receives after OAuth
-    (Google / GitHub) and return our own 2-day JWT.
+    (Google / GitHub) and return our own 7-day JWT.
     """
     try:
         result = exchange_supabase_token(body.supabase_token)
@@ -59,7 +59,7 @@ def me(current_user: dict = Depends(get_current_user)):
 @router.post("/signout")
 def signout():
     """
-    Stateless sign-out — the client simply discards its JWT.
+    Stateless sign-out - the client simply discards its JWT.
     Supabase session tokens are short-lived; our JWT expiry handles revocation.
     """
     return {"message": "Signed out successfully."}

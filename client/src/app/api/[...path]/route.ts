@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-/** FastAPI backend – always on the same machine the Next.js server is running on. */
+/** FastAPI backend - always on the same machine the Next.js server is running on. */
 const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8000"
 
 /**
@@ -21,7 +21,7 @@ async function handler(
   const hasBody = !["GET", "HEAD"].includes(req.method)
   const body = hasBody ? await req.arrayBuffer() : undefined
 
-  // Build headers — forward content-type + auth, drop host / connection
+  // Build headers - forward content-type + auth, drop host / connection
   const headers = new Headers()
   const ct = req.headers.get("content-type")
   if (ct) headers.set("content-type", ct)

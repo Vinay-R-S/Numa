@@ -107,7 +107,7 @@ export default function AuthPage() {
       {/* Scrollable inner */}
       <div className="relative z-10 h-full overflow-y-auto" style={{ scrollbarWidth: "none" }}>
 
-        {/* Top bar — NUMA left (mobile only) + Back to home right */}
+        {/* Top bar - NUMA left (mobile only) + Back to home right */}
         <div className="relative z-20 flex items-center justify-between px-6 pt-5">
           <a href="/" className="lg:hidden text-2xl font-extrabold tracking-tight">
             NUMA
@@ -162,7 +162,7 @@ export default function AuthPage() {
 
         {/* ── Laptop+: split layout ── */}
         <div className="hidden lg:flex items-center justify-center min-h-screen px-12 gap-16 xl:gap-24">
-          {/* Left — branding */}
+          {/* Left - branding */}
           <motion.div
             initial={{ opacity: 0, x: -30, filter: "blur(6px)" }}
             animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
@@ -179,7 +179,7 @@ export default function AuthPage() {
             </p>
           </motion.div>
 
-          {/* Right — auth box */}
+          {/* Right - auth box */}
           <motion.div
             initial={{ opacity: 0, x: 30, filter: "blur(6px)" }}
             animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}

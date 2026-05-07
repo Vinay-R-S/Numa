@@ -9,7 +9,7 @@ import { supabase } from "@/lib/supabase";
  *
  * After the user authenticates with Google / GitHub, Supabase redirects here.
  * The Supabase JS client automatically picks up the session from the URL hash/code.
- * We then exchange the Supabase access_token for our own 2-day backend JWT.
+ * We then exchange the Supabase access_token for our own 7-day backend JWT.
  */
 export default function AuthCallbackPage() {
   const router = useRouter();

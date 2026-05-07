@@ -17,21 +17,21 @@ SUPABASE_SERVICE_ROLE_KEY: str = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 
 JWT_SECRET: str = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_DAYS = 2
+JWT_EXPIRE_DAYS = 7
 JWT_EXPIRE_SECONDS = JWT_EXPIRE_DAYS * 24 * 3600
 
 # ── Supabase clients ──────────────────────────────────────────────────────────
-# Anon client — used for sign-up / sign-in (respects RLS)
+# Anon client - used for sign-up / sign-in (respects RLS)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-# Service-role client — used to verify arbitrary tokens (admin operations)
+# Service-role client - used to verify arbitrary tokens (admin operations)
 supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 
 # ── JWT helpers ───────────────────────────────────────────────────────────────
 
 def create_jwt(user_id: str, email: str, full_name: Optional[str] = None) -> str:
-    """Create a signed JWT with a 2-day expiry."""
+    """Create a signed JWT with a 7-day expiry."""
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
