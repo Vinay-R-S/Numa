@@ -48,7 +48,7 @@ export default function UnderConstructionPage() {
           </h1>
           <p className="text-sm sm:text-base text-gray-400 leading-relaxed max-w-sm mx-auto">
             We&apos;re working hard to bring this page to life. Check back soon
-            — great things are on the way.
+            - great things are on the way.
           </p>
         </motion.div>
 

@@ -1,0 +1,490 @@
+(server) PS E:\Numa\server> uv tree
+Resolved 198 packages in 2ms
+server v0.1.0
+├── aiohappyeyeballs v2.6.1
+├── aiohttp v3.13.3
+│   ├── aiohappyeyeballs v2.6.1
+│   ├── aiosignal v1.4.0
+│   │   ├── frozenlist v1.8.0
+│   │   └── typing-extensions v4.15.0
+│   ├── attrs v26.1.0
+│   ├── frozenlist v1.8.0
+│   ├── multidict v6.7.1
+│   ├── propcache v0.4.1
+│   └── yarl v1.23.0
+│       ├── idna v3.11
+│       ├── multidict v6.7.1
+│       └── propcache v0.4.1
+├── aiosignal v1.4.0 (*)
+├── annotated-doc v0.0.4
+├── annotated-types v0.7.0
+├── anyio v4.12.1
+│   ├── idna v3.11
+│   └── typing-extensions v4.15.0
+├── apscheduler v3.11.2
+│   └── tzlocal v5.3.1
+│       └── tzdata v2025.2
+├── attrs v26.1.0
+├── cachetools v6.2.6
+├── certifi v2026.1.4
+├── cffi v2.0.0
+│   └── pycparser v3.0
+├── charset-normalizer v3.4.5
+├── click v8.3.1
+│   └── colorama v0.4.6
+├── colorama v0.4.6
+├── cryptography v46.0.5
+│   └── cffi v2.0.0 (*)
+├── decorator v5.2.1
+├── deprecation v2.1.0
+│   └── packaging v25.0
+├── distro v1.9.0
+├── dnspython v2.8.0
+├── ecdsa v0.19.1
+│   └── six v1.17.0
+├── email-validator v2.3.0
+│   ├── dnspython v2.8.0
+│   └── idna v3.11
+├── fastapi v0.128.1
+│   ├── annotated-doc v0.0.4
+│   ├── pydantic v2.12.5
+│   │   ├── annotated-types v0.7.0
+│   │   ├── pydantic-core v2.41.5
+│   │   │   └── typing-extensions v4.15.0
+│   │   ├── typing-extensions v4.15.0
+│   │   ├── typing-inspection v0.4.2
+│   │   │   └── typing-extensions v4.15.0
+│   │   └── email-validator v2.3.0 (extra: email) (*)
+│   ├── starlette v0.50.0
+│   │   ├── anyio v4.12.1 (*)
+│   │   └── typing-extensions v4.15.0
+│   └── typing-extensions v4.15.0
+├── fastapi-cli v0.0.24
+│   ├── rich-toolkit v0.19.7
+│   │   ├── click v8.3.1 (*)
+│   │   ├── rich v14.3.3
+│   │   │   ├── markdown-it-py v4.0.0
+│   │   │   │   └── mdurl v0.1.2
+│   │   │   └── pygments v2.19.2
+│   │   └── typing-extensions v4.15.0
+│   ├── typer v0.24.2
+│   │   ├── annotated-doc v0.0.4
+│   │   ├── click v8.3.1 (*)
+│   │   ├── rich v14.3.3 (*)
+│   │   └── shellingham v1.5.4
+│   └── uvicorn[standard] v0.40.0
+│       ├── click v8.3.1 (*)
+│       ├── h11 v0.16.0
+│       ├── colorama v0.4.6 (extra: standard)
+│       ├── httptools v0.7.1 (extra: standard)
+│       ├── python-dotenv v1.2.2 (extra: standard)
+│       ├── pyyaml v6.0.3 (extra: standard)
+│       ├── watchfiles v1.1.1 (extra: standard)
+│       │   └── anyio v4.12.1 (*)
+│       └── websockets v15.0.1 (extra: standard)
+├── fastapi-cloud-cli v0.16.1
+│   ├── fastar v0.11.0
+│   ├── httpx v0.28.1
+│   │   ├── anyio v4.12.1 (*)
+│   │   ├── certifi v2026.1.4
+│   │   ├── httpcore v1.0.9
+│   │   │   ├── certifi v2026.1.4
+│   │   │   └── h11 v0.16.0
+│   │   ├── idna v3.11
+│   │   └── h2 v4.3.0 (extra: http2)
+│   │       ├── hpack v4.1.0
+│   │       └── hyperframe v6.1.0
+│   ├── pydantic[email] v2.12.5 (*)
+│   ├── rich-toolkit v0.19.7 (*)
+│   ├── rignore v0.7.6
+│   ├── sentry-sdk v2.58.0
+│   │   ├── certifi v2026.1.4
+│   │   └── urllib3 v2.6.3
+│   ├── typer v0.24.2 (*)
+│   └── uvicorn[standard] v0.40.0 (*)
+├── fastar v0.11.0
+├── fastuuid v0.14.0
+├── filelock v3.25.2
+├── frozenlist v1.8.0
+├── fsspec v2026.2.0
+├── google-api-core v2.30.0
+│   ├── google-auth v2.41.1
+│   │   ├── cachetools v6.2.6
+│   │   ├── pyasn1-modules v0.4.2
+│   │   │   └── pyasn1 v0.6.2
+│   │   └── rsa v4.9.1
+│   │       └── pyasn1 v0.6.2
+│   ├── googleapis-common-protos v1.73.0
+│   │   └── protobuf v6.33.6
+│   ├── proto-plus v1.27.1
+│   │   └── protobuf v6.33.6
+│   ├── protobuf v6.33.6
+│   ├── requests v2.32.5
+│   │   ├── certifi v2026.1.4
+│   │   ├── charset-normalizer v3.4.5
+│   │   ├── idna v3.11
+│   │   └── urllib3 v2.6.3
+│   ├── grpcio v1.78.0 (extra: grpc)
+│   │   └── typing-extensions v4.15.0
+│   └── grpcio-status v1.78.0 (extra: grpc)
+│       ├── googleapis-common-protos v1.73.0 (*)
+│       ├── grpcio v1.78.0 (*)
+│       └── protobuf v6.33.6
+├── google-api-python-client v2.186.0
+│   ├── google-api-core v2.30.0 (*)
+│   ├── google-auth v2.41.1 (*)
+│   ├── google-auth-httplib2 v0.3.0
+│   │   ├── google-auth v2.41.1 (*)
+│   │   └── httplib2 v0.31.2
+│   │       └── pyparsing v3.3.2
+│   ├── httplib2 v0.31.2 (*)
+│   └── uritemplate v4.2.0
+├── google-auth v2.41.1 (*)
+├── google-auth-httplib2 v0.3.0 (*)
+├── google-auth-oauthlib v1.2.3
+│   ├── google-auth v2.41.1 (*)
+│   └── requests-oauthlib v2.0.0
+│       ├── oauthlib v3.3.1
+│       └── requests v2.32.5 (*)
+├── googleapis-common-protos v1.73.0 (*)
+├── greenlet v3.3.2
+├── groq v0.37.1
+│   ├── anyio v4.12.1 (*)
+│   ├── distro v1.9.0
+│   ├── httpx v0.28.1 (*)
+│   ├── pydantic v2.12.5 (*)
+│   ├── sniffio v1.3.1
+│   └── typing-extensions v4.15.0
+├── grpcio v1.78.0 (*)
+├── grpcio-tools v1.78.0
+│   ├── grpcio v1.78.0 (*)
+│   ├── protobuf v6.33.6
+│   └── setuptools v82.0.1
+├── h11 v0.16.0
+├── h2 v4.3.0 (*)
+├── hf-xet v1.4.3
+├── hpack v4.1.0
+├── httpcore v1.0.9 (*)
+├── httplib2 v0.31.2 (*)
+├── httptools v0.7.1
+├── httpx v0.28.1 (*)
+├── huggingface-hub v0.36.2
+│   ├── filelock v3.25.2
+│   ├── fsspec v2026.2.0
+│   ├── packaging v25.0
+│   ├── pyyaml v6.0.3
+│   ├── requests v2.32.5 (*)
+│   ├── tqdm v4.67.3
+│   │   └── colorama v0.4.6
+│   └── typing-extensions v4.15.0
+├── hyperframe v6.1.0
+├── idna v3.11
+├── imageio v2.37.2
+│   ├── numpy v2.4.3
+│   └── pillow v12.1.1
+├── imageio-ffmpeg v0.6.0
+├── importlib-metadata v8.5.0
+│   └── zipp v3.23.1
+├── iniconfig v2.3.0
+├── jinja2 v3.1.6
+│   └── markupsafe v3.0.3
+├── jiter v0.13.0
+├── joblib v1.5.3
+├── jsonpatch v1.33
+│   └── jsonpointer v3.0.0
+├── jsonpointer v3.0.0
+├── jsonschema v4.23.0
+│   ├── attrs v26.1.0
+│   ├── jsonschema-specifications v2025.9.1
+│   │   └── referencing v0.37.0
+│   │       ├── attrs v26.1.0
+│   │       ├── rpds-py v0.30.0
+│   │       └── typing-extensions v4.15.0
+│   ├── referencing v0.37.0 (*)
+│   └── rpds-py v0.30.0
+├── jsonschema-specifications v2025.9.1 (*)
+├── langchain v0.3.27
+│   ├── langchain-core v0.3.79
+│   │   ├── jsonpatch v1.33 (*)
+│   │   ├── langsmith v0.7.20
+│   │   │   ├── httpx v0.28.1 (*)
+│   │   │   ├── orjson v3.11.7
+│   │   │   ├── packaging v25.0
+│   │   │   ├── pydantic v2.12.5 (*)
+│   │   │   ├── requests v2.32.5 (*)
+│   │   │   ├── requests-toolbelt v1.0.0
+│   │   │   │   └── requests v2.32.5 (*)
+│   │   │   ├── uuid-utils v0.14.1
+│   │   │   ├── xxhash v3.6.0
+│   │   │   └── zstandard v0.25.0
+│   │   ├── packaging v25.0
+│   │   ├── pydantic v2.12.5 (*)
+│   │   ├── pyyaml v6.0.3
+│   │   ├── tenacity v9.1.4
+│   │   └── typing-extensions v4.15.0
+│   ├── langchain-text-splitters v0.3.11
+│   │   └── langchain-core v0.3.79 (*)
+│   ├── langsmith v0.7.20 (*)
+│   ├── pydantic v2.12.5 (*)
+│   ├── pyyaml v6.0.3
+│   ├── requests v2.32.5 (*)
+│   └── sqlalchemy v2.0.48
+│       ├── greenlet v3.3.2
+│       └── typing-extensions v4.15.0
+├── langchain-anthropic v0.3.22
+│   ├── anthropic v0.97.0
+│   │   ├── anyio v4.12.1 (*)
+│   │   ├── distro v1.9.0
+│   │   ├── docstring-parser v0.18.0
+│   │   ├── httpx v0.28.1 (*)
+│   │   ├── jiter v0.13.0
+│   │   ├── pydantic v2.12.5 (*)
+│   │   ├── sniffio v1.3.1
+│   │   └── typing-extensions v4.15.0
+│   ├── langchain-core v0.3.79 (*)
+│   └── pydantic v2.12.5 (*)
+├── langchain-core v0.3.79 (*)
+├── langchain-google-genai v2.1.12
+│   ├── filetype v1.2.0
+│   ├── google-ai-generativelanguage v0.11.0
+│   │   ├── google-api-core[grpc] v2.30.0 (*)
+│   │   ├── google-auth v2.41.1 (*)
+│   │   ├── grpcio v1.78.0 (*)
+│   │   ├── proto-plus v1.27.1 (*)
+│   │   └── protobuf v6.33.6
+│   ├── langchain-core v0.3.79 (*)
+│   └── pydantic v2.12.5 (*)
+├── langchain-groq v0.3.8
+│   ├── groq v0.37.1 (*)
+│   └── langchain-core v0.3.79 (*)
+├── langchain-ollama v0.3.10
+│   ├── langchain-core v0.3.79 (*)
+│   └── ollama v0.6.2
+│       ├── httpx v0.28.1 (*)
+│       └── pydantic v2.12.5 (*)
+├── langchain-openai v0.3.35
+│   ├── langchain-core v0.3.79 (*)
+│   ├── openai v1.108.1
+│   │   ├── anyio v4.12.1 (*)
+│   │   ├── distro v1.9.0
+│   │   ├── httpx v0.28.1 (*)
+│   │   ├── jiter v0.13.0
+│   │   ├── pydantic v2.12.5 (*)
+│   │   ├── sniffio v1.3.1
+│   │   ├── tqdm v4.67.3 (*)
+│   │   └── typing-extensions v4.15.0
+│   └── tiktoken v0.12.0
+│       ├── regex v2026.2.28
+│       └── requests v2.32.5 (*)
+├── langchain-text-splitters v0.3.11 (*)
+├── langgraph v0.6.11
+│   ├── langchain-core v0.3.79 (*)
+│   ├── langgraph-checkpoint v3.0.1
+│   │   ├── langchain-core v0.3.79 (*)
+│   │   └── ormsgpack v1.12.2
+│   ├── langgraph-prebuilt v0.6.5
+│   │   ├── langchain-core v0.3.79 (*)
+│   │   └── langgraph-checkpoint v3.0.1 (*)
+│   ├── langgraph-sdk v0.2.15
+│   │   ├── httpx v0.28.1 (*)
+│   │   └── orjson v3.11.7
+│   ├── pydantic v2.12.5 (*)
+│   └── xxhash v3.6.0
+├── langgraph-checkpoint v3.0.1 (*)
+├── langgraph-prebuilt v0.6.5 (*)
+├── langgraph-sdk v0.2.15 (*)
+├── langsmith v0.7.20 (*)
+├── markdown-it-py v4.0.0 (*)
+├── markupsafe v3.0.3
+├── mdurl v0.1.2
+├── mmh3 v5.2.1
+├── mpmath v1.3.0
+├── multidict v6.7.1
+├── networkx v3.6.1
+├── numpy v2.4.3
+├── oauthlib v3.3.1
+├── openai v1.108.1 (*)
+├── orjson v3.11.7
+├── ormsgpack v1.12.2
+├── packaging v25.0
+├── pillow v12.1.1
+├── playwright v1.58.0
+│   ├── greenlet v3.3.2
+│   └── pyee v13.0.1
+│       └── typing-extensions v4.15.0
+├── pluggy v1.6.0
+├── portalocker v2.10.1
+│   └── pywin32 v311
+├── postgrest v2.28.0
+│   ├── deprecation v2.1.0 (*)
+│   ├── httpx[http2] v0.28.1 (*)
+│   ├── pydantic v2.12.5 (*)
+│   └── yarl v1.23.0 (*)
+├── proglog v0.1.12
+│   └── tqdm v4.67.3 (*)
+├── propcache v0.4.1
+├── proto-plus v1.27.1 (*)
+├── protobuf v6.33.6
+├── psycopg2-binary v2.9.11
+├── pyasn1 v0.6.2
+├── pyasn1-modules v0.4.2 (*)
+├── pycparser v3.0
+├── pydantic v2.12.5 (*)
+├── pydantic-core v2.41.5 (*)
+├── pydantic-extra-types v2.11.1
+│   ├── pydantic v2.12.5 (*)
+│   └── typing-extensions v4.15.0
+├── pydantic-settings v2.13.1
+│   ├── pydantic v2.12.5 (*)
+│   ├── python-dotenv v1.2.2
+│   └── typing-inspection v0.4.2 (*)
+├── pyee v13.0.1 (*)
+├── pygments v2.19.2
+├── pyiceberg v0.11.1
+│   ├── cachetools v6.2.6
+│   ├── click v8.3.1 (*)
+│   ├── fsspec v2026.2.0
+│   ├── mmh3 v5.2.1
+│   ├── pydantic v2.12.5 (*)
+│   ├── pyparsing v3.3.2
+│   ├── pyroaring v1.0.3
+│   ├── requests v2.32.5 (*)
+│   ├── rich v14.3.3 (*)
+│   ├── strictyaml v1.7.3
+│   │   └── python-dateutil v2.9.0.post0
+│   │       └── six v1.17.0
+│   ├── tenacity v9.1.4
+│   └── zstandard v0.25.0
+├── pyjwt v2.11.0
+│   └── cryptography v46.0.5 (extra: crypto) (*)
+├── pymupdf v1.27.1
+├── pyparsing v3.3.2
+├── pypdf2 v3.0.1
+├── pyroaring v1.0.3
+├── pytest v9.0.2
+│   ├── colorama v0.4.6
+│   ├── iniconfig v2.3.0
+│   ├── packaging v25.0
+│   ├── pluggy v1.6.0
+│   └── pygments v2.19.2
+├── python-dateutil v2.9.0.post0 (*)
+├── python-dotenv v1.2.2
+├── python-jose v3.5.0
+│   ├── ecdsa v0.19.1 (*)
+│   ├── pyasn1 v0.6.2
+│   └── rsa v4.9.1 (*)
+├── python-multipart v0.0.22
+├── pywin32 v311
+├── pyyaml v6.0.3
+├── qdrant-client v1.12.1
+│   ├── grpcio v1.78.0 (*)
+│   ├── grpcio-tools v1.78.0 (*)
+│   ├── httpx[http2] v0.28.1 (*)
+│   ├── numpy v2.4.3
+│   ├── portalocker v2.10.1 (*)
+│   ├── pydantic v2.12.5 (*)
+│   └── urllib3 v2.6.3
+├── realtime v2.28.0
+│   ├── pydantic v2.12.5 (*)
+│   ├── typing-extensions v4.15.0
+│   └── websockets v15.0.1
+├── referencing v0.37.0 (*)
+├── regex v2026.2.28
+├── requests v2.32.5 (*)
+├── requests-oauthlib v2.0.0 (*)
+├── requests-toolbelt v1.0.0 (*)
+├── rich v14.3.3 (*)
+├── rignore v0.7.6
+├── rpds-py v0.30.0
+├── rsa v4.9.1 (*)
+├── safetensors v0.7.0
+├── scikit-learn v1.8.0
+│   ├── joblib v1.5.3
+│   ├── numpy v2.4.3
+│   ├── scipy v1.17.1
+│   │   └── numpy v2.4.3
+│   └── threadpoolctl v3.6.0
+├── scipy v1.17.1 (*)
+├── sentence-transformers v3.2.1
+│   ├── huggingface-hub v0.36.2 (*)
+│   ├── pillow v12.1.1
+│   ├── scikit-learn v1.8.0 (*)
+│   ├── scipy v1.17.1 (*)
+│   ├── torch v2.10.0
+│   │   ├── filelock v3.25.2
+│   │   ├── fsspec v2026.2.0
+│   │   ├── jinja2 v3.1.6 (*)
+│   │   ├── networkx v3.6.1
+│   │   ├── sympy v1.14.0
+│   │   │   └── mpmath v1.3.0
+│   │   └── typing-extensions v4.15.0
+│   ├── tqdm v4.67.3 (*)
+│   └── transformers v4.57.6
+│       ├── filelock v3.25.2
+│       ├── huggingface-hub v0.36.2 (*)
+│       ├── numpy v2.4.3
+│       ├── packaging v25.0
+│       ├── pyyaml v6.0.3
+│       ├── regex v2026.2.28
+│       ├── requests v2.32.5 (*)
+│       ├── safetensors v0.7.0
+│       ├── tokenizers v0.22.2
+│       │   └── huggingface-hub v0.36.2 (*)
+│       └── tqdm v4.67.3 (*)
+├── sentry-sdk v2.58.0 (*)
+├── setuptools v82.0.1
+├── shellingham v1.5.4
+├── six v1.17.0
+├── sniffio v1.3.1
+├── sqlalchemy v2.0.48 (*)
+├── starlette v0.50.0 (*)
+├── storage3 v2.28.0
+│   ├── deprecation v2.1.0 (*)
+│   ├── httpx[http2] v0.28.1 (*)
+│   ├── pydantic v2.12.5 (*)
+│   ├── pyiceberg v0.11.1 (*)
+│   └── yarl v1.23.0 (*)
+├── strenum v0.4.15
+├── strictyaml v1.7.3 (*)
+├── supabase v2.28.0
+│   ├── httpx v0.28.1 (*)
+│   ├── postgrest v2.28.0 (*)
+│   ├── realtime v2.28.0 (*)
+│   ├── storage3 v2.28.0 (*)
+│   ├── supabase-auth v2.28.0
+│   │   ├── httpx[http2] v0.28.1 (*)
+│   │   ├── pydantic v2.12.5 (*)
+│   │   └── pyjwt[crypto] v2.11.0 (*)
+│   ├── supabase-functions v2.28.0
+│   │   ├── httpx[http2] v0.28.1 (*)
+│   │   ├── strenum v0.4.15
+│   │   └── yarl v1.23.0 (*)
+│   └── yarl v1.23.0 (*)
+├── supabase-auth v2.28.0 (*)
+├── supabase-functions v2.28.0 (*)
+├── sympy v1.14.0 (*)
+├── tenacity v9.1.4
+├── threadpoolctl v3.6.0
+├── tiktoken v0.12.0 (*)
+├── tokenizers v0.22.2 (*)
+├── torch v2.10.0 (*)
+├── tqdm v4.67.3 (*)
+├── transformers v4.57.6 (*)
+├── typer v0.24.2 (*)
+├── typing-extensions v4.15.0
+├── typing-inspection v0.4.2 (*)
+├── tzdata v2025.2
+├── uritemplate v4.2.0
+├── urllib3 v2.6.3
+├── uuid-utils v0.14.1
+├── uvicorn v0.40.0 (*)
+├── watchfiles v1.1.1 (*)
+├── websockets v15.0.1
+├── wheel v0.46.3
+│   └── packaging v25.0
+├── xxhash v3.6.0
+├── yarl v1.23.0 (*)
+├── zipp v3.23.1
+└── zstandard v0.25.0
+(*) Package tree already displayed
+(server) PS E:\Numa\server> 
