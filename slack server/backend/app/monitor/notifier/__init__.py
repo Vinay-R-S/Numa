@@ -1,3 +1,0 @@
-"""
-Notifier package.
-"""
