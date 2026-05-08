@@ -1,16 +1,17 @@
 import importlib
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 
 log = logging.getLogger(__name__)
 
-# Calendar collection name (separate from conversation memory)
-_CALENDAR_COLLECTION = os.getenv("QDRANT_CALENDAR_COLLECTION", "numa_calendar_events")
 _CALENDAR_EMBEDDING_DIM = 384  # all-MiniLM-L6-v2
 
 
@@ -19,34 +20,37 @@ class SemanticMemoryService:
     """
     Semantic memory backed by Qdrant and pluggable embeddings.
 
-    Defaults are tuned for high retrieval quality while keeping vectors medium-sized:
+    Defaults are tuned for fast local retrieval with compact vectors:
     - Provider: local (sentence-transformers)
-    - Local model: BAAI/bge-base-en-v1.5
-    - Dimensions: 768
+    - Local model: sentence-transformers/all-MiniLM-L6-v2
+    - Dimensions: 384
     - Distance: cosine
     """
 
     def __init__(self) -> None:
         self.embedding_provider = os.getenv("EMBEDDING_PROVIDER", "local").strip().lower()
         self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
-        self.local_embedding_model = os.getenv("LOCAL_EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
-        self.embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "768"))
+        self.local_embedding_model = (
+            os.getenv("HUGGINGFACE_EMBEDDING_MODEL")
+            or "sentence-transformers/all-MiniLM-L6-v2"
+        ).strip()
+        self.embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "384"))
         self.collection_name = os.getenv("QDRANT_COLLECTION", "numa_agent_memory")
         self.context_limit = int(os.getenv("MEMORY_CONTEXT_LIMIT", "4"))
         self.recreate_collection_on_dim_mismatch = (
-            os.getenv("MEMORY_RECREATE_COLLECTION_ON_DIM_MISMATCH", "true").strip().lower()
+            os.getenv("MEMORY_RECREATE_COLLECTION_ON_DIM_MISMATCH", "false").strip().lower()
             in {"1", "true", "yes", "y", "on"}
         )
 
         self.openai_api_key = self._normalize_openai_key(os.getenv("OPENAI_API_KEY", ""))
-        self.qdrant_url = os.getenv("QDRANT_URL", "").strip()
-        self.qdrant_api_key = os.getenv("QDRANT_API_KEY", "").strip() or None
-
-        # Local file-mode: run Qdrant entirely on disk — no server, no Docker.
-        # Set QDRANT_LOCAL_PATH to a directory path to activate this mode.
-        # QDRANT_URL takes precedence when both are set.
-        _local_path_raw = os.getenv("QDRANT_LOCAL_PATH", "").strip()
-        self.qdrant_local_path: Optional[str] = _local_path_raw if _local_path_raw else None
+        self.qdrant_url = self._normalize_qdrant_url(
+            os.getenv("QDRANT_URL_ENDPOINT")
+            or os.getenv("QDRANT_URL")
+            or os.getenv("QDRANT_CLOUD_URL", "")
+        )
+        self.qdrant_api_key = self._normalize_secret(
+            os.getenv("QDRANT_API_KEY") or os.getenv("QDRANT_CLOUD_API_KEY", "")
+        )
 
         self.embedding_retry_after = timedelta(
             seconds=max(30, int(os.getenv("EMBEDDING_RETRY_AFTER_SECONDS", "300")))
@@ -63,11 +67,42 @@ class SemanticMemoryService:
             return ""
         return key
 
+    @staticmethod
+    def _normalize_secret(value: str) -> Optional[str]:
+        secret = (value or "").strip().strip('"').strip("'")
+        lowered = secret.lower()
+        if lowered in {"", "your_qdrant_api_key", "qdrant_api_key"}:
+            return None
+        return secret
+
+    @staticmethod
+    def _normalize_qdrant_url(value: str) -> str:
+        url = (value or "").strip().strip('"').strip("'").rstrip("/")
+        lowered = url.lower()
+        if lowered in {"", "your_qdrant_url", "qdrant_url", "qdrant_url_endpoint"}:
+            return ""
+        if "://" not in url:
+            url = f"https://{url}"
+        return url
+
+    @staticmethod
+    def _embedding_cache_dir() -> str:
+        server_root = Path(__file__).resolve().parents[2]
+        raw = (
+            os.getenv("HUGGINGFACE_MODEL_CACHE_DIR")
+            or ""
+        ).strip()
+        if raw:
+            path = Path(raw)
+            if not path.is_absolute():
+                base = server_root.parent if path.parts and path.parts[0].lower() == "server" else server_root
+                path = base / path
+            return str(path)
+        return str(server_root / "models")
+
     @property
     def enabled(self) -> bool:
-        # Need at least one Qdrant backend (remote URL or local path)
-        has_backend = bool(self.qdrant_url) or bool(self.qdrant_local_path)
-        if not has_backend:
+        if not self.qdrant_url:
             return False
 
         if self.embedding_provider == "openai":
@@ -79,9 +114,37 @@ class SemanticMemoryService:
         return False
 
     @property
-    def _using_local_mode(self) -> bool:
-        """True when Qdrant runs from local disk (no server needed)."""
-        return bool(self.qdrant_local_path) and not bool(self.qdrant_url)
+    def qdrant_mode(self) -> str:
+        if not self.qdrant_url:
+            return "disabled"
+        return "cloud" if self.qdrant_api_key else "remote"
+
+    @property
+    def qdrant_host(self) -> str:
+        if not self.qdrant_url:
+            return ""
+        parsed = urlparse(self.qdrant_url)
+        return parsed.netloc or self.qdrant_url
+
+    @staticmethod
+    def _safe_collection_part(value: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", (value or "").strip())
+        cleaned = cleaned.strip("_-").lower()
+        return cleaned or "unknown_user"
+
+    def user_collection_name(self, user_id: str, domain: str) -> str:
+        user_part = self._safe_collection_part(user_id)
+        domain_part = self._safe_collection_part(domain)
+        name = f"{user_part}_{domain_part}"
+        if len(name) <= 255:
+            return name
+
+        digest = uuid.uuid5(uuid.NAMESPACE_URL, name).hex[:12]
+        max_user_len = 255 - len(domain_part) - len(digest) - 2
+        return f"{user_part[:max_user_len]}_{domain_part}_{digest}"
+
+    def memory_collection_name(self, user_id: str) -> str:
+        return self.user_collection_name(user_id, "memory")
 
     @lru_cache(maxsize=1)
     def _deps(self) -> Optional[dict]:
@@ -138,7 +201,12 @@ class SemanticMemoryService:
             return None
 
         try:
-            return deps["SentenceTransformer"](self.local_embedding_model)
+            cache_dir = self._embedding_cache_dir()
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            return deps["SentenceTransformer"](
+                self.local_embedding_model,
+                cache_folder=cache_dir,
+            )
         except Exception as exc:
             log.warning("Failed to load local embedding model '%s': %s", self.local_embedding_model, exc)
             return None
@@ -149,45 +217,42 @@ class SemanticMemoryService:
         if not deps:
             return None
 
-        if self._using_local_mode:
-            # Local file mode — no server or Docker required.
-            # Data is persisted to QDRANT_LOCAL_PATH on disk.
-            import os as _os
-            _os.makedirs(self.qdrant_local_path, exist_ok=True)
-            log.info("Qdrant running in local file mode at: %s", self.qdrant_local_path)
-            return deps["QdrantClient"](path=self.qdrant_local_path)
-
-        # Remote / Docker mode
         return deps["QdrantClient"](url=self.qdrant_url, api_key=self.qdrant_api_key)
 
-    def _ensure_collection(self) -> bool:
+    def _ensure_collection(
+        self,
+        collection_name: Optional[str] = None,
+        dimensions: Optional[int] = None,
+    ) -> bool:
+        target_collection = collection_name or self.collection_name
+        target_dimensions = dimensions or self.embedding_dimensions
         deps = self._deps()
         qdrant = self._qdrant_client()
         if not deps or not qdrant:
             return False
 
         try:
-            exists = qdrant.collection_exists(self.collection_name)
+            exists = qdrant.collection_exists(target_collection)
             if exists:
                 try:
-                    collection_info = qdrant.get_collection(self.collection_name)
+                    collection_info = qdrant.get_collection(target_collection)
                     existing_size = self._collection_vector_size(collection_info)
-                    if existing_size and existing_size != self.embedding_dimensions:
+                    if existing_size and existing_size != target_dimensions:
                         if self.recreate_collection_on_dim_mismatch:
                             log.warning(
                                 "Recreating Qdrant collection '%s' due to dimension mismatch (%s -> %s).",
-                                self.collection_name,
+                                target_collection,
                                 existing_size,
-                                self.embedding_dimensions,
+                                target_dimensions,
                             )
-                            qdrant.delete_collection(self.collection_name)
+                            qdrant.delete_collection(target_collection)
                             exists = False
                         else:
                             log.warning(
                                 "Qdrant collection '%s' has dimension %s but expected %s.",
-                                self.collection_name,
+                                target_collection,
                                 existing_size,
-                                self.embedding_dimensions,
+                                target_dimensions,
                             )
                             return False
                 except Exception as exc:
@@ -197,15 +262,15 @@ class SemanticMemoryService:
                 return True
 
             qdrant.create_collection(
-                collection_name=self.collection_name,
+                collection_name=target_collection,
                 vectors_config=deps["VectorParams"](
-                    size=self.embedding_dimensions,
+                    size=target_dimensions,
                     distance=deps["Distance"].COSINE,
                 ),
             )
             return True
         except Exception as exc:
-            log.warning("Failed to ensure Qdrant collection '%s': %s", self.collection_name, exc)
+            log.warning("Failed to ensure Qdrant collection '%s': %s", target_collection, exc)
             return False
 
     @staticmethod
@@ -234,6 +299,18 @@ class SemanticMemoryService:
         return vector + [0.0] * (self.embedding_dimensions - size)
 
     def _embed_local(self, text: str) -> Optional[List[float]]:
+        try:
+            try:
+                from src.embedder import embedder  # type: ignore
+            except ImportError:
+                from ..embedder import embedder  # type: ignore
+
+            vector = embedder.embed(text)
+            if vector:
+                return self._coerce_dimensions(vector)
+        except Exception as exc:
+            log.warning("Shared local embedder unavailable: %s", exc)
+
         embedder = self._local_embedder()
         if not embedder:
             return None
@@ -315,14 +392,19 @@ class SemanticMemoryService:
             f"numa:{namespace}:{user_id}:{external_id}",
         ).hex
 
-    def _upsert_text_point(self, point_id: str, text: str, payload: dict) -> None:
+    @staticmethod
+    def _qdrant_point_id(point_id: str) -> str:
+        return str(uuid.UUID(point_id))
+
+    def _upsert_text_point(self, point_id: str, text: str, payload: dict, user_id: str) -> None:
         if not self.enabled:
             return
+        collection_name = self.memory_collection_name(user_id)
 
         vector = self._embed(text)
         if not vector:
             return
-        if not self._ensure_collection():
+        if not self._ensure_collection(collection_name=collection_name):
             return
 
         deps = self._deps()
@@ -331,8 +413,12 @@ class SemanticMemoryService:
             return
 
         try:
-            point = deps["PointStruct"](id=uuid.UUID(point_id), vector=vector, payload=payload)
-            qdrant.upsert(collection_name=self.collection_name, points=[point], wait=False)
+            point = deps["PointStruct"](
+                id=self._qdrant_point_id(point_id),
+                vector=vector,
+                payload=payload,
+            )
+            qdrant.upsert(collection_name=collection_name, points=[point], wait=False)
         except Exception as exc:
             log.warning("Failed to upsert semantic memory point: %s", exc)
 
@@ -350,7 +436,7 @@ class SemanticMemoryService:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        self._upsert_text_point(uuid.uuid4().hex, content, payload)
+        self._upsert_text_point(uuid.uuid4().hex, content, payload, user_id=user_id)
 
     def store_task_snapshot(
         self,
@@ -393,7 +479,7 @@ class SemanticMemoryService:
         }
 
         point_id = self._stable_point_id("task", user_id, task_id)
-        self._upsert_text_point(point_id, text, payload)
+        self._upsert_text_point(point_id, text, payload, user_id=user_id)
 
     def store_calendar_event_snapshot(
         self,
@@ -435,7 +521,7 @@ class SemanticMemoryService:
 
         stable_key = f"{calendar_id}:{event_id}"
         point_id = self._stable_point_id("calendar_event", user_id, stable_key)
-        self._upsert_text_point(point_id, text, payload)
+        self._upsert_text_point(point_id, text, payload, user_id=user_id)
 
     def delete_snapshot(self, user_id: str, source: str, external_id: str) -> None:
         if not self.enabled:
@@ -449,10 +535,16 @@ class SemanticMemoryService:
             return
 
         point_id = self._stable_point_id(source, user_id, external_id)
+        collection_name = self.memory_collection_name(user_id)
         try:
+            if not qdrant.collection_exists(collection_name):
+                return
+
             qdrant.delete(
-                collection_name=self.collection_name,
-                points_selector=deps["PointIdsList"](points=[uuid.UUID(point_id)]),
+                collection_name=collection_name,
+                points_selector=deps["PointIdsList"](
+                    points=[self._qdrant_point_id(point_id)]
+                ),
                 wait=False,
             )
         except Exception as exc:
@@ -467,7 +559,8 @@ class SemanticMemoryService:
         vector = self._embed(query.strip())
         if not vector:
             return ""
-        if not self._ensure_collection():
+        collection_name = self.memory_collection_name(user_id)
+        if not self._ensure_collection(collection_name=collection_name):
             return ""
 
         deps = self._deps()
@@ -486,7 +579,7 @@ class SemanticMemoryService:
             )
 
             hits = qdrant.search(
-                collection_name=self.collection_name,
+                collection_name=collection_name,
                 query_vector=vector,
                 query_filter=user_filter,
                 limit=self.context_limit,
@@ -510,19 +603,23 @@ memory_service = SemanticMemoryService()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CALENDAR RAG — dedicated Qdrant collection  ("numa_calendar_events")
+# CALENDAR RAG - per-user Qdrant collections ("{user_id}_calendar")
 # ══════════════════════════════════════════════════════════════════════════════
 # Uses the shared CachedEmbedder singleton so the model is only loaded once.
 
 def _cal_qdrant_client():
-    """Return the same local Qdrant client used by the memory service."""
+    """Return the same Qdrant Cloud client used by the memory service."""
     return memory_service._qdrant_client()
 
 
-def _ensure_calendar_collection() -> bool:
+def _calendar_collection_name(user_id: str) -> str:
+    return memory_service.user_collection_name(user_id, "calendar")
+
+
+def _ensure_calendar_collection(user_id: str) -> bool:
     """
-    Create the `numa_calendar_events` Qdrant collection if it doesn't exist.
-    Idempotent — safe to call on every ingest.
+    Create the user's calendar Qdrant collection if it doesn't exist.
+    Idempotent - safe to call on every ingest.
     """
     try:
         qdrant = _cal_qdrant_client()
@@ -530,15 +627,35 @@ def _ensure_calendar_collection() -> bool:
         if not qdrant or not deps:
             return False
 
-        if not qdrant.collection_exists(_CALENDAR_COLLECTION):
+        collection_name = _calendar_collection_name(user_id)
+        if not qdrant.collection_exists(collection_name):
             qdrant.create_collection(
-                collection_name=_CALENDAR_COLLECTION,
+                collection_name=collection_name,
                 vectors_config=deps["VectorParams"](
                     size=_CALENDAR_EMBEDDING_DIM,
                     distance=deps["Distance"].COSINE,
                 ),
             )
-            log.info("Created Qdrant collection '%s'", _CALENDAR_COLLECTION)
+            for field in ("user_id", "app", "month"):
+                try:
+                    qdrant.create_payload_index(
+                        collection_name=collection_name,
+                        field_name=field,
+                        field_schema="keyword",
+                    )
+                except Exception:
+                    pass
+            log.info("Created Qdrant collection '%s' with payload indexes", collection_name)
+        else:
+            for field in ("user_id", "app", "month"):
+                try:
+                    qdrant.create_payload_index(
+                        collection_name=collection_name,
+                        field_name=field,
+                        field_schema="keyword",
+                    )
+                except Exception:
+                    pass
         return True
     except Exception as exc:
         log.warning("_ensure_calendar_collection failed: %s", exc)
@@ -558,9 +675,9 @@ def store_calendar_event(
     calendar_type: str = "personal",
 ) -> None:
     """
-    Embed one Google Calendar event and upsert it into `numa_calendar_events`.
+    Embed one Google Calendar event and upsert it into `{user_id}_calendar`.
 
-    The point ID is stable — re-ingesting the same event updates the vector
+    The point ID is stable - re-ingesting the same event updates the vector
     in place rather than creating a duplicate.
     """
     if not user_id or not event_id:
@@ -588,7 +705,8 @@ def store_calendar_event(
         log.warning("store_calendar_event: embedding failed for event %s", event_id)
         return
 
-    if not _ensure_calendar_collection():
+    collection_name = _calendar_collection_name(user_id)
+    if not _ensure_calendar_collection(user_id):
         return
 
     qdrant = _cal_qdrant_client()
@@ -619,9 +737,13 @@ def store_calendar_event(
     }
 
     try:
-        point = deps["PointStruct"](id=point_id, vector=vector, payload=payload)
+        point = deps["PointStruct"](
+            id=memory_service._qdrant_point_id(point_id),
+            vector=vector,
+            payload=payload,
+        )
         qdrant.upsert(
-            collection_name=_CALENDAR_COLLECTION,
+            collection_name=collection_name,
             points=[point],
             wait=False,
         )
@@ -661,7 +783,8 @@ def search_calendar_events(
         return []
 
     try:
-        if not qdrant.collection_exists(_CALENDAR_COLLECTION):
+        collection_name = _calendar_collection_name(user_id)
+        if not qdrant.collection_exists(collection_name):
             return []
 
         user_filter = deps["Filter"](
@@ -678,7 +801,7 @@ def search_calendar_events(
         )
 
         hits = qdrant.search(
-            collection_name=_CALENDAR_COLLECTION,
+            collection_name=collection_name,
             query_vector=vector,
             query_filter=user_filter,
             limit=limit,
@@ -712,13 +835,16 @@ def delete_month_calendar_events(user_id: str, month_str: str) -> None:
     if not user_id or not month_str:
         return
 
+    _ensure_calendar_collection(user_id)
+
     qdrant = _cal_qdrant_client()
     deps   = memory_service._deps()
     if not qdrant or not deps:
         return
 
     try:
-        if not qdrant.collection_exists(_CALENDAR_COLLECTION):
+        collection_name = _calendar_collection_name(user_id)
+        if not qdrant.collection_exists(collection_name):
             return
 
         month_filter = deps["Filter"](
@@ -738,10 +864,8 @@ def delete_month_calendar_events(user_id: str, month_str: str) -> None:
             ]
         )
         qdrant.delete(
-            collection_name=_CALENDAR_COLLECTION,
-            points_selector=deps["Filter"](**{
-                "must": month_filter.must
-            }),
+            collection_name=collection_name,
+            points_selector=month_filter,
             wait=False,
         )
         log.info(

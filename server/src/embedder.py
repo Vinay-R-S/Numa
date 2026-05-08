@@ -1,8 +1,8 @@
 """
-Shared, cached MiniLM-v6 embedding singleton for the NUMA server.
+Shared, cached MiniLM embedding singleton for the NUMA server.
 
-The model is downloaded once from HuggingFace and stored under MODEL_CACHE_DIR
-(default: server/models/).  On subsequent starts it loads from disk — no
+The model is downloaded once from Hugging Face and stored under HUGGINGFACE_MODEL_CACHE_DIR
+(default: server/models/).  On subsequent starts it loads from disk - no
 network required.
 
 Usage anywhere in the server:
@@ -22,14 +22,30 @@ log = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-_MODEL_NAME = os.getenv("LOCAL_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+DEFAULT_HUGGINGFACE_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+def embedding_model_name() -> str:
+    return (
+        os.getenv("HUGGINGFACE_EMBEDDING_MODEL")
+        or DEFAULT_HUGGINGFACE_EMBEDDING_MODEL
+    ).strip()
+
 
 def _model_cache_dir() -> str:
-    raw = os.getenv("MODEL_CACHE_DIR", "").strip()
+    server_root = Path(__file__).resolve().parents[1]
+    raw = (
+        os.getenv("HUGGINGFACE_MODEL_CACHE_DIR")
+        or ""
+    ).strip()
     if raw:
-        return raw
+        path = Path(raw)
+        if not path.is_absolute():
+            base = server_root.parent if path.parts and path.parts[0].lower() == "server" else server_root
+            path = base / path
+        return str(path)
     # Default: <server_root>/models/
-    return str(Path(__file__).resolve().parents[2] / "models")
+    return str(server_root / "models")
 
 
 # ── Singleton ──────────────────────────────────────────────────────────────────
@@ -56,19 +72,20 @@ class _CachedEmbedder:
 
         try:
             from sentence_transformers import SentenceTransformer  # type: ignore
+            model_name = embedding_model_name()
             log.info(
                 "Loading embedding model '%s' (cache: %s) …",
-                _MODEL_NAME,
+                model_name,
                 cache_dir,
             )
             self._model = SentenceTransformer(
-                _MODEL_NAME,
+                model_name,
                 cache_folder=cache_dir,
             )
             dim = self._model.get_sentence_embedding_dimension()
-            log.info("Embedding model ready — dim=%d", dim)
+            log.info("Embedding model ready - dim=%d", dim)
         except Exception as exc:
-            log.warning("Failed to load embedding model '%s': %s", _MODEL_NAME, exc)
+            log.warning("Failed to load embedding model '%s': %s", embedding_model_name(), exc)
             self._failed = True
 
     # ------------------------------------------------------------------
@@ -101,7 +118,7 @@ class _CachedEmbedder:
 
     # ------------------------------------------------------------------
     def embed_batch(self, texts: List[str]) -> List[Optional[List[float]]]:
-        """Embed multiple texts in one pass — more efficient than looping."""
+        """Embed multiple texts in one pass - more efficient than looping."""
         self._load()
         if self._model is None:
             return [None] * len(texts)
