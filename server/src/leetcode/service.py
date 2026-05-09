@@ -59,13 +59,13 @@ def _require_deps() -> Dict:
 
 
 def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None):
-    from ..llm_factory import get_llm
-    kwargs: Dict = {}
-    if user_id:
-        kwargs["user_id"] = user_id
-    if model_override:
-        kwargs["model"] = model_override
-    return get_llm(**kwargs)
+    from ..llm_factory import get_llm_with_fallback
+    return get_llm_with_fallback(
+        user_id=user_id,
+        agent_name="leetcode",
+        priority="normal",
+        model=model_override,
+    )
 
 
 def _leetcode_toolset(tool_decorator, user_id: str):
@@ -186,6 +186,7 @@ def run_leetcode_agent_chat(
     history: List[dict],
     user_id: Optional[str],
     model: Optional[str] = None,
+    preloaded_context: Optional[str] = None,
 ) -> Dict:
     """Invoke the LeetCode sub-agent and return a response dict."""
     if not user_id:
@@ -213,7 +214,10 @@ def run_leetcode_agent_chat(
 
         try:
             from ..memory.service import memory_service
-            semantic_context = memory_service.build_context_for_query(user_id, query)
+            if preloaded_context:
+                semantic_context = preloaded_context
+            else:
+                semantic_context = memory_service.build_context_for_query(user_id, query)
         except Exception:
             semantic_context = ""
 

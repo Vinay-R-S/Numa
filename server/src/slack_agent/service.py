@@ -70,14 +70,14 @@ def _require_deps() -> Dict:
         raise RuntimeError(f"Slack agent dependencies missing: {exc}") from exc
 
 
-def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None):
-    from ..llm_factory import get_llm
-    kwargs: Dict = {}
-    if user_id:
-        kwargs["user_id"] = user_id
-    if model_override:
-        kwargs["model"] = model_override
-    return get_llm(**kwargs)
+def _get_llm(model_override=None, user_id=None):
+    from ..llm_factory import get_llm_with_fallback
+    return get_llm_with_fallback(
+        user_id=user_id,
+        agent_name="slack",
+        priority="normal",
+        model=model_override,
+    )
 
 
 # ── PostgreSQL helpers ────────────────────────────────────────────────────────
@@ -439,6 +439,7 @@ def run_slack_agent_chat(
     history: List[dict],
     user_id: Optional[str],
     model: Optional[str] = None,
+    preloaded_context: Optional[str] = None,
 ) -> Dict:
     """Invoke the Slack sub-agent and return a response dict.
 
@@ -476,12 +477,15 @@ def run_slack_agent_chat(
         HumanMessage  = deps["HumanMessage"]
         AIMessage     = deps["AIMessage"]
 
-        # Build semantic context from shared memory service
-        try:
-            from ..memory.service import memory_service  # type: ignore
-            semantic_context = memory_service.build_context_for_query(user_id, query)
-        except Exception:
-            semantic_context = ""
+        # Use pre-loaded context from master agent, or build fresh
+        if preloaded_context:
+            semantic_context = preloaded_context
+        else:
+            try:
+                from ..memory.service import memory_service  # type: ignore
+                semantic_context = memory_service.build_context_for_query(user_id, query)
+            except Exception:
+                semantic_context = ""
 
         graph, AIMsg = _build_slack_graph(user_id, model)
 

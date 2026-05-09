@@ -12,11 +12,14 @@ Usage anywhere in the server:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +64,11 @@ class _CachedEmbedder:
     def __init__(self) -> None:
         self._model = None
         self._failed = False
+        self._cache: OrderedDict[str, List[float]] = OrderedDict()
+        self._cache_lock = threading.Lock()
+        self._cache_max = int(os.getenv("EMBEDDING_CACHE_SIZE", "256"))
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     # ------------------------------------------------------------------
     def _load(self):
@@ -101,20 +109,57 @@ class _CachedEmbedder:
         """
         Embed *text* and return a normalised float list.
         Returns None if the model failed to load.
+
+        Results are LRU-cached by content hash to avoid re-computing
+        the same embedding (e.g. when master and sub-agent embed the
+        same query within one request cycle).
         """
+        stripped = text.strip()
+        if not stripped:
+            return None
+
+        # Check cache first
+        cache_key = hashlib.md5(stripped.encode("utf-8", errors="replace")).hexdigest()
+        with self._cache_lock:
+            if cache_key in self._cache:
+                self._cache.move_to_end(cache_key)
+                self._cache_hits += 1
+                return self._cache[cache_key]
+
+        # Cache miss — compute embedding
         self._load()
         if self._model is None:
             return None
         try:
-            vec = self._model.encode(text.strip(), normalize_embeddings=True)
+            vec = self._model.encode(stripped, normalize_embeddings=True)
             if hasattr(vec, "tolist"):
                 vec = vec.tolist()
             if isinstance(vec, list) and vec and isinstance(vec[0], list):
                 vec = vec[0]
-            return [float(v) for v in vec]
+            result = [float(v) for v in vec]
+
+            # Store in cache
+            with self._cache_lock:
+                self._cache[cache_key] = result
+                self._cache_misses += 1
+                # Evict oldest if over limit
+                while len(self._cache) > self._cache_max:
+                    self._cache.popitem(last=False)
+
+            return result
         except Exception as exc:
             log.warning("embed() failed: %s", exc)
             return None
+
+    @property
+    def cache_stats(self) -> Dict[str, int]:
+        """Return cache hit/miss counts for monitoring."""
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "size": len(self._cache),
+            "max_size": self._cache_max,
+        }
 
     # ------------------------------------------------------------------
     def embed_batch(self, texts: List[str]) -> List[Optional[List[float]]]:

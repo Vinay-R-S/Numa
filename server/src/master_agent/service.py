@@ -98,13 +98,13 @@ def _require_master_dependencies() -> Dict[str, object]:
 
 
 def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None):
-    from ..llm_factory import get_llm
-    kwargs: Dict = {}
-    if user_id:
-        kwargs["user_id"] = user_id
-    if model_override:
-        kwargs["model"] = model_override
-    return get_llm(**kwargs)
+    from ..llm_factory import get_llm_with_fallback
+    return get_llm_with_fallback(
+        user_id=user_id,
+        agent_name="master",
+        priority="high",
+        model=model_override,
+    )
 
 
 def _is_llm_configured(user_id: Optional[str] = None) -> bool:
@@ -434,6 +434,7 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
         try:
             result = run_agent_chat(
                 query=query, history=[], user_id=user_id, model=model_override,
+                preloaded_context=refresh.get("_preloaded_context"),
             )
             if result.get("refreshCalendar"):
                 refresh["refreshCalendar"] = True
@@ -451,6 +452,7 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
         try:
             result = run_slack_agent_chat(
                 query=query, history=[], user_id=user_id, model=model_override,
+                preloaded_context=refresh.get("_preloaded_context"),
             )
             if result.get("refresh_slack"):
                 refresh["refreshSlack"] = True
@@ -468,6 +470,7 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
         try:
             result = run_health_agent_chat(
                 query=query, history=[], user_id=user_id, model=model_override,
+                preloaded_context=refresh.get("_preloaded_context"),
             )
             if result.get("refresh_health"):
                 refresh["refreshHealth"] = True
@@ -526,6 +529,7 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
         try:
             result = run_github_agent_chat(
                 query=query, history=[], user_id=user_id, model=model_override,
+                preloaded_context=refresh.get("_preloaded_context"),
             )
             if result.get("refresh_github"):
                 refresh["refreshGithub"] = True
@@ -542,6 +546,7 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
         try:
             result = run_leetcode_agent_chat(
                 query=query, history=[], user_id=user_id, model=model_override,
+                preloaded_context=refresh.get("_preloaded_context"),
             )
             refresh["delegated_to"].append("leetcode-subagent")
             return result.get("response", "No response from LeetCode agent")
@@ -764,12 +769,31 @@ def run_master_agent_chat(
         }
 
     try:
-        semantic_context = memory_service.build_context_for_query(user_id, query)
+        # ── Smart data retrieval: plan → assemble context ────────────────
+        try:
+            from ..data_planner import plan_retrieval
+            from ..context_assembler import assemble_context
+
+            plan = plan_retrieval(user_id, query)
+            assembled = assemble_context(user_id, plan)
+            semantic_context = assembled.text
+            import logging as _log
+            _log.getLogger(__name__).info(
+                "Smart retrieval: scope=%s, domains=%s, sources=%s, tokens≈%d, %.0fms",
+                plan.temporal_scope, plan.domains, assembled.sources,
+                assembled.token_estimate, assembled.retrieval_ms,
+            )
+        except Exception:
+            # Fallback to legacy retrieval if smart planner fails
+            semantic_context = memory_service.build_context_for_query(user_id, query)
+
         graph, AIMsg, refresh_tracker = _build_master_graph(user_id, model)
 
         for k in _empty:
             refresh_tracker[k] = False
         refresh_tracker["delegated_to"] = []
+        # Store pre-loaded context so delegation tools can pass it to sub-agents
+        refresh_tracker["_preloaded_context"] = semantic_context
 
         deps = _require_master_dependencies()
         HumanMessage = deps["HumanMessage"]

@@ -4,24 +4,43 @@ Add new table DDL to the TABLES list to have them auto-created.
 """
 import os
 import logging
+import threading
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Optional
 
 import psycopg2
+from psycopg2.pool import ThreadedConnectionPool
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 log = logging.getLogger(__name__)
 
-# ── Connection helper ─────────────────────────────────────────────────────────
+# ── Connection pool ───────────────────────────────────────────────────────────
+#
+# All database operations share a process-wide connection pool instead of
+# opening a fresh TCP connection on every call.  This eliminates the SSL
+# handshake overhead and prevents connection exhaustion on Supabase.
+#
+# Existing code that calls ``_get_conn()`` / ``conn.close()`` continues to
+# work unchanged — ``close()`` returns the connection to the pool rather
+# than destroying it.  New code should prefer the ``get_db()`` context
+# manager or call ``_put_conn(conn)`` in a finally block.
 
-def _get_conn():
+_pool: Optional[ThreadedConnectionPool] = None
+_pool_lock = threading.Lock()
+
+_DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "2"))
+_DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
+
+
+def _parse_database_url():
     """
     Parse DATABASE_URL manually to handle the '@' character inside the password.
     Format: postgresql://user:password@host:port/dbname
     """
     raw = os.environ["DATABASE_URL"].replace("postgresql://", "").replace("postgres://", "")
 
-    # Split on the LAST '@' to separate credentials from host
     at = raw.rfind("@")
     credentials, host_part = raw[:at], raw[at + 1:]
 
@@ -34,15 +53,115 @@ def _get_conn():
     else:
         host, port = host_and_port, "5432"
 
-    return psycopg2.connect(
-        host=host,
-        port=int(port),
-        dbname=dbname,
-        user=user,
-        password=password,
-        sslmode="require",
-        connect_timeout=10,
-    )
+    return {
+        "host": host,
+        "port": int(port),
+        "dbname": dbname,
+        "user": user,
+        "password": password,
+        "sslmode": "require",
+        "connect_timeout": 10,
+    }
+
+
+def _get_pool() -> ThreadedConnectionPool:
+    """Return the process-wide connection pool, creating it on first call."""
+    global _pool
+    if _pool is not None and not _pool.closed:
+        return _pool
+
+    with _pool_lock:
+        # Double-check after acquiring lock
+        if _pool is not None and not _pool.closed:
+            return _pool
+
+        params = _parse_database_url()
+        _pool = ThreadedConnectionPool(
+            minconn=_DB_POOL_MIN,
+            maxconn=_DB_POOL_MAX,
+            **params,
+        )
+        log.info(
+            "✓ Database connection pool created (min=%d, max=%d, host=%s)",
+            _DB_POOL_MIN, _DB_POOL_MAX, params["host"],
+        )
+        return _pool
+
+
+class _PooledConnection:
+    """
+    Thin wrapper that makes ``conn.close()`` return the connection to the
+    pool instead of destroying it.  This preserves backward compatibility
+    with all existing code that does ``conn = _get_conn(); ... conn.close()``.
+    """
+
+    def __init__(self, real_conn, pool: ThreadedConnectionPool):
+        self._conn = real_conn
+        self._pool = pool
+        self._returned = False
+
+    def close(self):
+        """Return connection to pool instead of closing it."""
+        if not self._returned:
+            self._returned = True
+            try:
+                # Reset connection state before returning to pool
+                if not self._conn.closed:
+                    self._conn.rollback()
+                self._pool.putconn(self._conn)
+            except Exception:
+                pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def _get_conn():
+    """
+    Get a database connection from the pool.
+
+    The returned connection is wrapped so that calling ``.close()`` returns
+    it to the pool rather than destroying it.  This makes this function a
+    drop-in replacement for the old raw ``psycopg2.connect()`` call.
+    """
+    pool = _get_pool()
+    real_conn = pool.getconn()
+    return _PooledConnection(real_conn, pool)
+
+
+def _put_conn(conn) -> None:
+    """Explicitly return a pooled connection (alternative to conn.close())."""
+    if isinstance(conn, _PooledConnection):
+        conn.close()
+    else:
+        try:
+            _get_pool().putconn(conn)
+        except Exception:
+            pass
+
+
+@contextmanager
+def get_db():
+    """Context manager for database connections — recommended for new code.
+
+    Usage::
+
+        from src.db import get_db
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+    """
+    conn = _get_conn()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 # ── Table definitions ─────────────────────────────────────────────────────────

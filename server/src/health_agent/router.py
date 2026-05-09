@@ -88,8 +88,8 @@ def upsert_health_snapshot(
             """
             INSERT INTO public.health_snapshots
                 (user_id, source, snapshot_date, steps, active_minutes, calories,
-                 distance_km, sleep_hours, sleep_stages, activities, raw_data)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 distance_km, sleep_hours, sleep_stages, activities)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, source, snapshot_date)
             DO UPDATE SET
                 steps          = EXCLUDED.steps,
@@ -99,7 +99,6 @@ def upsert_health_snapshot(
                 sleep_hours    = EXCLUDED.sleep_hours,
                 sleep_stages   = EXCLUDED.sleep_stages,
                 activities     = EXCLUDED.activities,
-                raw_data       = EXCLUDED.raw_data,
                 updated_at     = NOW()
             """,
             (
@@ -113,7 +112,6 @@ def upsert_health_snapshot(
                 data.get("sleep_hours"),
                 json.dumps(data.get("sleep_stages")) if data.get("sleep_stages") else None,
                 json.dumps(data.get("activities")) if data.get("activities") else None,
-                json.dumps(data),
             ),
         )
         conn.commit()

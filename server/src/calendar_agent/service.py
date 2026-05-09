@@ -454,6 +454,7 @@ def run_agent_chat(
     history: List[dict],
     user_id: str | None = None,
     model: Optional[str] = None,
+    preloaded_context: Optional[str] = None,
 ):
     if not _is_llm_configured(user_id):
         return {
@@ -472,14 +473,17 @@ def run_agent_chat(
 
         graph, AIMessageType = _build_agent_graph(user_id, model)
 
-        # ── RAG context: pull relevant calendar events from Qdrant ──────────
+        # ── RAG context: use pre-loaded or pull from Qdrant ─────────────
         rag_context = ""
         if user_id:
-            rag_context = _build_rag_context(user_id, query)
+            if preloaded_context:
+                rag_context = preloaded_context
+            else:
+                rag_context = _build_rag_context(user_id, query)
 
-        # ── Conversational memory context ────────────────────────────────────
+        # ── Conversational memory context ────────────────────────────────
         contextual_query = query
-        if user_id:
+        if user_id and not preloaded_context:
             memory_context = memory_service.build_context_for_query(user_id, query)
             if memory_context:
                 contextual_query = (

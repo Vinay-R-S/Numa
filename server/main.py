@@ -168,7 +168,25 @@ def health_check():
     return {
         "status": "ok",
         "vector_memory": mem_status,
+        "rate_limiter": _rate_limiter_status(),
+        "embedding_cache": _embedding_cache_status(),
     }
+
+
+def _rate_limiter_status() -> dict:
+    try:
+        from src.rate_limiter import rate_limiter
+        return rate_limiter.get_status()
+    except Exception:
+        return {"enabled": False}
+
+
+def _embedding_cache_status() -> dict:
+    try:
+        from src.embedder import embedder
+        return embedder.cache_stats
+    except Exception:
+        return {}
 
 
 # ── Protected ─────────────────────────────────────────────────────────────────

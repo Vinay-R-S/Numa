@@ -287,3 +287,112 @@ def get_available_providers() -> list[dict]:
             "default_model": DEFAULT_MODELS.get(p, ""),
         })
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RATE-LIMITED LLM WITH PROVIDER FALLBACK
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ROUTING_MODELS: dict[str, str] = {
+    "groq": os.getenv("ROUTING_MODEL_GROQ", "llama-3.1-8b-instant"),
+    "openai": os.getenv("ROUTING_MODEL_OPENAI", "gpt-4o-mini"),
+    "anthropic": os.getenv("ROUTING_MODEL_ANTHROPIC", "claude-3-haiku-20240307"),
+    "gemini": os.getenv("ROUTING_MODEL_GEMINI", "gemini-2.0-flash"),
+    "ollama": os.getenv("ROUTING_MODEL_OLLAMA", "llama3"),
+}
+
+
+def get_llm_with_fallback(
+    *,
+    user_id: Optional[str] = None,
+    agent_name: str = "master",
+    priority: str = "normal",
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+):
+    """
+    Get an LLM instance with rate-limit awareness and automatic fallback.
+
+    1. Resolve the user's preferred provider
+    2. Check rate limiter for capacity
+    3. If exhausted, fall back to next available provider
+    4. Return the LLM instance for the available provider
+
+    Falls back to the standard ``get_llm()`` if rate limiting is unavailable.
+    """
+    try:
+        from .rate_limiter import rate_limiter, Priority as P
+    except Exception:
+        log.debug("Rate limiter unavailable, using standard get_llm()")
+        return get_llm(user_id=user_id, model=model, temperature=temperature)
+
+    # Map priority string to enum
+    priority_map = {"low": P.LOW, "normal": P.NORMAL, "high": P.HIGH}
+    prio = priority_map.get(priority, P.NORMAL)
+
+    # Resolve user's preferred provider
+    p, m, resolved_key, resolved_ollama_url, resolved_temp = _resolve_provider_and_model(
+        None, model, user_id,
+    )
+
+    # Ask rate limiter which provider to use (may fall back)
+    actual_provider = rate_limiter.wait_and_acquire(
+        preferred_provider=p,
+        estimated_tokens=500,
+        priority=prio,
+        max_wait=15.0,
+    )
+
+    if actual_provider is None:
+        log.warning(
+            "All providers exhausted for agent '%s' — using preferred '%s' anyway",
+            agent_name, p,
+        )
+        actual_provider = p
+
+    # If we fell back to a different provider, use that provider's default model
+    if actual_provider != p:
+        log.info(
+            "Agent '%s' falling back: %s → %s",
+            agent_name, p, actual_provider,
+        )
+        final_model = model or DEFAULT_MODELS.get(actual_provider, "")
+        return get_llm(
+            provider=actual_provider,
+            model=final_model,
+            user_id=user_id,
+            temperature=temperature,
+        )
+
+    # Use the originally resolved provider
+    return get_llm(
+        provider=p,
+        model=m,
+        api_key=resolved_key,
+        user_id=user_id,
+        temperature=temperature if temperature is not None else resolved_temp,
+        ollama_base_url=resolved_ollama_url,
+    )
+
+
+def get_routing_llm(user_id: Optional[str] = None):
+    """
+    Get a lightweight LLM for routing/planning decisions.
+
+    Uses a smaller, faster model (e.g. llama-3.1-8b-instant on Groq)
+    to save tokens on routing decisions that don't need full model quality.
+    """
+    p, _, resolved_key, resolved_ollama_url, resolved_temp = _resolve_provider_and_model(
+        None, None, user_id,
+    )
+
+    routing_model = ROUTING_MODELS.get(p, DEFAULT_MODELS.get(p, ""))
+
+    return get_llm_with_fallback(
+        user_id=user_id,
+        agent_name="router",
+        priority="normal",
+        model=routing_model,
+        temperature=0.0,  # routing should be deterministic
+    )
+

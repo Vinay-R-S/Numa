@@ -176,3 +176,6 @@ dependencies = [
     "zipp==3.23.1",
     "zstandard==0.25.0",
 ]
+
+[tool.pyrefly]
+project_includes = ["."]
