@@ -18,8 +18,6 @@
   NUMA unifies your daily apps - Calendar, Tasks, Slack, Health, GitHub, LeetCode, Journal, and Mental Peace - into a single AI-powered dashboard with multi-agent orchestration.
 </p>
 
----
-
 ## Features
 
 - **Master Agent Dashboard** - unified stats across all connected services
@@ -33,20 +31,16 @@
 - **Task Management** - Kanban board with drag-and-drop and analytics
 - **Multi-Provider AI** - Groq, OpenAI, Anthropic, Gemini, and Ollama support
 
----
-
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | ![](https://img.shields.io/badge/Frontend-000?style=flat-square) | ![Next.js](https://img.shields.io/badge/Next.js_16-000000?style=flat-square&logo=nextdotjs&logoColor=white) ![React](https://img.shields.io/badge/React_19-61DAFB?style=flat-square&logo=react&logoColor=black) ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white) ![Tailwind](https://img.shields.io/badge/Tailwind_CSS_v4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white) ![shadcn/ui](https://img.shields.io/badge/shadcn/ui-000000?style=flat-square&logo=shadcnui&logoColor=white) |
-| ![](https://img.shields.io/badge/Backend-000?style=flat-square) | ![Python](https://img.shields.io/badge/Python_3.11+-3776AB?style=flat-square&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white) ![Uvicorn](https://img.shields.io/badge/Uvicorn-2F4F4F?style=flat-square) |
+| ![](https://img.shields.io/badge/Backend-000?style=flat-square) | ![Python](https://img.shields.io/badge/Python_3.11+-3776AB?style=flat-square&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white) ![Uvicorn](https://img.shields.io/badge/Uvicorn-2F4F4F?style=flat-square) ![uv](https://img.shields.io/badge/uv-DE5FE9?style=flat-square&logo=uv&logoColor=white) |
 | ![](https://img.shields.io/badge/Database-000?style=flat-square) | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Supabase](https://img.shields.io/badge/Supabase-3FCF8E?style=flat-square&logo=supabase&logoColor=white) ![Qdrant](https://img.shields.io/badge/Qdrant-DC382D?style=flat-square&logo=qdrant&logoColor=white) |
-| ![](https://img.shields.io/badge/AI_/_Agents-000?style=flat-square) | ![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?style=flat-square&logo=langchain&logoColor=white) ![Groq](https://img.shields.io/badge/Groq-F55036?style=flat-square&logo=groq&logoColor=white) ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat-square&logo=openai&logoColor=white) ![Anthropic](https://img.shields.io/badge/Anthropic-191919?style=flat-square) ![Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) |
+| ![](https://img.shields.io/badge/AI_/_Agents-000?style=flat-square) | ![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?style=flat-square&logo=langchain&logoColor=white) ![Groq](https://img.shields.io/badge/Groq-F55036?style=flat-square&logo=groq&logoColor=white) ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat-square&logo=openai&logoColor=white) ![Anthropic](https://img.shields.io/badge/Anthropic-191919?style=flat-square) ![Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) ![Ollama](https://img.shields.io/badge/Ollama-000000?style=flat-square&logo=ollama&logoColor=white) |
 | ![](https://img.shields.io/badge/Auth-000?style=flat-square) | ![Supabase Auth](https://img.shields.io/badge/Supabase_Auth-3FCF8E?style=flat-square&logo=supabase&logoColor=white) ![JWT](https://img.shields.io/badge/JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white) ![OAuth 2.0](https://img.shields.io/badge/OAuth_2.0-4285F4?style=flat-square) |
-| ![](https://img.shields.io/badge/Integrations-000?style=flat-square) | ![Google Calendar](https://img.shields.io/badge/Google_Calendar-4285F4?style=flat-square&logo=googlecalendar&logoColor=white) ![Slack](https://img.shields.io/badge/Slack-4A154B?style=flat-square&logo=slack&logoColor=white) ![GitHub](https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white) ![Strava](https://img.shields.io/badge/Strava-FC4C02?style=flat-square&logo=strava&logoColor=white) |
-
----
+| ![](https://img.shields.io/badge/Integrations-000?style=flat-square) | ![Google Calendar](https://img.shields.io/badge/Google_Calendar-4285F4?style=flat-square&logo=googlecalendar&logoColor=white) ![Slack](https://img.shields.io/badge/Slack-4A154B?style=flat-square&logo=slack&logoColor=white) ![GitHub](https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white) ![Strava](https://img.shields.io/badge/Strava-FC4C02?style=flat-square&logo=strava&logoColor=white) ![Google Fit](https://img.shields.io/badge/Google_Fit-4285F4?style=flat-square&logo=googlefit&logoColor=white) ![LeetCode](https://img.shields.io/badge/LeetCode-FFA116?style=flat-square&logo=leetcode&logoColor=black) |
 
 ## Prerequisites
 
@@ -54,10 +48,9 @@
 |---|---|
 | Node.js | 18+ |
 | Python | 3.11+ |
+| uv | latest ([install](https://docs.astral.sh/uv/getting-started/installation/)) |
 | PostgreSQL | Supabase (hosted) |
 | Qdrant | Cloud or local |
-
----
 
 ## Getting Started
 
@@ -72,12 +65,8 @@ npm install
 
 # Install backend dependencies
 cd ../server
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-pip install -r requirements.txt
+uv venv
+uv pip install -r requirements.txt
 ```
 
 Copy the example environment file and fill in your keys:
@@ -85,8 +74,6 @@ Copy the example environment file and fill in your keys:
 ```bash
 cp server/.env.example server/.env
 ```
-
----
 
 ## API Keys Setup
 
@@ -110,8 +97,6 @@ cp server/.env.example server/.env
    - `https://www.googleapis.com/auth/calendar.events`
 10. Add your email as a test user if the app is in **Testing** mode
 
----
-
 ### Supabase (PostgreSQL + Auth)
 
 1. Go to [supabase.com](https://supabase.com/) and create a new project
@@ -127,8 +112,6 @@ cp server/.env.example server/.env
 4. For GitHub OAuth via Supabase Auth:
    - Go to **Authentication → Providers → GitHub**
    - Add your GitHub OAuth app's Client ID and Client Secret
-
----
 
 ### Slack Integration
 
@@ -148,8 +131,6 @@ cp server/.env.example server/.env
 8. Go to **Basic Information** and copy **Signing Secret** → `SLACK_SIGNING_SECRET`
 9. Copy **Client ID** → `SLACK_CLIENT_ID` and **Client Secret** → `SLACK_CLIENT_SECRET`
 
----
-
 ### Google Fit API
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com/) (same project as Calendar)
@@ -164,8 +145,6 @@ cp server/.env.example server/.env
    ```
 5. Set `GOOGLE_FIT_CLIENT_ID` and `GOOGLE_FIT_CLIENT_SECRET` in `.env` (can reuse Calendar credentials)
 
----
-
 ### Strava API
 
 1. Go to [strava.com/settings/api](https://www.strava.com/settings/api)
@@ -175,8 +154,6 @@ cp server/.env.example server/.env
    - Client ID → `STRAVA_CLIENT_ID`
    - Client Secret → `STRAVA_CLIENT_SECRET`
 5. Users authorize via OAuth at runtime; tokens are auto-refreshed by the backend
-
----
 
 ### GitHub OAuth
 
@@ -189,8 +166,6 @@ cp server/.env.example server/.env
    - Client ID → `GITHUB_CLIENT_ID`
    - Client Secret → `GITHUB_CLIENT_SECRET`
 
----
-
 ### LLM Providers
 
 | Provider | Console | Env Variable |
@@ -200,8 +175,6 @@ cp server/.env.example server/.env
 | **Anthropic** | [console.anthropic.com](https://console.anthropic.com/) → API Keys | `ANTHROPIC_API_KEY` |
 | **Gemini** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `GOOGLE_API_KEY` |
 | **Ollama** | [ollama.com](https://ollama.com/) - install locally, no API key needed | - |
-
----
 
 ## Environment Variables
 
@@ -279,15 +252,13 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 ```
 
----
-
 ## Running the App
 
 ```bash
 # Backend
 cd server
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+uv pip install -r requirements.txt
+uv run uvicorn main:app --reload --port 8000
 ```
 
 ```bash
@@ -299,8 +270,6 @@ npm run dev
 
 The frontend runs at `http://localhost:3000` and the backend at `http://localhost:8000`.
 
----
-
 ## Project Structure
 
 ```
@@ -309,47 +278,62 @@ Numa/
 │   ├── src/
 │   │   ├── app/
 │   │   │   ├── (protected)/
-│   │   │   │   ├── home/            # Dashboard
+│   │   │   │   ├── home/            # Master agent dashboard
 │   │   │   │   ├── calendar/        # Google Calendar view
 │   │   │   │   ├── tasklist/        # Kanban board
 │   │   │   │   ├── slack/           # Slack integration
-│   │   │   │   ├── health/          # Health tracking
+│   │   │   │   ├── health/          # Health tracking (Google Fit + Strava)
 │   │   │   │   ├── journal/         # Daily journal
 │   │   │   │   ├── mental-peace/    # Meditation & yoga
-│   │   │   │   ├── productivity/    # Productivity analytics
-│   │   │   │   └── settings/        # App settings
+│   │   │   │   ├── productivity/    # GitHub & LeetCode analytics
+│   │   │   │   ├── settings/        # App & API settings
+│   │   │   │   └── under-construction/
 │   │   │   ├── auth/                # Sign in / Sign up
-│   │   │   └── api/                 # Next.js API proxy
+│   │   │   └── api/                 # Next.js API proxy → FastAPI
 │   │   ├── components/              # Shared UI components
 │   │   └── lib/                     # Utilities & config
+│   ├── public/                      # Static assets
 │   └── package.json
 │
 ├── server/                          # FastAPI backend
-│   ├── main.py                      # App entry point
+│   ├── main.py                      # App entry point & router registration
 │   ├── src/
+│   │   ├── ai_settings/             # LLM provider config
+│   │   ├── api/                     # Internal API utilities
 │   │   ├── auth/                    # Authentication & JWT
-│   │   ├── tasks/                   # Task CRUD & analytics
-│   │   ├── calendar/                # Calendar service
-│   │   ├── calendar_agent/          # AI calendar agent
-│   │   ├── slack_agent/             # Slack agent
-│   │   ├── health_agent/            # Health data agent
-│   │   ├── github_agent/            # GitHub agent
+│   │   ├── calendar/                # Google Calendar service
+│   │   ├── calendar_agent/          # AI calendar sub-agent
+│   │   ├── dashboard/               # Dashboard aggregation
+│   │   ├── github_agent/            # GitHub sub-agent
+│   │   ├── health_agent/            # Health data sub-agent (Google Fit + Strava)
 │   │   ├── journal/                 # Journal service
 │   │   ├── leetcode/                # LeetCode tracker
-│   │   ├── master_agent/            # Orchestrator agent
-│   │   ├── dashboard/               # Dashboard aggregation
+│   │   ├── master_agent/            # Orchestrator / routing agent
 │   │   ├── memory/                  # Qdrant vector memory
-│   │   ├── ai_settings/             # LLM provider config
-│   │   ├── db.py                    # Database connection
+│   │   ├── slack_agent/             # Slack sub-agent
+│   │   ├── tasks/                   # Task CRUD & analytics
+│   │   ├── context_assembler.py     # Token-budget context builder
+│   │   ├── data_planner.py          # Zero-cost intent classifier
+│   │   ├── data_sync.py             # Background data sync scheduler
+│   │   ├── db.py                    # Pooled DB connection (asyncpg)
+│   │   ├── embedder.py              # HuggingFace embedding service
 │   │   ├── llm_factory.py           # Multi-provider LLM factory
-│   │   └── embedder.py              # Embedding service
-│   ├── apiConfig/                   # OAuth credential files
-│   └── requirements.txt
+│   │   └── rate_limiter.py          # Token-bucket rate limiter w/ fallback
+│   ├── migrations/                  # Alembic DB migrations
+│   │   └── versions/
+│   ├── apiConfig/
+│   │   └── google/                  # Google OAuth JSON credentials
+│   ├── sql/                         # Raw SQL schema files
+│   ├── alembic.ini                  # Alembic configuration
+│   ├── pyproject.toml               # Project metadata & dependencies
+│   ├── requirements.txt             # pip-compatible dependency list
+│   └── uv.lock                      # uv lockfile
 │
-└── docs/                            # Documentation
+├── models/                          # Cached HuggingFace embedding models
+├── scripts/                         # Dev utility scripts (cache cleanup, etc.)
+├── docs/                            # Architecture diagrams & project docs
+└── .gitignore
 ```
-
----
 
 ## License
 
