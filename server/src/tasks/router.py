@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..auth.dependencies import get_current_user
 from ..db import _get_conn
+from . import service as task_service
 from .schemas import TaskCreate, TaskUpdate, TaskStatusUpdate, TaskResponse
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -109,6 +110,7 @@ def create_task(body: TaskCreate, current_user: dict = Depends(get_current_user)
         row = _row_to_dict(cur.fetchone(), cur.description)
         conn.commit()
         cur.close()
+        task_service.store_task_snapshot(row)
         return row
     finally:
         conn.close()
@@ -175,20 +177,21 @@ def update_task(
                     if due_date:
                         from datetime import datetime as dt
                         if isinstance(due_date, dt):
-                            date_str = due_date.strftime("%Y-%m-%d")
-                            time_str = due_date.strftime("%H:%M")
+                            due_dt = due_date
                         else:
                             # Parse string datetime
                             due_dt = dt.fromisoformat(str(due_date).replace('Z', '+00:00'))
-                            date_str = due_dt.strftime("%Y-%m-%d")
-                            time_str = due_dt.strftime("%H:%M")
+                        date_str = due_dt.strftime("%Y-%m-%d")
+                        time_str = due_dt.strftime("%H:%M")
+                        end_dt = due_dt + timedelta(hours=1)
+                        end_time_str = end_dt.strftime("%H:%M")
 
                         # Update the calendar event
                         calendar_payload = CalendarEventUpsert(
                             title=title,
                             date=date_str,
                             startTime=time_str,
-                            endTime=time_str,
+                            endTime=end_time_str,
                             description=description or "",
                         )
                         update_event_from_payload(composite_event_id, calendar_payload, user_id=user_id)
@@ -218,6 +221,7 @@ def update_task(
         task = _row_to_dict(row, cur.description)
         conn.commit()
         cur.close()
+        task_service.store_task_snapshot(task)
         return task
     finally:
         conn.close()
@@ -256,6 +260,7 @@ def patch_task_status(
         task = _row_to_dict(row, cur.description)
         conn.commit()
         cur.close()
+        task_service.store_task_snapshot(task)
         return task
     finally:
         conn.close()
@@ -269,13 +274,34 @@ def delete_task(task_id: str, current_user: dict = Depends(get_current_user)):
     try:
         cur = conn.cursor()
         cur.execute(
+            "SELECT external_ref FROM public.tasks WHERE id = %s AND user_id = %s",
+            (task_id, user_id),
+        )
+        existing = cur.fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Task not found.")
+
+        external_ref = existing[0]
+        if external_ref and str(external_ref).startswith("gcal:"):
+            try:
+                from ..calendar.service import delete_event_by_id
+
+                parts = str(external_ref).split(":", 2)
+                if len(parts) >= 3 and parts[1] != "ical":
+                    delete_event_by_id(f"{parts[1]}:{parts[2]}", user_id=user_id)
+            except Exception as exc:
+                import logging
+                logging.warning("Failed to sync task delete to calendar: %s", exc)
+
+        cur.execute(
             "DELETE FROM public.tasks WHERE id = %s AND user_id = %s",
             (task_id, user_id),
         )
-        if cur.rowcount == 0:
+        if cur.rowcount == 0 and not (external_ref and str(external_ref).startswith("gcal:")):
             raise HTTPException(status_code=404, detail="Task not found.")
         conn.commit()
         cur.close()
+        task_service.delete_task_snapshot(user_id, task_id)
     finally:
         conn.close()
 

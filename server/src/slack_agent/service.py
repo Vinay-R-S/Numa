@@ -167,6 +167,12 @@ def _insert_task_from_slack(user_id: str, title: str, priority: str = "medium",
         task = _row_to_dict(row, cur.description) if row else {}
         conn.commit()
         cur.close()
+        if task:
+            try:
+                from ..tasks import service as task_service
+                task_service.store_task_snapshot(task)
+            except Exception:
+                pass
         return task
     except Exception as exc:
         log.warning("_insert_task_from_slack failed: %s", exc)

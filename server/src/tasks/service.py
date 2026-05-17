@@ -30,8 +30,53 @@ def _store_task_snapshot(task: Dict) -> None:
             source_name=task.get("source_name"),
             external_ref=task.get("external_ref"),
         )
+        due = task.get("due_date")
+        due_text = due.isoformat() if hasattr(due, "isoformat") else (str(due) if due else "none")
+        text = (
+            f"Task: {str(task.get('title') or 'Untitled')}\n"
+            f"Status: {str(task.get('status') or 'planned')}\n"
+            f"Priority: {str(task.get('priority') or 'medium')}\n"
+            f"Due: {due_text}\n"
+            f"Source: {str(task.get('source_name') or 'manual')}\n"
+            f"Details: {str(task.get('description') or 'none')}"
+        )
+        memory_service.upsert_domain_text(
+            user_id=user_id,
+            domain="tasks",
+            stable_key=task_id,
+            text=text,
+            payload={
+                "task_id": task_id,
+                "title": task.get("title"),
+                "status": task.get("status"),
+                "priority": task.get("priority"),
+                "due_date": due_text if due_text != "none" else None,
+                "external_ref": task.get("external_ref"),
+            },
+        )
     except Exception:
         # Memory ingest is best-effort and must not break task writes.
+        return
+
+
+def store_task_snapshot(task: Dict) -> None:
+    _store_task_snapshot(task)
+
+
+def delete_task_snapshot(user_id: str, task_id: str) -> None:
+    try:
+        if user_id and task_id:
+            memory_service.delete_snapshot(
+                user_id=user_id,
+                source="task",
+                external_id=str(task_id),
+            )
+            memory_service.delete_domain_point(
+                user_id=user_id,
+                domain="tasks",
+                stable_key=str(task_id),
+            )
+    except Exception:
         return
 
 

@@ -77,6 +77,70 @@ _ENV_KEY_MAP: dict[str, str] = {
     "gemini": "GOOGLE_API_KEY",
 }
 
+_ENV_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    "groq": ("GROQ_API_KEYS", "GROQ_API_KEY"),
+    "openai": ("OPENAI_API_KEYS", "OPENAI_API_KEY"),
+    "anthropic": ("ANTHROPIC_API_KEYS", "ANTHROPIC_API_KEY"),
+    "gemini": ("GEMINI_API_KEYS", "GEMINI_API_KEY", "GOOGLE_API_KEYS", "GOOGLE_API_KEY"),
+}
+
+
+def _split_api_keys(value: Optional[str]) -> list[str]:
+    """Parse one or more comma-separated API keys from settings or env."""
+    if not value:
+        return []
+
+    keys: list[str] = []
+    for part in str(value).split(","):
+        key = part.strip().strip('"').strip("'")
+        if key and not _is_placeholder_key(key):
+            keys.append(key)
+    return keys
+
+
+def _is_placeholder_key(value: str) -> bool:
+    key = (value or "").strip().strip('"').strip("'")
+    lowered = key.lower()
+    if lowered in {
+        "",
+        "your_api_key",
+        "your-api-key",
+        "your_openai_key",
+        "your_openai_api_key",
+        "openai_api_key",
+        "your_groq_api_key",
+        "groq_api_key",
+        "your_anthropic_api_key",
+        "anthropic_api_key",
+        "your_gemini_api_key",
+        "google_api_key",
+    }:
+        return True
+    return lowered.startswith("your-") or lowered.startswith("your_") or "-your-" in lowered
+
+
+def _get_env_api_keys(provider: str) -> list[str]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for env_var in _ENV_KEY_ALIASES.get(provider, ()):
+        for key in _split_api_keys(os.getenv(env_var, "")):
+            if key not in seen:
+                keys.append(key)
+                seen.add(key)
+    return keys
+
+
+def _first_env_api_key(provider: str) -> Optional[str]:
+    keys = _get_env_api_keys(provider)
+    return keys[0] if keys else None
+
+
+def _provider_api_keys(provider: str, api_key: Optional[str]) -> list[str]:
+    keys = _split_api_keys(api_key)
+    if keys:
+        return keys
+    return _get_env_api_keys(provider)
+
 
 def _get_encryption_key() -> bytes:
     """Derive or retrieve the Fernet key for API-key encryption."""
@@ -173,11 +237,10 @@ def _resolve_provider_and_model(
 
     if not provider:
         for p in ("groq", "openai", "anthropic", "gemini"):
-            env_var = _ENV_KEY_MAP.get(p, "")
-            key = os.getenv(env_var, "").strip()
-            if key and not key.lower().startswith("your_"):
+            keys = _get_env_api_keys(p)
+            if keys:
                 provider = p
-                api_key = api_key or key
+                api_key = api_key or ",".join(keys)
                 break
 
     provider = (provider or "groq").strip().lower()
@@ -189,8 +252,8 @@ def _resolve_provider_and_model(
         model = DEFAULT_MODELS[provider]
 
     if not api_key and provider != "ollama":
-        env_var = _ENV_KEY_MAP.get(provider, "")
-        api_key = os.getenv(env_var, "").strip() or None
+        keys = _get_env_api_keys(provider)
+        api_key = ",".join(keys) if keys else None
 
     return provider, model, api_key, ollama_base_url, temperature
 
@@ -218,27 +281,38 @@ def get_llm(
 
     if p == "groq":
         from langchain_groq import ChatGroq
-        if not final_key:
+        keys = _provider_api_keys(p, final_key)
+        if not keys:
             raise RuntimeError("GROQ_API_KEY is not configured")
-        return ChatGroq(model=m, temperature=final_temp, api_key=final_key)
+        llms = [ChatGroq(model=m, temperature=final_temp, api_key=key) for key in keys]
+        return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
 
     if p == "openai":
         from langchain_openai import ChatOpenAI
-        if not final_key:
+        keys = _provider_api_keys(p, final_key)
+        if not keys:
             raise RuntimeError("OPENAI_API_KEY is not configured")
-        return ChatOpenAI(model=m, temperature=final_temp, api_key=final_key)
+        llms = [ChatOpenAI(model=m, temperature=final_temp, api_key=key) for key in keys]
+        return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
 
     if p == "anthropic":
         from langchain_anthropic import ChatAnthropic
-        if not final_key:
+        keys = _provider_api_keys(p, final_key)
+        if not keys:
             raise RuntimeError("ANTHROPIC_API_KEY is not configured")
-        return ChatAnthropic(model=m, temperature=final_temp, api_key=final_key)
+        llms = [ChatAnthropic(model=m, temperature=final_temp, api_key=key) for key in keys]
+        return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
 
     if p == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
-        if not final_key:
+        keys = _provider_api_keys(p, final_key)
+        if not keys:
             raise RuntimeError("GOOGLE_API_KEY is not configured")
-        return ChatGoogleGenerativeAI(model=m, temperature=final_temp, google_api_key=final_key)
+        llms = [
+            ChatGoogleGenerativeAI(model=m, temperature=final_temp, google_api_key=key)
+            for key in keys
+        ]
+        return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
 
     if p == "ollama":
         from langchain_ollama import ChatOllama
@@ -259,9 +333,8 @@ def is_any_llm_configured(user_id: Optional[str] = None) -> bool:
                 return True
 
     for p in ("groq", "openai", "anthropic", "gemini"):
-        env_var = _ENV_KEY_MAP.get(p, "")
-        key = os.getenv(env_var, "").strip()
-        if key and not key.lower().startswith("your_"):
+        key = _first_env_api_key(p)
+        if key:
             return True
 
     return False
@@ -275,9 +348,7 @@ def get_available_providers() -> list[dict]:
         if p == "ollama":
             configured = True
         else:
-            env_var = _ENV_KEY_MAP.get(p, "")
-            key = os.getenv(env_var, "").strip()
-            configured = bool(key and not key.lower().startswith("your_"))
+            configured = bool(_get_env_api_keys(p))
 
         result.append({
             "id": p,

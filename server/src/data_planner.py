@@ -182,7 +182,7 @@ def plan_retrieval(
         days_per_domain[d] = min(days, MAX_RETRIEVAL_DAYS)
 
     qdrant_collections: List[str] = []
-    qdrant_domains = {"calendar", "slack", "memory"}
+    qdrant_domains = {"calendar", "slack", "health", "github", "tasks", "memory"}
     for d in domains:
         if d in qdrant_domains:
             qdrant_collections.append(d)

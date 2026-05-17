@@ -88,16 +88,16 @@ def ensure_slack_collection(user_id: str) -> bool:
                     distance=deps["Distance"].COSINE,
                 ),
             )
-            for field in ("user_id", "channel_name", "message_type"):
-                try:
-                    qdrant.create_payload_index(
-                        collection_name=collection_name,
-                        field_name=field,
-                        field_schema="keyword",
-                    )
-                except Exception:
-                    pass
             log.info("Created Qdrant collection '%s' with payload indexes", collection_name)
+        for field in ("user_id", "app", "channel_name", "slack_channel_id", "message_type", "ts"):
+            try:
+                qdrant.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field,
+                    field_schema="keyword",
+                )
+            except Exception:
+                pass
         return True
     except Exception as exc:
         log.warning("ensure_slack_collection failed: %s", exc)
@@ -176,6 +176,35 @@ def ingest_message(
         log.debug("Ingested Slack message ts=%s for user %s", ts, user_id)
     except Exception as exc:
         log.warning("Slack Qdrant upsert failed: %s", exc)
+
+
+def delete_message(user_id: str, ts: str) -> None:
+    """Delete one Slack message vector from the user's Slack collection."""
+    if not user_id or not ts:
+        return
+    if not ensure_slack_collection(user_id):
+        return
+
+    qdrant = _client()
+    deps = _deps()
+    if not qdrant or not deps:
+        return
+
+    try:
+        collection_name = _slack_collection_name(user_id)
+        point_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"numa:slack_msg:{user_id}:{ts}",
+        ).hex
+        qdrant.delete(
+            collection_name=collection_name,
+            points_selector=deps["PointIdsList"](
+                points=[_memory()._qdrant_point_id(point_id)]
+            ),
+            wait=False,
+        )
+    except Exception as exc:
+        log.warning("Slack Qdrant delete failed for ts=%s: %s", ts, exc)
 
 
 # ── Read ───────────────────────────────────────────────────────────────────────

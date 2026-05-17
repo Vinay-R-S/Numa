@@ -19,6 +19,13 @@ import {
   subscribeToCalendarUpdates,
 } from "@/components/calendar/api"
 
+type TimelineSettings = {
+  updateIntervalMs?: number
+  waterEnabled?: boolean
+  waterConfig?: { startHour: number; endHour: number; stepMinutes: number }
+  mealTimes?: { breakfast: string; lunch: string; dinner: string }
+}
+
 export default function CalendarPage() {
   // Use global store for cached data
   const {
@@ -43,13 +50,23 @@ export default function CalendarPage() {
   const [agentError, setAgentError] = useState<string | null>(null)
   const [agentOpen, setAgentOpen] = useState(false)
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null)
+  const [timelineSettings, setTimelineSettings] = useState<TimelineSettings>({})
   const watchInitAttempted = useRef(false)
   const sseReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Fetch events on mount (will use cache if available)
+  // Reconcile with Google on mount so external/agent edits are reflected.
   useEffect(() => {
-    fetchEvents()
+    fetchEvents(true)
   }, [fetchEvents])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("numa_timeline_settings")
+      setTimelineSettings(raw ? JSON.parse(raw) : {})
+    } catch {
+      setTimelineSettings({})
+    }
+  }, [])
 
   // Subscribe to SSE updates
   useEffect(() => {
@@ -110,7 +127,7 @@ export default function CalendarPage() {
     try {
       const authorizationUrl = await getGoogleCalendarAuthorizationUrl()
       window.location.assign(authorizationUrl)
-    } catch (err) {
+    } catch {
       clearError()
       setConnectingGoogle(false)
     }
@@ -174,16 +191,6 @@ export default function CalendarPage() {
         e.date.getDate() === now.getDate()
     )
   }, [events])
-
-  const timelineSettings = useMemo(() => {
-    if (typeof window === "undefined") return {}
-    try {
-      const raw = localStorage.getItem("numa_timeline_settings")
-      return raw ? JSON.parse(raw) : {}
-    } catch {
-      return {}
-    }
-  }, [])
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-3rem)] w-full flex-col gap-3 overflow-hidden px-3 py-3 sm:h-dvh sm:gap-4 sm:px-6 sm:py-4">

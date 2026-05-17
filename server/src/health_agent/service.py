@@ -380,7 +380,21 @@ def run_health_agent_chat(
             if preloaded_context:
                 semantic_context = preloaded_context
             else:
-                semantic_context = memory_service.build_context_for_query(user_id, query)
+                try:
+                    from ..context_assembler import assemble_context
+                    from ..data_planner import RetrievalPlan
+
+                    plan = RetrievalPlan(
+                        query=query,
+                        temporal_scope="week",
+                        domains=["health"],
+                        qdrant_collections=["health", "tasks", "memory"],
+                        days_per_domain={"health": 8, "tasks": 7},
+                        token_budget={"health": 2200, "tasks": 1000, "memory": 800},
+                    )
+                    semantic_context = assemble_context(user_id, plan).text
+                except Exception:
+                    semantic_context = memory_service.build_context_for_query(user_id, query)
         except Exception:
             semantic_context = ""
 

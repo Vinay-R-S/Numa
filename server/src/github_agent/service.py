@@ -148,6 +148,11 @@ def _github_toolset(tool_decorator, user_id: str):
             return "GitHub username not found."
 
         stats = client.get_contribution_stats(username)
+        try:
+            from .router import _store_github_stats_vector
+            _store_github_stats_vector(user_id, stats)
+        except Exception:
+            pass
         lines = [
             f"GitHub: @{stats['username']}",
             f"  Repos: {stats['public_repos']} public, {stats['private_repos']} private",
@@ -248,7 +253,21 @@ def run_github_agent_chat(
             if preloaded_context:
                 semantic_context = preloaded_context
             else:
-                semantic_context = memory_service.build_context_for_query(user_id, query)
+                try:
+                    from ..context_assembler import assemble_context
+                    from ..data_planner import RetrievalPlan
+
+                    plan = RetrievalPlan(
+                        query=query,
+                        temporal_scope="week",
+                        domains=["github"],
+                        qdrant_collections=["github", "tasks", "memory"],
+                        days_per_domain={"github": 7, "tasks": 7},
+                        token_budget={"github": 2200, "tasks": 1000, "memory": 800},
+                    )
+                    semantic_context = assemble_context(user_id, plan).text
+                except Exception:
+                    semantic_context = memory_service.build_context_for_query(user_id, query)
         except Exception:
             semantic_context = ""
 

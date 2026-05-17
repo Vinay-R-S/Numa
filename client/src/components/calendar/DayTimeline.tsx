@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CalendarDays, Droplets, UtensilsCrossed, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { CalendarEvent } from "@/components/calendar/api"
 import { fetchTasks } from "@/components/tasklist/api"
 import type { Task } from "@/components/tasklist/types"
 
@@ -87,7 +86,8 @@ export default function DayTimeline({
   waterConfig,
   mealTimes,
 }: DayTimelineProps) {
-  const [now, setNow] = useState(nowHHMM)
+  const [now, setNow] = useState("00:00")
+  const [dateLabel, setDateLabel] = useState("")
   const [tasks, setTasks] = useState<Task[]>([])
   const notifiedRef = useRef(new Set<string>())
 
@@ -100,9 +100,27 @@ export default function DayTimeline({
 
   // Live clock tick
   useEffect(() => {
+    const updateNow = () => setNow(nowHHMM())
+    const hydrationId = window.setTimeout(updateNow, 0)
     const id = window.setInterval(() => setNow(nowHHMM()), updateIntervalMs)
-    return () => window.clearInterval(id)
+    return () => {
+      window.clearTimeout(hydrationId)
+      window.clearInterval(id)
+    }
   }, [updateIntervalMs])
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setDateLabel(
+        new Date().toLocaleDateString("en-US", {
+          weekday: "long",
+          month: "short",
+          day: "numeric",
+        })
+      )
+    }, 0)
+    return () => window.clearTimeout(id)
+  }, [])
 
   // Fetch tasks once on mount
   useEffect(() => {
@@ -192,6 +210,13 @@ export default function DayTimeline({
     }))
   }, [calendarItems, taskItems, mealItems, waterItems, now])
 
+  const timelineRows = useMemo(() => {
+    return [
+      ...allItems.map((item) => ({ kind: "item" as const, item, time: item.time })),
+      { kind: "now" as const, time: now },
+    ].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time))
+  }, [allItems, now])
+
   // ── Send browser notifications on state becoming active ────────────────
 
   const fireNotification = useCallback((item: TimelineItem) => {
@@ -210,22 +235,6 @@ export default function DayTimeline({
       }
     })
   }, [allItems, fireNotification])
-
-  // ── Compute progress position (percentage through today 6AM-11PM) ──────
-
-  const progressPct = useMemo(() => {
-    const nowMin = timeToMinutes(now)
-    const dayStart = 6 * 60
-    const dayEnd = 23 * 60
-    return Math.max(0, Math.min(100, ((nowMin - dayStart) / (dayEnd - dayStart)) * 100))
-  }, [now])
-
-  const today = new Date()
-  const dateLabel = today.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  })
 
   const totalEvents = allItems.length
   const completedCount = allItems.filter((i) => i.state === "completed").length
@@ -248,64 +257,74 @@ export default function DayTimeline({
 
       {/* Timeline body */}
       <div className="relative min-h-0 flex-1 overflow-y-auto py-3">
-        {/* Current-time indicator */}
-        <div
-          className="absolute left-[11px] z-10 transition-all duration-1000"
-          style={{ top: `calc(${progressPct}%)` }}
-        >
-          <div className="h-3.5 w-3.5 rounded-full bg-primary border-2 border-card" />
-        </div>
-
         {/* Event items */}
-        {allItems.map((item) => (
-          <div key={item.id} className={cn(
-            "relative flex items-start py-2 pl-10 pr-4",
-            item.state === "completed" && "opacity-50",
-            item.state === "active" && "bg-primary/5 rounded-lg"
-          )}>
-            {/* Vertical line segment */}
-            <div className="absolute left-[18px] top-0 bottom-0 w-px bg-border/30" />
-
-            {/* Dot centered on the line */}
-            <div className={cn(
-              "absolute left-[14px] top-3 h-2.5 w-2.5 rounded-full",
-              DOT_COLORS[item.type],
-              item.state === "active" && "h-3 w-3 left-[13.5px] ring-2 animate-pulse",
-              item.state === "active" && RING_COLORS[item.type],
-            )} />
-
-            {/* Content */}
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <TimelineIcon type={item.type} />
-                <span
-                  className={cn(
-                    "truncate text-xs font-medium text-foreground",
-                    item.state === "completed" && "line-through text-muted-foreground"
-                  )}
-                >
-                  {item.title}
-                </span>
+        {timelineRows.map((row) => {
+          if (row.kind === "now") {
+            return (
+              <div key="timeline-now" className="relative flex items-center py-2 pl-10 pr-4">
+                <div className="absolute bottom-0 left-[18px] top-0 w-px bg-border/30" />
+                <div className="absolute left-[11px] top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 rounded-full border-2 border-card bg-primary shadow-sm" />
+                <div className="min-w-0 flex-1">
+                  <div className="h-px bg-primary/40" />
+                  <span className="mt-1 block text-[10px] font-medium text-primary">
+                    Now {formatTime12(now)}
+                  </span>
+                </div>
               </div>
+            )
+          }
 
-              <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-                <span>{formatTime12(item.time)}</span>
-                {item.endTime && (
-                  <>
-                    <span>-</span>
-                    <span>{formatTime12(item.endTime)}</span>
-                  </>
+          const item = row.item
+          return (
+            <div key={item.id} className={cn(
+              "relative flex items-start py-2 pl-10 pr-4",
+              item.state === "completed" && "opacity-50",
+              item.state === "active" && "bg-primary/5 rounded-lg"
+            )}>
+              {/* Vertical line segment */}
+              <div className="absolute bottom-0 left-[18px] top-0 w-px bg-border/30" />
+
+              {/* Dot centered on the line */}
+              <div className={cn(
+                "absolute left-[14px] top-3 h-2.5 w-2.5 rounded-full",
+                DOT_COLORS[item.type],
+                item.state === "active" && "left-[13.5px] h-3 w-3 animate-pulse ring-2",
+                item.state === "active" && RING_COLORS[item.type],
+              )} />
+
+              {/* Content */}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <TimelineIcon type={item.type} />
+                  <span
+                    className={cn(
+                      "truncate text-xs font-medium text-foreground",
+                      item.state === "completed" && "text-muted-foreground line-through"
+                    )}
+                  >
+                    {item.title}
+                  </span>
+                </div>
+
+                <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <span>{formatTime12(item.time)}</span>
+                  {item.endTime && (
+                    <>
+                      <span>-</span>
+                      <span>{formatTime12(item.endTime)}</span>
+                    </>
+                  )}
+                </div>
+
+                {item.description && (
+                  <p className="mt-0.5 truncate text-[10px] leading-tight text-muted-foreground/70">
+                    {item.description}
+                  </p>
                 )}
               </div>
-
-              {item.description && (
-                <p className="mt-0.5 truncate text-[10px] leading-tight text-muted-foreground/70">
-                  {item.description}
-                </p>
-              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
 
         {allItems.length === 0 && (
           <p className="py-8 text-center text-xs text-muted-foreground">

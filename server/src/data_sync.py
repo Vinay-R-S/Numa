@@ -11,6 +11,7 @@ def fetch_latest_for_user(user_id: str) -> Dict:
         "calendar": {"ok": True, "fetched": 0, "detail": "not connected"},
         "slack": {"ok": True, "fetched": 0, "channels": 0, "detail": "not connected"},
         "health": {"ok": True, "detail": "not synced"},
+        "github": {"ok": True, "detail": "not connected"},
     }
 
     try:
@@ -42,6 +43,14 @@ def fetch_latest_for_user(user_id: str) -> Dict:
         log.warning("Health sync failed for user %s: %s", user_id, exc)
         result["health"] = {"ok": False, "detail": str(exc)}
 
+    try:
+        from src.github_agent.router import fetch_and_store_github_stats_for_user
+
+        result["github"] = fetch_and_store_github_stats_for_user(user_id)
+    except Exception as exc:
+        log.warning("GitHub sync failed for user %s: %s", user_id, exc)
+        result["github"] = {"ok": False, "detail": str(exc)}
+
     return result
 
 
@@ -62,6 +71,13 @@ def connected_user_ids() -> list[str]:
     except Exception as exc:
         log.warning("Could not list connected Slack users: %s", exc)
 
+    try:
+        from src.github_agent.router import get_all_connected_github_user_ids
+
+        users.update(get_all_connected_github_user_ids())
+    except Exception as exc:
+        log.warning("Could not list connected GitHub users: %s", exc)
+
     return sorted(users)
 
 
@@ -81,6 +97,7 @@ def fetch_latest_for_users(user_ids: Optional[Iterable[str]] = None) -> Dict:
         "ok": all(
             item.get("calendar", {}).get("ok", False)
             and item.get("slack", {}).get("ok", False)
+            and item.get("github", {}).get("ok", True)
             for item in results
         ),
         "scope": "selected_users" if user_ids is not None else "all_connected_users",

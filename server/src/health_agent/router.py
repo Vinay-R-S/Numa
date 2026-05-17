@@ -28,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth.dependencies import get_current_user
 from ..db import _get_conn
+from ..memory import memory_service
 from .schemas import (
     HealthChatRequest,
     HealthChatResponse,
@@ -74,6 +75,62 @@ def _row_to_dict(row, description) -> dict:
     return {col.name: val for col, val in zip(description, row)}
 
 
+def _store_health_snapshot_vector(
+    user_id: str,
+    source: str,
+    snapshot_date: date,
+    data: Dict,
+) -> None:
+    try:
+        activities = data.get("activities") or []
+        if isinstance(activities, str):
+            activities_text = activities[:300]
+        elif isinstance(activities, list):
+            activities_text = "; ".join(
+                str(item.get("name") or item.get("type") or item)[:80]
+                if isinstance(item, dict) else str(item)[:80]
+                for item in activities[:6]
+            )
+        elif isinstance(activities, dict):
+            activities_text = ", ".join(f"{k}: {v}" for k, v in list(activities.items())[:8])
+        else:
+            activities_text = ""
+
+        sleep_stages = data.get("sleep_stages")
+        if isinstance(sleep_stages, dict):
+            sleep_text = ", ".join(f"{k}: {v}" for k, v in sleep_stages.items())
+        else:
+            sleep_text = str(sleep_stages or "")
+
+        text = (
+            f"Health snapshot for {snapshot_date.isoformat()} from {source}.\n"
+            f"Steps: {data.get('steps') if data.get('steps') is not None else 'unknown'}.\n"
+            f"Active minutes: {data.get('active_minutes') if data.get('active_minutes') is not None else 'unknown'}.\n"
+            f"Calories: {data.get('calories') if data.get('calories') is not None else 'unknown'}.\n"
+            f"Distance km: {data.get('distance_km') if data.get('distance_km') is not None else 'unknown'}.\n"
+            f"Sleep hours: {data.get('sleep_hours') if data.get('sleep_hours') is not None else 'unknown'}.\n"
+            f"Sleep stages: {sleep_text or 'none'}.\n"
+            f"Activities: {activities_text or 'none'}."
+        )
+        memory_service.upsert_domain_text(
+            user_id=user_id,
+            domain="health",
+            stable_key=f"{source}:{snapshot_date.isoformat()}",
+            text=text,
+            payload={
+                "source": source,
+                "snapshot_date": snapshot_date.isoformat(),
+                "steps": data.get("steps"),
+                "active_minutes": data.get("active_minutes"),
+                "calories": data.get("calories"),
+                "distance_km": data.get("distance_km"),
+                "sleep_hours": data.get("sleep_hours"),
+            },
+        )
+    except Exception as exc:
+        log.warning("Health Qdrant upsert failed: %s", exc)
+
+
 def upsert_health_snapshot(
     user_id: str,
     source: str,
@@ -116,6 +173,7 @@ def upsert_health_snapshot(
         )
         conn.commit()
         cur.close()
+        _store_health_snapshot_vector(user_id, source, snapshot_date, data)
         return True
     except Exception as exc:
         log.warning("upsert_health_snapshot failed: %s", exc)

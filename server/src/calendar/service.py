@@ -39,7 +39,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..db import _get_conn
@@ -47,6 +47,7 @@ from ..memory import memory_service
 from ..memory.service import (
     store_calendar_event as _qdrant_store_event,
     delete_month_calendar_events as _qdrant_delete_month,
+    delete_calendar_event as _qdrant_delete_event,
 )
 from ..tasks import service as task_service
 
@@ -396,6 +397,63 @@ def _parse_calendar_event_id(event_id: str) -> Tuple[str, str]:
         cal_id, actual_event_id = event_id.split(":", 1)
         return cal_id, actual_event_id
     return "primary", event_id
+
+
+def _primary_calendar_entry(service) -> Dict[str, Any]:
+    try:
+        primary = service.calendarList().get(calendarId="primary").execute()
+        if primary:
+            primary["primary"] = True
+            primary["calendar_type"] = "personal"
+            return primary
+    except Exception:
+        pass
+
+    for cal in list_all_calendars(service):
+        if cal.get("primary"):
+            cal["calendar_type"] = cal.get("calendar_type") or "personal"
+            return cal
+
+    return {
+        "id": "primary",
+        "summary": "Primary",
+        "primary": True,
+        "accessRole": "owner",
+        "calendar_type": "personal",
+    }
+
+
+def _primary_calendar_ids(service) -> List[str]:
+    ids = ["primary"]
+    try:
+        primary_id = str(_primary_calendar_entry(service).get("id") or "").strip()
+        if primary_id and primary_id not in ids:
+            ids.append(primary_id)
+    except Exception:
+        pass
+    return ids
+
+
+def _persist_mutated_event(user_id: Optional[str], service, event: Dict) -> None:
+    if not user_id:
+        return
+
+    google_cal_id = str(event.get("_calendar_id") or "primary")
+    cal = _primary_calendar_entry(service) if google_cal_id == "primary" else {
+        "id": google_cal_id,
+        "summary": event.get("_calendar_summary") or google_cal_id,
+        "accessRole": event.get("_calendar_access_role") or "owner",
+        "calendar_type": event.get("_calendar_type") or "personal",
+    }
+
+    cal_type = str(cal.get("calendar_type") or event.get("_calendar_type") or "personal")
+    calendar_uuid = _ensure_cal_calendar(user_id, cal, calendar_type=cal_type)
+    stored_event = dict(event)
+    stored_event["_calendar_id"] = str(cal.get("id") or google_cal_id)
+    stored_event["_calendar_summary"] = cal.get("summary") or event.get("_calendar_summary") or "Primary"
+    stored_event["_calendar_access_role"] = cal.get("accessRole") or cal.get("access_role") or "owner"
+    stored_event["_calendar_type"] = cal_type
+    _store_cal_event(user_id, calendar_uuid, stored_event)
 
 
 def _run_parallel_best_effort(*jobs) -> None:
@@ -1044,6 +1102,79 @@ def _prune_cal_events_outside_month(
         log.warning("Qdrant month purge failed for %s/%s: %s", user_id, prev_month_str, exc)
 
 
+def _reconcile_deleted_events_for_month(
+    user_id: str,
+    month_start: datetime,
+    month_end: datetime,
+    fetched_calendar_ids: Set[str],
+    active_events: Set[Tuple[str, str]],
+) -> None:
+    """
+    Mark DB events as cancelled when a successful Google fetch no longer
+    returns them. This keeps Supabase, frontend cache, tasks, and Qdrant in
+    sync with deletes made by the agent or directly in Google Calendar.
+    """
+    if not fetched_calendar_ids:
+        return
+
+    stale: List[Tuple[str, str]] = []
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT c.google_cal_id, e.google_event_id
+            FROM public.cal_events e
+            JOIN public.cal_calendars c ON c.id = e.calendar_id
+            WHERE e.user_id = %s
+              AND e.start_at >= %s
+              AND e.start_at < %s
+              AND e.deleted_at IS NULL
+              AND c.google_cal_id = ANY(%s)
+            """,
+            (user_id, month_start, month_end, list(fetched_calendar_ids)),
+        )
+        for cal_id, event_id in cur.fetchall() or []:
+            key = (str(cal_id), str(event_id))
+            if key not in active_events:
+                stale.append(key)
+
+        if stale:
+            for cal_id, event_id in stale:
+                cur.execute(
+                    """
+                    UPDATE public.cal_events e
+                    SET status = 'cancelled', deleted_at = NOW(), updated_at = NOW()
+                    FROM public.cal_calendars c
+                    WHERE e.calendar_id = c.id
+                      AND e.user_id = %s
+                      AND c.google_cal_id = %s
+                      AND e.google_event_id = %s
+                    """,
+                    (user_id, cal_id, event_id),
+                )
+
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        log.warning("Failed to reconcile deleted calendar events: %s", exc)
+        conn.rollback()
+    finally:
+        conn.close()
+
+    for cal_id, event_id in stale:
+        ext_ref = task_service.calendar_external_ref(cal_id, event_id)
+        _run_parallel_best_effort(
+            lambda r=ext_ref: task_service.delete_task_by_external_ref(user_id, r),
+            lambda c=cal_id, e=event_id: memory_service.delete_snapshot(
+                user_id=user_id,
+                source="calendar_event",
+                external_id=f"{c}:{e}",
+            ),
+            lambda e=event_id: _qdrant_delete_event(user_id, e),
+        )
+
+
 # ── Legacy task / memory sync helpers ──────────────────────────────────────────
 
 def _upsert_calendar_event_memory(user_id: Optional[str], event: Dict) -> None:
@@ -1187,6 +1318,7 @@ def fetch_events_across_selected_calendars(
     time_min: str,
     time_max: str,
     selected_calendars: Optional[List[Dict[str, Any]]] = None,
+    fetched_calendar_ids: Optional[Set[str]] = None,
 ) -> List[Dict]:
     """
     Fetch events from (optionally pre-fetched) calendar list.
@@ -1218,6 +1350,9 @@ def fetch_events_across_selected_calendars(
         except Exception as exc:
             log.warning("Failed to fetch events for calendar %s: %s", cal_id, exc)
             continue
+
+        if fetched_calendar_ids is not None:
+            fetched_calendar_ids.add(str(cal_id))
 
         for event in result.get("items", []):
             if cal_type in ("personal", "shared", "other"):
@@ -1378,22 +1513,35 @@ def get_events_for_frontend(
         _prune_cal_events_outside_month(user_id, month_start, month_end)
 
     # Fetch from Google (all calendars, type-aware filtering)
+    fetched_calendar_ids: Set[str] = set()
     events_raw = fetch_events_across_selected_calendars(
         service,
         time_min,
         time_max,
         selected_calendars=all_calendars,
+        fetched_calendar_ids=fetched_calendar_ids,
     )
 
     # Persist + sync to tasks (personal only)
     if user_id:
+        active_events: Set[Tuple[str, str]] = set()
         for event in events_raw:
             google_cal_id = str(event.get("_calendar_id") or "primary")
+            google_event_id = str(event.get("id") or "").strip()
+            if google_event_id:
+                active_events.add((google_cal_id, google_event_id))
             cal_info = cal_uuid_map.get(google_cal_id)
             if cal_info:
                 cal_uuid, _ = cal_info
                 _store_cal_event(user_id, cal_uuid, event)
             _sync_calendar_event_to_task(user_id, event)
+        _reconcile_deleted_events_for_month(
+            user_id,
+            month_start,
+            month_end,
+            fetched_calendar_ids,
+            active_events,
+        )
 
     return [_format_event_for_frontend(event) for event in events_raw]
 
@@ -1564,6 +1712,7 @@ def create_event_from_payload(payload, user_id: Optional[str] = None) -> Dict:
     created["_calendar_type"]       = "personal"
     created.setdefault("_calendar_summary", "Primary")
     created.setdefault("status", "confirmed")
+    _persist_mutated_event(user_id, service, created)
     _sync_calendar_event_to_task(user_id, created)
     return _format_event_for_frontend(created)
 
@@ -1581,6 +1730,7 @@ def update_event_from_payload(event_id: str, payload, user_id: Optional[str] = N
     updated["_calendar_type"]       = "personal"
     updated.setdefault("_calendar_summary", "Primary")
     updated.setdefault("status", "confirmed")
+    _persist_mutated_event(user_id, service, updated)
     _sync_calendar_event_to_task(user_id, updated)
     return _format_event_for_frontend(updated)
 
@@ -1618,18 +1768,26 @@ def _delete_cal_event_cleanup(
         return
 
     ical_uid: Optional[str] = None
+    resolved_calendar_ids = [google_cal_id]
     try:
         service  = get_calendar_service(user_id=user_id)
+        if google_cal_id == "primary":
+            resolved_calendar_ids = _primary_calendar_ids(service)
         event    = service.events().get(calendarId=google_cal_id, eventId=google_event_id).execute()
         ical_uid = str(event.get("iCalUID") or "").strip() or None
     except Exception:
         pass
+
+    resolved_calendar_ids = list(dict.fromkeys([cid for cid in resolved_calendar_ids if cid]))
 
     external_ref = (
         f"gcal:ical:{ical_uid}"
         if ical_uid
         else task_service.calendar_external_ref(google_cal_id, google_event_id)
     )
+    external_refs = {external_ref}
+    for cal_id in resolved_calendar_ids:
+        external_refs.add(task_service.calendar_external_ref(cal_id, google_event_id))
 
     conn = _get_conn()
     try:
@@ -1641,10 +1799,10 @@ def _delete_cal_event_cleanup(
             FROM public.cal_calendars c
             WHERE e.calendar_id      = c.id
               AND c.user_id          = %s
-              AND c.google_cal_id    = %s
+              AND c.google_cal_id    = ANY(%s)
               AND e.google_event_id  = %s
             """,
-            (user_id, google_cal_id, google_event_id),
+            (user_id, resolved_calendar_ids, google_event_id),
         )
         conn.commit()
         cur.close()
@@ -1654,12 +1812,19 @@ def _delete_cal_event_cleanup(
         conn.close()
 
     _run_parallel_best_effort(
-        lambda: task_service.delete_task_by_external_ref(user_id, external_ref),
-        lambda: memory_service.delete_snapshot(
-            user_id=user_id,
-            source="calendar_event",
-            external_id=f"{google_cal_id}:{google_event_id}",
-        ),
+        *[
+            (lambda r=ref: task_service.delete_task_by_external_ref(user_id, r))
+            for ref in external_refs
+        ],
+        *[
+            (lambda c=cal_id: memory_service.delete_snapshot(
+                user_id=user_id,
+                source="calendar_event",
+                external_id=f"{c}:{google_event_id}",
+            ))
+            for cal_id in resolved_calendar_ids
+        ],
+        lambda: _qdrant_delete_event(user_id, google_event_id),
     )
 
 
@@ -1741,6 +1906,7 @@ def create_calendar_event(
     created_event["_calendar_type"] = "personal"
     created_event.setdefault("_calendar_summary", "Primary")
     created_event.setdefault("status", "confirmed")
+    _persist_mutated_event(user_id, service, created_event)
     _sync_calendar_event_to_task(user_id, created_event)
 
     meet_link = None
@@ -1762,7 +1928,12 @@ def create_calendar_event(
 def delete_calendar_event(event_id: str, user_id: Optional[str] = None) -> Dict:
     service = get_calendar_service(user_id=user_id)
     calendar_id, actual_event_id = _parse_calendar_event_id(event_id)
-    service.events().delete(calendarId=calendar_id, eventId=actual_event_id).execute()
+    try:
+        service.events().delete(calendarId=calendar_id, eventId=actual_event_id).execute()
+    except Exception as exc:
+        err_str = str(exc)
+        if "410" not in err_str and "Resource has been deleted" not in err_str:
+            raise
     _delete_cal_event_cleanup(user_id, calendar_id, actual_event_id)
     return {"status": "success", "deleted_event_id": actual_event_id}
 
@@ -1812,7 +1983,12 @@ def delete_event_by_description(query: str, user_id: Optional[str] = None) -> Di
     if len(matches) == 1:
         event   = matches[0]
         service = get_calendar_service(user_id=user_id)
-        service.events().delete(calendarId="primary", eventId=event["id"]).execute()
+        try:
+            service.events().delete(calendarId="primary", eventId=event["id"]).execute()
+        except Exception as exc:
+            err_str = str(exc)
+            if "410" not in err_str and "Resource has been deleted" not in err_str:
+                raise
         _delete_cal_event_cleanup(user_id, "primary", event["id"])
         return {
             "status":         "deleted",
@@ -1871,6 +2047,7 @@ def modify_event_by_description(query: str, new_datetime_str: str, user_id: Opti
     updated_event["_calendar_type"] = "personal"
     updated_event.setdefault("_calendar_summary", "Primary")
     updated_event.setdefault("status", "confirmed")
+    _persist_mutated_event(user_id, service, updated_event)
     _sync_calendar_event_to_task(user_id, updated_event)
 
     return {

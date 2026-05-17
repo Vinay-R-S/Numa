@@ -130,7 +130,7 @@ export const useTasksStore = create<TasksStore>((set, get) => ({
     const task = await apiCreateTask(data)
     set((state) => ({ tasks: [...state.tasks, task] }))
     // Invalidate stats cache
-    set({ lastFetchedStats: null })
+    set({ lastFetchedStats: null, lastFetchedHistory: null })
     return task
   },
 
@@ -149,8 +149,8 @@ export const useTasksStore = create<TasksStore>((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === id ? updated : t)),
       }))
       // Invalidate stats cache if status changed
-      if (data.status) {
-        set({ lastFetchedStats: null })
+      if (data.status || data.completed_at !== undefined) {
+        set({ lastFetchedStats: null, lastFetchedHistory: null })
       }
       return updated
     } catch (err) {
@@ -181,7 +181,7 @@ export const useTasksStore = create<TasksStore>((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === id ? updated : t)),
       }))
       // Invalidate stats cache
-      set({ lastFetchedStats: null })
+      set({ lastFetchedStats: null, lastFetchedHistory: null })
       return updated
     } catch (err) {
       // Revert on error
@@ -206,7 +206,7 @@ export const useTasksStore = create<TasksStore>((set, get) => ({
     try {
       await apiDeleteTask(id)
       // Invalidate stats cache
-      set({ lastFetchedStats: null })
+      set({ lastFetchedStats: null, lastFetchedHistory: null })
     } catch (err) {
       // Revert on error
       if (deletedTask) {

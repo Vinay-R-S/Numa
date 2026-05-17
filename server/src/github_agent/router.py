@@ -14,6 +14,7 @@ from fastapi.responses import RedirectResponse
 
 from ..auth.dependencies import get_current_user
 from ..db import _get_conn
+from ..memory import memory_service
 from .schemas import (
     GitHubAuthStatus,
     GitHubChatRequest,
@@ -71,6 +72,78 @@ def _get_github_username(user_id: str) -> str | None:
         return row[0] if row else None
     finally:
         conn.close()
+
+
+def get_all_connected_github_user_ids() -> list[str]:
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM public.github_auth")
+        rows = cur.fetchall() or []
+        cur.close()
+        return [str(row[0]) for row in rows if row and row[0]]
+    except Exception as exc:
+        log.warning("Could not list connected GitHub users: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+
+def _store_github_stats_vector(user_id: str, stats: dict) -> None:
+    try:
+        repos = stats.get("recent_repos") or []
+        repo_lines = []
+        for repo in repos[:8]:
+            if not isinstance(repo, dict):
+                continue
+            repo_lines.append(
+                f"{repo.get('full_name') or repo.get('name')} "
+                f"language={repo.get('language') or 'unknown'} "
+                f"stars={repo.get('stars', 0)} updated={repo.get('updated_at') or 'unknown'}"
+            )
+
+        text = (
+            f"GitHub activity for {stats.get('username')}.\n"
+            f"Commits today: {stats.get('total_commits_today', 0)}.\n"
+            f"Commits this week: {stats.get('total_commits_week', 0)}.\n"
+            f"Open pull requests: {stats.get('open_prs', 0)}.\n"
+            f"Public repos: {stats.get('public_repos', 0)}. Private repos: {stats.get('private_repos', 0)}.\n"
+            f"Followers: {stats.get('followers', 0)}. Following: {stats.get('following', 0)}.\n"
+            f"Recent repositories: {'; '.join(repo_lines) if repo_lines else 'none'}."
+        )
+        memory_service.upsert_domain_text(
+            user_id=user_id,
+            domain="github",
+            stable_key="profile_stats",
+            text=text,
+            payload={
+                "source": "github",
+                "username": stats.get("username"),
+                "total_commits_today": stats.get("total_commits_today", 0),
+                "total_commits_week": stats.get("total_commits_week", 0),
+                "open_prs": stats.get("open_prs", 0),
+                "public_repos": stats.get("public_repos", 0),
+                "private_repos": stats.get("private_repos", 0),
+            },
+        )
+    except Exception as exc:
+        log.warning("GitHub Qdrant upsert failed: %s", exc)
+
+
+def fetch_and_store_github_stats_for_user(user_id: str) -> dict:
+    token = _get_github_token(user_id)
+    if not token:
+        return {"ok": False, "detail": "GitHub not connected"}
+
+    username = _get_github_username(user_id)
+    if not username:
+        return {"ok": False, "detail": "GitHub username not found"}
+
+    from .github_client import GitHubClient
+    client = GitHubClient(token)
+    stats = client.get_contribution_stats(username)
+    _store_github_stats_vector(user_id, stats)
+    return {"ok": True, "username": username, "stats": stats}
 
 
 @router.get("/connect", response_model=GitHubConnectResponse)
@@ -220,6 +293,7 @@ def github_stats(current_user: dict = Depends(get_current_user)):
     from .github_client import GitHubClient
     client = GitHubClient(token)
     stats = client.get_contribution_stats(username)
+    _store_github_stats_vector(user_id, stats)
     return GitHubUserStats(**stats)
 
 

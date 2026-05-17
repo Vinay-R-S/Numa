@@ -146,9 +146,72 @@ def _format_memory_results(results: List[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_task_results(results: List[dict]) -> str:
+    if not results:
+        return ""
+    lines = ["[Tasks]"]
+    for r in results:
+        title = r.get("title") or "Untitled"
+        status = r.get("status") or "unknown"
+        due = r.get("due_date") or ""
+        priority = r.get("priority") or ""
+        entry = f"  â€¢ {title} [{status}]"
+        if priority:
+            entry += f" priority={priority}"
+        if due:
+            entry += f" due={str(due)[:16]}"
+        lines.append(entry)
+    return "\n".join(lines)
+
+
+def _format_health_results(results: List[dict]) -> str:
+    if not results:
+        return ""
+    lines = ["[Health]"]
+    for r in results:
+        source = r.get("source") or "health"
+        day = r.get("snapshot_date") or ""
+        parts = []
+        if r.get("steps") is not None:
+            parts.append(f"steps={r.get('steps')}")
+        if r.get("active_minutes") is not None:
+            parts.append(f"active={r.get('active_minutes')}m")
+        if r.get("calories") is not None:
+            parts.append(f"calories={r.get('calories')}")
+        if r.get("distance_km") is not None:
+            parts.append(f"distance={r.get('distance_km')}km")
+        if r.get("sleep_hours") is not None:
+            parts.append(f"sleep={r.get('sleep_hours')}h")
+        fallback = (r.get("text") or "")[:160]
+        lines.append(f"  â€¢ {source} {day}: {', '.join(parts) if parts else fallback}")
+    return "\n".join(lines)
+
+
+def _format_github_results(results: List[dict]) -> str:
+    if not results:
+        return ""
+    lines = ["[GitHub]"]
+    for r in results:
+        user = r.get("username") or "GitHub"
+        lines.append(
+            "  â€¢ "
+            f"{user}: commits today={r.get('total_commits_today', 0)}, "
+            f"week={r.get('total_commits_week', 0)}, "
+            f"open PRs={r.get('open_prs', 0)}, "
+            f"repos={r.get('public_repos', 0)} public/{r.get('private_repos', 0)} private"
+        )
+        text = (r.get("text") or "")
+        if text:
+            lines.append(f"    {text[:220]}")
+    return "\n".join(lines)
+
+
 _FORMATTERS = {
     "calendar": _format_calendar_results,
     "slack": _format_slack_results,
+    "tasks": _format_task_results,
+    "health": _format_health_results,
+    "github": _format_github_results,
     "memory": _format_memory_results,
 }
 

@@ -46,7 +46,7 @@ from .schemas import (
     SlackSyncOut,
 )
 from .service import run_slack_agent_chat
-from .qdrant_store import ingest_message, purge_old_messages
+from .qdrant_store import delete_message, ingest_message, purge_old_messages
 
 log = logging.getLogger(__name__)
 
@@ -232,6 +232,109 @@ def _save_slack_message(event: dict, channel_name: Optional[str] = None):
             )
         except Exception as exc:
             log.warning("Qdrant ingest failed: %s", exc)
+
+
+def _delete_slack_message_by_ts(ts: str, slack_user_id: Optional[str] = None) -> None:
+    if not ts:
+        return
+
+    user_id = _resolve_user_id_by_slack(slack_user_id or "") if slack_user_id else None
+    if not user_id:
+        conn = _get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT user_id FROM public.slack_messages WHERE ts = %s LIMIT 1",
+                (ts,),
+            )
+            row = cur.fetchone()
+            cur.close()
+            user_id = str(row[0]) if row and row[0] else None
+        except Exception as exc:
+            log.warning("_delete_slack_message_by_ts lookup failed: %s", exc)
+        finally:
+            conn.close()
+
+    conn = _get_conn()
+    task_ids: list[str] = []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, user_id FROM public.tasks WHERE external_ref = %s",
+            (f"slack:{ts}",),
+        )
+        task_ids = [str(row[0]) for row in (cur.fetchall() or []) if row and row[0]]
+        cur.execute("DELETE FROM public.slack_messages WHERE ts = %s", (ts,))
+        cur.execute(
+            "DELETE FROM public.tasks WHERE external_ref = %s",
+            (f"slack:{ts}",),
+        )
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        log.warning("_delete_slack_message_by_ts DB delete failed: %s", exc)
+        conn.rollback()
+    finally:
+        conn.close()
+
+    if user_id:
+        delete_message(user_id=user_id, ts=ts)
+        try:
+            from ..tasks import service as task_service
+            for task_id in task_ids:
+                task_service.delete_task_snapshot(user_id, task_id)
+        except Exception:
+            pass
+
+
+def _update_slack_message(event: dict, channel_name: Optional[str] = None) -> None:
+    message = event.get("message") if isinstance(event.get("message"), dict) else event
+    previous = event.get("previous_message") if isinstance(event.get("previous_message"), dict) else {}
+    ts = message.get("ts") or event.get("ts") or previous.get("ts")
+    text = message.get("text") or ""
+    slack_user_id = message.get("user") or previous.get("user") or event.get("user") or ""
+    slack_chan_id = message.get("channel") or event.get("channel") or previous.get("channel") or ""
+    if not ts or not slack_user_id:
+        return
+
+    user_id = _resolve_user_id_by_slack(slack_user_id)
+    if not user_id:
+        return
+
+    resolved_channel_name = channel_name or _get_channel_name_from_db(slack_chan_id)
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE public.slack_messages
+            SET text = %s,
+                channel_name = COALESCE(%s, channel_name),
+                raw_payload = %s
+            WHERE ts = %s
+            """,
+            (text, resolved_channel_name, json.dumps(event), ts),
+        )
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        log.warning("_update_slack_message DB update failed: %s", exc)
+        conn.rollback()
+        return
+    finally:
+        conn.close()
+
+    if text.strip():
+        ingest_message(
+            user_id=user_id,
+            slack_user_id=slack_user_id,
+            slack_channel_id=slack_chan_id,
+            channel_name=resolved_channel_name or slack_chan_id,
+            text=text,
+            ts=ts,
+            thread_ts=message.get("thread_ts"),
+            message_type=message.get("subtype") or "message",
+        )
 
 
 def _save_slack_message_for_user(
@@ -548,8 +651,24 @@ async def slack_events(request: Request):
     event_type = event.get("type", "")
 
     if event_type == "message":
-        # Skip bot messages, edits, and deletions
-        if event.get("bot_id") or event.get("subtype") in ("message_changed", "message_deleted", "bot_message"):
+        subtype = event.get("subtype")
+        if subtype == "message_deleted":
+            previous = event.get("previous_message") if isinstance(event.get("previous_message"), dict) else {}
+            _delete_slack_message_by_ts(
+                ts=event.get("deleted_ts") or previous.get("ts") or event.get("ts"),
+                slack_user_id=previous.get("user") or event.get("user"),
+            )
+            return Response(status_code=200)
+
+        if subtype == "message_changed":
+            message = event.get("message") if isinstance(event.get("message"), dict) else {}
+            channel_id = event.get("channel") or message.get("channel") or ""
+            channel_name = _resolve_channel_name(channel_id) if channel_id else None
+            _update_slack_message(event, channel_name)
+            return Response(status_code=200)
+
+        # Skip bot messages and unsupported message subtypes
+        if event.get("bot_id") or subtype in ("bot_message",):
             return Response(status_code=200)
 
         # Propagate team_id from outer envelope if missing in event
@@ -601,10 +720,10 @@ def _extract_and_create_task(text: str, ts: Optional[str], user_id: str):
     """Use Groq LLM to detect if text is actionable and create a task."""
     try:
         from datetime import date
-        from langchain_groq import ChatGroq  # type: ignore
         from langchain_core.prompts import ChatPromptTemplate  # type: ignore
         from langchain_core.output_parsers import PydanticOutputParser  # type: ignore
         from pydantic import BaseModel
+        from ..llm_factory import get_llm
 
         class TaskExtraction(BaseModel):
             is_actionable: bool
@@ -621,7 +740,7 @@ def _extract_and_create_task(text: str, ts: Optional[str], user_id: str):
             )),
             ("human", "{text}"),
         ])
-        llm   = ChatGroq(model="llama-3.1-8b-instant", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
+        llm = get_llm(provider="groq", model="llama-3.1-8b-instant", temperature=0)
         chain = prompt | llm | parser
         result: TaskExtraction = chain.invoke({
             "text": text,

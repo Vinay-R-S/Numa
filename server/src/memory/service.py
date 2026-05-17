@@ -259,6 +259,7 @@ class SemanticMemoryService:
                     log.warning("Failed to inspect Qdrant collection config: %s", exc)
 
             if exists:
+                self._ensure_payload_indexes(qdrant, target_collection, ("user_id", "source"))
                 return True
 
             qdrant.create_collection(
@@ -268,10 +269,23 @@ class SemanticMemoryService:
                     distance=deps["Distance"].COSINE,
                 ),
             )
+            self._ensure_payload_indexes(qdrant, target_collection, ("user_id", "source"))
             return True
         except Exception as exc:
             log.warning("Failed to ensure Qdrant collection '%s': %s", target_collection, exc)
             return False
+
+    @staticmethod
+    def _ensure_payload_indexes(qdrant: Any, collection_name: str, fields: tuple[str, ...]) -> None:
+        for field in fields:
+            try:
+                qdrant.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field,
+                    field_schema="keyword",
+                )
+            except Exception:
+                pass
 
     @staticmethod
     def _collection_vector_size(collection_info: Any) -> Optional[int]:
@@ -421,6 +435,77 @@ class SemanticMemoryService:
             qdrant.upsert(collection_name=collection_name, points=[point], wait=False)
         except Exception as exc:
             log.warning("Failed to upsert semantic memory point: %s", exc)
+
+    def upsert_domain_text(
+        self,
+        *,
+        user_id: str,
+        domain: str,
+        stable_key: str,
+        text: str,
+        payload: Optional[dict] = None,
+    ) -> None:
+        """Upsert one text document into a per-user domain collection."""
+        if not self.enabled or not user_id or not domain or not stable_key or not text.strip():
+            return
+
+        vector = self._embed(text)
+        if not vector:
+            return
+
+        collection_name = self.user_collection_name(user_id, domain)
+        if not self._ensure_collection(collection_name=collection_name):
+            return
+
+        deps = self._deps()
+        qdrant = self._qdrant_client()
+        if not deps or not qdrant:
+            return
+
+        point_id = self._stable_point_id(domain, user_id, stable_key)
+        point_payload = {
+            "user_id": user_id,
+            "domain": domain,
+            "stable_key": stable_key,
+            "text": text.strip(),
+            "source": f"{domain}_snapshot",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            **(payload or {}),
+        }
+
+        try:
+            point = deps["PointStruct"](
+                id=self._qdrant_point_id(point_id),
+                vector=vector,
+                payload=point_payload,
+            )
+            qdrant.upsert(collection_name=collection_name, points=[point], wait=False)
+        except Exception as exc:
+            log.warning("Failed to upsert %s domain point: %s", domain, exc)
+
+    def delete_domain_point(self, *, user_id: str, domain: str, stable_key: str) -> None:
+        if not self.enabled or not user_id or not domain or not stable_key:
+            return
+
+        deps = self._deps()
+        qdrant = self._qdrant_client()
+        if not deps or not qdrant:
+            return
+
+        collection_name = self.user_collection_name(user_id, domain)
+        try:
+            if not qdrant.collection_exists(collection_name):
+                return
+            point_id = self._stable_point_id(domain, user_id, stable_key)
+            qdrant.delete(
+                collection_name=collection_name,
+                points_selector=deps["PointIdsList"](
+                    points=[self._qdrant_point_id(point_id)]
+                ),
+                wait=False,
+            )
+        except Exception as exc:
+            log.warning("Failed to delete %s domain point: %s", domain, exc)
 
     def store_turn(self, user_id: str, query: str, response: str) -> None:
         if not self.enabled:
@@ -636,7 +721,7 @@ def _ensure_calendar_collection(user_id: str) -> bool:
                     distance=deps["Distance"].COSINE,
                 ),
             )
-            for field in ("user_id", "app", "month"):
+            for field in ("user_id", "app", "month", "event_id", "calendar_id"):
                 try:
                     qdrant.create_payload_index(
                         collection_name=collection_name,
@@ -647,7 +732,7 @@ def _ensure_calendar_collection(user_id: str) -> bool:
                     pass
             log.info("Created Qdrant collection '%s' with payload indexes", collection_name)
         else:
-            for field in ("user_id", "app", "month"):
+            for field in ("user_id", "app", "month", "event_id", "calendar_id"):
                 try:
                     qdrant.create_payload_index(
                         collection_name=collection_name,
@@ -874,3 +959,55 @@ def delete_month_calendar_events(user_id: str, month_str: str) -> None:
         )
     except Exception as exc:
         log.warning("delete_month_calendar_events failed: %s", exc)
+
+
+def delete_calendar_event(user_id: str, event_id: str, calendar_id: Optional[str] = None) -> None:
+    """
+    Delete Qdrant calendar vectors for one Google Calendar event.
+    Filters primarily by event_id so aliases like "primary" vs the user's
+    email-backed primary calendar id do not leave stale vectors behind.
+    """
+    if not user_id or not event_id:
+        return
+
+    _ensure_calendar_collection(user_id)
+
+    qdrant = _cal_qdrant_client()
+    deps   = memory_service._deps()
+    if not qdrant or not deps:
+        return
+
+    try:
+        collection_name = _calendar_collection_name(user_id)
+        if not qdrant.collection_exists(collection_name):
+            return
+
+        conditions = [
+            deps["FieldCondition"](
+                key="user_id",
+                match=deps["MatchValue"](value=user_id),
+            ),
+            deps["FieldCondition"](
+                key="app",
+                match=deps["MatchValue"](value="google_calendar"),
+            ),
+            deps["FieldCondition"](
+                key="event_id",
+                match=deps["MatchValue"](value=event_id),
+            ),
+        ]
+        if calendar_id and calendar_id != "primary":
+            conditions.append(
+                deps["FieldCondition"](
+                    key="calendar_id",
+                    match=deps["MatchValue"](value=calendar_id),
+                )
+            )
+
+        qdrant.delete(
+            collection_name=collection_name,
+            points_selector=deps["Filter"](must=conditions),
+            wait=False,
+        )
+    except Exception as exc:
+        log.warning("delete_calendar_event failed: %s", exc)
