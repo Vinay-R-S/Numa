@@ -269,17 +269,33 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 
 ### Running the app
 
-#### Database
+#### Ngrok (Slack)
 
+Run the Ngrok for Slack server calls
 ```bash
 cd .\server\
 ```
 
-Run the Ngrok for Slack server calls
 ```bash
 py .\getNgrok.py
 ```
 
+#### Database 
+```bash
+cd .\server\
+```
+
+Activate the virtual environment
+```bashV
+.\.venv\Scripts\activate
+```
+
+Run the Database init (This creates the Tables if it doesnt exists and migrates to latest version if tables exists)
+```bash
+py .\scripts\init_db.py
+```
+
+#### Backend
 ```bash
 cd .\server\
 ```
@@ -289,21 +305,18 @@ Activate the virtual environment
 .\.venv\Scripts\activate
 ```
 
-Initialize the Database [This created the Tables and migrates to latest version]
-```bash
-py .\scripts\init_db.py
-```
-
 Run the Backend server
 ```bash
 uvicorn main:app --reload --port 8000
 ```
 
-Run the client
+#### Client
+
 ```bash
 cd .\client\
 ```
 
+Run the client service
 ```bash
 npm run dev
 ```
