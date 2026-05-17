@@ -3,6 +3,7 @@ Database initialization - runs CREATE TABLE IF NOT EXISTS on every startup.
 Add new table DDL to the TABLES list to have them auto-created.
 """
 import os
+import hashlib
 import logging
 import threading
 from contextlib import contextmanager
@@ -96,9 +97,9 @@ class _PooledConnection:
     """
 
     def __init__(self, real_conn, pool: ThreadedConnectionPool):
-        self._conn = real_conn
-        self._pool = pool
-        self._returned = False
+        object.__setattr__(self, "_conn", real_conn)
+        object.__setattr__(self, "_pool", pool)
+        object.__setattr__(self, "_returned", False)
 
     def close(self):
         """Return connection to pool instead of closing it."""
@@ -114,6 +115,12 @@ class _PooledConnection:
 
     def __getattr__(self, name):
         return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        if name in {"_conn", "_pool", "_returned"}:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._conn, name, value)
 
     def __enter__(self):
         return self
@@ -760,19 +767,155 @@ TABLES: list[str] = [
 ]
 
 
+SCHEMA_VERSION = "2026_05_16_001"
+
+REQUIRED_TABLES = (
+    "profiles",
+    "tasks",
+    "cal_calendars",
+    "cal_events",
+    "cal_attendees",
+    "cal_watch_channels",
+    "user_ai_settings",
+    "journal_entries",
+)
+
+SCHEMA_MIGRATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS public.numa_schema_migrations (
+    version          TEXT        PRIMARY KEY,
+    checksum         TEXT        NOT NULL,
+    statements_count INTEGER     NOT NULL,
+    applied_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
+
+def _schema_checksum() -> str:
+    normalized = "\n\n".join(" ".join(stmt.strip().split()) for stmt in TABLES)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _ensure_schema_migration_table(cur) -> None:
+    cur.execute(SCHEMA_MIGRATIONS_DDL)
+
+
+def _latest_schema_revision(cur) -> Optional[tuple[str, str, int]]:
+    cur.execute(
+        """
+        SELECT version, checksum, statements_count
+        FROM public.numa_schema_migrations
+        ORDER BY applied_at DESC
+        LIMIT 1
+        """
+    )
+    return cur.fetchone()
+
+
+def _missing_required_tables(cur) -> list[str]:
+    cur.execute(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = ANY(%s)
+        """,
+        (list(REQUIRED_TABLES),),
+    )
+    existing = {row[0] for row in cur.fetchall()}
+    return [table for table in REQUIRED_TABLES if table not in existing]
+
+
+def _record_schema_revision(cur, checksum: str) -> None:
+    cur.execute(
+        """
+        INSERT INTO public.numa_schema_migrations
+            (version, checksum, statements_count, applied_at)
+        VALUES (%s, %s, %s, NOW())
+        ON CONFLICT (version) DO UPDATE
+        SET checksum = EXCLUDED.checksum,
+            statements_count = EXCLUDED.statements_count,
+            applied_at = NOW()
+        """,
+        (SCHEMA_VERSION, checksum, len(TABLES)),
+    )
+
+
+def verify_required_tables() -> list[str]:
+    """Return any required public tables that are still missing."""
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        try:
+            return _missing_required_tables(cur)
+        finally:
+            cur.close()
+    finally:
+        conn.close()
+
+
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 
-def init_db() -> None:
-    """Execute all DDL statements. Called once at application startup."""
+def init_db(*, raise_on_error: bool = False) -> None:
+    """Create or migrate the database schema. Called once at application startup."""
+    current_stmt = ""
+    conn = None
+    cur = None
     try:
+        checksum = _schema_checksum()
         conn = _get_conn()
         conn.autocommit = True
         cur = conn.cursor()
-        for stmt in TABLES:
-            cur.execute(stmt)
-        cur.close()
-        conn.close()
-        log.info("✓ Database tables verified / created.")
-    except Exception as exc:
-        log.error("✗ Database init failed: %s", exc)
-        # Non-fatal - app continues; fix the DB and restart
+
+        current_stmt = SCHEMA_MIGRATIONS_DDL
+        _ensure_schema_migration_table(cur)
+
+        latest = _latest_schema_revision(cur)
+        missing_tables = _missing_required_tables(cur)
+        is_latest = (
+            latest is not None
+            and latest[0] == SCHEMA_VERSION
+            and latest[1] == checksum
+            and latest[2] == len(TABLES)
+            and not missing_tables
+        )
+
+        if is_latest:
+            log.info("Database schema is current (%s).", SCHEMA_VERSION)
+        else:
+            if missing_tables:
+                log.info(
+                    "Database schema bootstrap needed; missing tables: %s",
+                    ", ".join(missing_tables),
+                )
+            elif latest is None:
+                log.info("Database schema bootstrap needed; no migration record found.")
+            else:
+                log.info(
+                    "Database schema migration needed; current=%s target=%s.",
+                    latest[0],
+                    SCHEMA_VERSION,
+                )
+
+            for stmt in TABLES:
+                current_stmt = stmt
+                cur.execute(stmt)
+
+            current_stmt = "INSERT INTO public.numa_schema_migrations"
+            _record_schema_revision(cur, checksum)
+            conn.commit()
+            log.info("Database schema verified / migrated to %s.", SCHEMA_VERSION)
+    except Exception:
+        preview = " ".join(current_stmt.strip().split())[:240]
+        message = (
+            "Database init failed"
+            + (f" while running: {preview}" if preview else " before any SQL ran")
+        )
+        log.exception(message)
+        if raise_on_error:
+            raise
+        # Non-fatal when called manually without raise_on_error.
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()

@@ -119,7 +119,7 @@ def _start_periodic_sync_scheduler():
 async def on_startup():
     import asyncio
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, init_db)
+    await loop.run_in_executor(None, lambda: init_db(raise_on_error=True))
 
     import threading
     threading.Thread(target=_start_periodic_sync_scheduler, daemon=True).start()
