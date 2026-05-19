@@ -37,17 +37,63 @@ class GitHubClient:
         repos = self._get("/user/repos", {"sort": sort, "per_page": per_page, "type": "all"})
         return [
             {
+                "github_repo_id": r.get("id"),
                 "name": r["name"],
                 "full_name": r["full_name"],
+                "owner_login": (r.get("owner") or {}).get("login"),
                 "private": r["private"],
+                "fork": r.get("fork", False),
+                "archived": r.get("archived", False),
+                "disabled": r.get("disabled", False),
                 "language": r.get("language"),
                 "stars": r.get("stargazers_count", 0),
                 "forks": r.get("forks_count", 0),
+                "open_issues": r.get("open_issues_count", 0),
+                "default_branch": r.get("default_branch"),
                 "updated_at": r.get("updated_at"),
+                "pushed_at": r.get("pushed_at"),
                 "html_url": r.get("html_url"),
+                "clone_url": r.get("clone_url"),
+                "permissions": r.get("permissions") or {},
             }
             for r in repos
         ]
+
+    def get_recent_commits(self, per_repo: int = 3, repo_limit: int = 8) -> list[dict]:
+        """Fetch recent commits from repos the token can access, including private repos."""
+        commits: list[dict] = []
+        repos = self._get(
+            "/user/repos",
+            {"sort": "pushed", "per_page": repo_limit, "type": "all"},
+        )
+        for repo in repos:
+            full_name = repo.get("full_name")
+            if not full_name:
+                continue
+            try:
+                repo_commits = self._get(f"/repos/{full_name}/commits", {"per_page": per_repo})
+            except Exception as exc:
+                log.warning("Failed to fetch commits for %s: %s", full_name, exc)
+                continue
+
+            for commit in repo_commits:
+                commit_data = commit.get("commit", {})
+                author_data = commit_data.get("author") or {}
+                commits.append(
+                    {
+                        "sha": commit.get("sha", "")[:12],
+                        "full_sha": commit.get("sha", ""),
+                        "message": (commit_data.get("message") or "").splitlines()[0],
+                        "repo": full_name,
+                        "author": author_data.get("name"),
+                        "author_email": author_data.get("email"),
+                        "author_login": (commit.get("author") or {}).get("login"),
+                        "date": author_data.get("date"),
+                        "html_url": commit.get("html_url"),
+                    }
+                )
+
+        return sorted(commits, key=lambda item: item.get("date") or "", reverse=True)[:20]
 
     def get_commits_count(self, username: str, since: datetime) -> int:
         """Count commits across all repos since a given date using the search API."""
@@ -111,6 +157,7 @@ class GitHubClient:
         commits_today = self.get_commits_count(username, today_start)
         commits_week = self.get_commits_count(username, week_start)
         open_prs = self.get_open_prs(username)
+        recent_commits = self.get_recent_commits()
 
         return {
             "username": username,
@@ -123,4 +170,5 @@ class GitHubClient:
             "total_commits_week": commits_week,
             "open_prs": len(open_prs),
             "recent_repos": repos,
+            "recent_commits": recent_commits,
         }

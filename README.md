@@ -171,11 +171,16 @@ cp server/.env.example server/.env
 
 ### 6. GitHub and LeetCode
 
-1. For backend GitHub access, create a GitHub OAuth App, set the homepage to `http://localhost:3000`, and use `http://localhost:8000/api/github/callback` as the callback URL.
-2. Copy the GitHub Client ID and Client Secret and store them in the backend environment.
-3. Confirm the GitHub OAuth app is enabled in Supabase too if you want the same account to be used for frontend auth.
-4. For LeetCode, set `LEETCODE_USERNAME` in the backend environment so the agent can resolve the correct public profile.
-5. If you later add authenticated LeetCode features, keep the username stable so analytics and history stay consistent.
+1. For backend GitHub OAuth access, create a separate GitHub OAuth App from GitHub Settings -> Developer settings -> OAuth Apps. Set Homepage URL to `http://localhost:3000` and Authorization callback URL to `http://localhost:8000/api/github/callback`.
+2. Copy the GitHub Client ID and Client Secret and store them in the backend environment as `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. Keep `GITHUB_OAUTH_REDIRECT_URI=http://localhost:8000/api/github/callback`.
+3. Do not reuse the same GitHub OAuth App that Supabase Auth uses unless that app also has the backend callback URL configured. Supabase login and Productivity GitHub analytics use different callback URLs.
+4. If OAuth gives a redirect URI error, use a GitHub Personal Access Token instead. In GitHub, open Settings -> Developer settings -> Personal access tokens.
+5. Recommended option: choose Fine-grained tokens -> Generate new token. Select your account, set an expiration, choose the repositories NUMA should read, then grant read-only repository access. If you need private repo stats and commits, include those private repositories in the token access.
+6. Alternative option: choose Tokens classic -> Generate new token. Select `repo` and `read:user`. GitHub classic tokens usually start with `ghp_`; fine-grained tokens usually start with `github_pat_`.
+7. Generate the token and copy it immediately. GitHub will not show the full token again.
+8. Start the app, open Productivity -> GitHub, paste the token into "Or connect with a GitHub token", and click Connect. NUMA stores it in the backend `github_auth` table for repo stats, private repo access, commit history, and agent context.
+9. For LeetCode, set `LEETCODE_USERNAME` in the backend environment so the agent can resolve the correct public profile.
+10. If you later add authenticated LeetCode features, keep the username stable so analytics and history stay consistent.
 
 ### 7. Groq and Gemini API keys
 

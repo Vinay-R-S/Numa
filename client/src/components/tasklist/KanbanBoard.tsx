@@ -13,7 +13,6 @@ import {
   type DragEndEvent,
   type DragOverEvent,
 } from "@dnd-kit/core"
-import { arrayMove } from "@dnd-kit/sortable"
 import { Plus, RefreshCw } from "lucide-react"
 import type { Task, TaskStatus } from "./types"
 import { KanbanColumn } from "./KanbanColumn"

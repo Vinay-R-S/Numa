@@ -35,6 +35,8 @@ export default function TasklistPage() {
 
   // History (completed tasks from previous days)
   const [historyExpanded, setHistoryExpanded] = useState(false)
+  const [notificationPermission, setNotificationPermission] =
+    useState<NotificationPermission | null>(null)
 
   // Detail sheet for history tasks
   const [historyDetailTask, setHistoryDetailTask] = useState<Task | null>(null)
@@ -46,6 +48,15 @@ export default function TasklistPage() {
     fetchAllStats()
     fetchAllHistory()
   }, [fetchAllTasks, fetchAllStats, fetchAllHistory])
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return
+    const timeoutId = window.setTimeout(() => {
+      setNotificationPermission(Notification.permission)
+    }, 0)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [])
 
   // Clean up stats debounce timer on unmount
   useEffect(() => () => {
@@ -114,10 +125,12 @@ export default function TasklistPage() {
             </p>
           </div>
         </div>
-        {"Notification" in window && Notification.permission !== "granted" && (
+        {notificationPermission !== null && notificationPermission !== "granted" && (
           <button
             title="Enable notifications for task reminders"
-            onClick={() => { Notification.requestPermission() }}
+            onClick={() => {
+              void Notification.requestPermission().then(setNotificationPermission)
+            }}
             className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
           >
             <Bell className="h-4 w-4" />

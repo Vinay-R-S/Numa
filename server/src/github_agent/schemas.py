@@ -14,6 +14,10 @@ class GitHubAuthStatus(BaseModel):
     scope: Optional[str] = None
 
 
+class GitHubTokenConnectRequest(BaseModel):
+    access_token: str
+
+
 class GitHubUserStats(BaseModel):
     username: str
     avatar_url: Optional[str] = None
@@ -25,6 +29,7 @@ class GitHubUserStats(BaseModel):
     total_commits_week: int = 0
     open_prs: int = 0
     recent_repos: list[dict] = []
+    recent_commits: list[dict] = []
 
 
 class GitHubChatMessage(BaseModel):

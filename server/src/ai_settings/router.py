@@ -163,6 +163,7 @@ _INTEGRATION_CHECK_KEYS = {
     "SLACK_BOT_TOKEN": "slack_bot_token",
     "GITHUB_CLIENT_ID": "github_client_id",
     "GITHUB_CLIENT_SECRET": "github_client_secret",
+    "GITHUB_OAUTH_REDIRECT_URI": "github_oauth_redirect_uri",
     "LEETCODE_USERNAME": "leetcode_username",
     "STRAVA_CLIENT_ID": "strava_client_id",
     "STRAVA_CLIENT_SECRET": "strava_client_secret",
@@ -176,6 +177,7 @@ _INTEGRATION_ALLOWED_KEYS = {
     "slack_bot_token": "SLACK_BOT_TOKEN",
     "github_client_id": "GITHUB_CLIENT_ID",
     "github_client_secret": "GITHUB_CLIENT_SECRET",
+    "github_oauth_redirect_uri": "GITHUB_OAUTH_REDIRECT_URI",
     "leetcode_username": "LEETCODE_USERNAME",
     "strava_client_id": "STRAVA_CLIENT_ID",
     "strava_client_secret": "STRAVA_CLIENT_SECRET",
@@ -195,6 +197,9 @@ def get_integration_keys(current_user: dict = Depends(get_current_user)):
     lc = os.getenv("LEETCODE_USERNAME", "").strip()
     if lc:
         keys_status["leetcode_username_value"] = lc
+    github_redirect_uri = os.getenv("GITHUB_OAUTH_REDIRECT_URI", "").strip()
+    if github_redirect_uri:
+        keys_status["github_oauth_redirect_uri_value"] = github_redirect_uri
 
     return keys_status
 

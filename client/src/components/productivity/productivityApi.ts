@@ -31,6 +31,15 @@ export interface GitHubRepo {
   html_url?: string
 }
 
+export interface GitHubCommit {
+  sha: string
+  message: string
+  repo: string
+  author?: string
+  date?: string
+  html_url?: string
+}
+
 export interface GitHubStats {
   username: string
   avatar_url?: string
@@ -42,6 +51,7 @@ export interface GitHubStats {
   total_commits_week: number
   open_prs: number
   recent_repos: GitHubRepo[]
+  recent_commits: GitHubCommit[]
 }
 
 // ── LeetCode Types ──────────────────────────────────────────────────────────────
@@ -80,7 +90,24 @@ export async function connectGitHub(): Promise<string> {
   })
   if (!res.ok) throw new Error("Failed to get GitHub auth URL")
   const data = await res.json()
-  return data.auth_url
+  const authorizationUrl = data.authorization_url
+  if (typeof authorizationUrl !== "string" || !authorizationUrl.startsWith("https://github.com/login/oauth/authorize")) {
+    throw new Error("Invalid GitHub authorization URL")
+  }
+  return authorizationUrl
+}
+
+export async function connectGitHubToken(accessToken: string): Promise<GitHubAuthStatus> {
+  const res = await fetch(`${API_BASE}/api/github/connect-token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ access_token: accessToken }),
+  })
+  if (!res.ok) throw await parseError(res, "Failed to connect GitHub token")
+  return res.json()
 }
 
 export async function getGitHubStats(): Promise<GitHubStats> {
@@ -93,7 +120,7 @@ export async function getGitHubStats(): Promise<GitHubStats> {
 
 export async function disconnectGitHub(): Promise<void> {
   const res = await fetch(`${API_BASE}/api/github/disconnect`, {
-    method: "POST",
+    method: "DELETE",
     headers: getAuthHeaders(),
   })
   if (!res.ok) throw new Error("Failed to disconnect GitHub")
@@ -108,4 +135,17 @@ export async function getLeetCodeStats(username: string): Promise<LeetCodeStats>
   )
   if (!res.ok) throw new Error("Failed to fetch LeetCode stats")
   return res.json()
+}
+
+async function parseError(response: Response, fallbackMessage: string): Promise<Error> {
+  try {
+    const body = await response.json()
+    if (typeof body?.detail === "string" && body.detail.trim()) {
+      return new Error(body.detail)
+    }
+  } catch {
+    // ignore non-JSON response bodies
+  }
+
+  return new Error(fallbackMessage)
 }

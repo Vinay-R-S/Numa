@@ -475,10 +475,22 @@ CREATE TABLE IF NOT EXISTS public.github_auth (
         github_user_id   INTEGER     NOT NULL,
         access_token     TEXT        NOT NULL,
         scope            TEXT,
+        token_source     TEXT,
+        token_permissions JSONB      NOT NULL DEFAULT '{}'::JSONB,
+        token_last_verified_at TIMESTAMPTZ,
+        token_expires_at TIMESTAMPTZ,
         avatar_url       TEXT,
         created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+ALTER TABLE public.github_auth ADD COLUMN IF NOT EXISTS token_source TEXT;
+
+ALTER TABLE public.github_auth ADD COLUMN IF NOT EXISTS token_permissions JSONB NOT NULL DEFAULT '{}'::JSONB;
+
+ALTER TABLE public.github_auth ADD COLUMN IF NOT EXISTS token_last_verified_at TIMESTAMPTZ;
+
+ALTER TABLE public.github_auth ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
 
 DO $$ BEGIN
         IF NOT EXISTS (
@@ -493,13 +505,134 @@ DO $$ BEGIN
 
 CREATE INDEX IF NOT EXISTS idx_github_auth_user_id ON public.github_auth(user_id);
 
+CREATE TABLE IF NOT EXISTS public.github_repositories (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        github_repo_id  BIGINT,
+        name            TEXT        NOT NULL,
+        full_name       TEXT        NOT NULL,
+        owner_login     TEXT,
+        private         BOOLEAN     NOT NULL DEFAULT FALSE,
+        fork            BOOLEAN     NOT NULL DEFAULT FALSE,
+        archived        BOOLEAN     NOT NULL DEFAULT FALSE,
+        disabled        BOOLEAN     NOT NULL DEFAULT FALSE,
+        language        TEXT,
+        stars           INTEGER     NOT NULL DEFAULT 0,
+        forks           INTEGER     NOT NULL DEFAULT 0,
+        open_issues     INTEGER     NOT NULL DEFAULT 0,
+        default_branch  TEXT,
+        html_url        TEXT,
+        clone_url       TEXT,
+        pushed_at       TIMESTAMPTZ,
+        updated_at_api  TIMESTAMPTZ,
+        permissions     JSONB       NOT NULL DEFAULT '{}'::JSONB,
+        raw_payload     JSONB       NOT NULL DEFAULT '{}'::JSONB,
+        last_synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, full_name)
+    );
+
+CREATE TABLE IF NOT EXISTS public.github_commits (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        repo_full_name  TEXT        NOT NULL,
+        sha             TEXT        NOT NULL,
+        message         TEXT        NOT NULL DEFAULT '',
+        author_name     TEXT,
+        author_email    TEXT,
+        author_login    TEXT,
+        committed_at    TIMESTAMPTZ,
+        html_url        TEXT,
+        raw_payload     JSONB       NOT NULL DEFAULT '{}'::JSONB,
+        last_synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, repo_full_name, sha)
+    );
+
+CREATE TABLE IF NOT EXISTS public.github_resource_snapshots (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        repo_full_name  TEXT,
+        resource_type   TEXT        NOT NULL CHECK (
+            resource_type IN (
+                'pull_request',
+                'issue',
+                'action_run',
+                'commit_status',
+                'deployment',
+                'discussion',
+                'environment',
+                'package',
+                'page',
+                'project',
+                'security_event',
+                'webhook'
+            )
+        ),
+        external_id     TEXT        NOT NULL,
+        title           TEXT,
+        state           TEXT,
+        html_url        TEXT,
+        occurred_at     TIMESTAMPTZ,
+        raw_payload     JSONB       NOT NULL DEFAULT '{}'::JSONB,
+        last_synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, resource_type, external_id)
+    );
+
+DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_github_repositories_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_github_repositories_updated_at
+            BEFORE UPDATE ON public.github_repositories
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$;
+
+DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_github_commits_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_github_commits_updated_at
+            BEFORE UPDATE ON public.github_commits
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$;
+
+DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_github_resource_snapshots_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_github_resource_snapshots_updated_at
+            BEFORE UPDATE ON public.github_resource_snapshots
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$;
+
+CREATE INDEX IF NOT EXISTS idx_github_repos_user_private ON public.github_repositories(user_id, private);
+
+CREATE INDEX IF NOT EXISTS idx_github_repos_user_pushed ON public.github_repositories(user_id, pushed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_github_commits_user_time ON public.github_commits(user_id, committed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_github_commits_repo_time ON public.github_commits(user_id, repo_full_name, committed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_github_resources_user_type_time ON public.github_resource_snapshots(user_id, resource_type, occurred_at DESC);
+
 INSERT INTO public.numa_schema_migrations
     (version, checksum, statements_count, applied_at)
 VALUES
     (
-        '2026_05_16_001',
-        '9df11215362b29b08bb2cb6f49d2ccfd047865f8cc8ee666fec9b65dac6bfc48',
-        62,
+        '2026_05_19_001',
+        '16635830a7eb47a5b8b8745e7a7c9e09834ecd4b88906ec4fb0dfc9bba7a91fc',
+        77,
         NOW()
     )
 ON CONFLICT (version) DO UPDATE

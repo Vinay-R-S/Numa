@@ -744,11 +744,20 @@ TABLES: list[str] = [
         github_user_id   INTEGER     NOT NULL,
         access_token     TEXT        NOT NULL,
         scope            TEXT,
+        token_source     TEXT,
+        token_permissions JSONB      NOT NULL DEFAULT '{}'::JSONB,
+        token_last_verified_at TIMESTAMPTZ,
+        token_expires_at TIMESTAMPTZ,
         avatar_url       TEXT,
         created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+
+    "ALTER TABLE public.github_auth ADD COLUMN IF NOT EXISTS token_source TEXT",
+    "ALTER TABLE public.github_auth ADD COLUMN IF NOT EXISTS token_permissions JSONB NOT NULL DEFAULT '{}'::JSONB",
+    "ALTER TABLE public.github_auth ADD COLUMN IF NOT EXISTS token_last_verified_at TIMESTAMPTZ",
+    "ALTER TABLE public.github_auth ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ",
 
     """
     DO $$ BEGIN
@@ -764,10 +773,139 @@ TABLES: list[str] = [
     """,
 
     "CREATE INDEX IF NOT EXISTS idx_github_auth_user_id ON public.github_auth(user_id)",
+
+    """
+    CREATE TABLE IF NOT EXISTS public.github_repositories (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        github_repo_id  BIGINT,
+        name            TEXT        NOT NULL,
+        full_name       TEXT        NOT NULL,
+        owner_login     TEXT,
+        private         BOOLEAN     NOT NULL DEFAULT FALSE,
+        fork            BOOLEAN     NOT NULL DEFAULT FALSE,
+        archived        BOOLEAN     NOT NULL DEFAULT FALSE,
+        disabled        BOOLEAN     NOT NULL DEFAULT FALSE,
+        language        TEXT,
+        stars           INTEGER     NOT NULL DEFAULT 0,
+        forks           INTEGER     NOT NULL DEFAULT 0,
+        open_issues     INTEGER     NOT NULL DEFAULT 0,
+        default_branch  TEXT,
+        html_url        TEXT,
+        clone_url       TEXT,
+        pushed_at       TIMESTAMPTZ,
+        updated_at_api  TIMESTAMPTZ,
+        permissions     JSONB       NOT NULL DEFAULT '{}'::JSONB,
+        raw_payload     JSONB       NOT NULL DEFAULT '{}'::JSONB,
+        last_synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, full_name)
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS public.github_commits (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        repo_full_name  TEXT        NOT NULL,
+        sha             TEXT        NOT NULL,
+        message         TEXT        NOT NULL DEFAULT '',
+        author_name     TEXT,
+        author_email    TEXT,
+        author_login    TEXT,
+        committed_at    TIMESTAMPTZ,
+        html_url        TEXT,
+        raw_payload     JSONB       NOT NULL DEFAULT '{}'::JSONB,
+        last_synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, repo_full_name, sha)
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS public.github_resource_snapshots (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        repo_full_name  TEXT,
+        resource_type   TEXT        NOT NULL CHECK (
+            resource_type IN (
+                'pull_request',
+                'issue',
+                'action_run',
+                'commit_status',
+                'deployment',
+                'discussion',
+                'environment',
+                'package',
+                'page',
+                'project',
+                'security_event',
+                'webhook'
+            )
+        ),
+        external_id     TEXT        NOT NULL,
+        title           TEXT,
+        state           TEXT,
+        html_url        TEXT,
+        occurred_at     TIMESTAMPTZ,
+        raw_payload     JSONB       NOT NULL DEFAULT '{}'::JSONB,
+        last_synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, resource_type, external_id)
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_github_repositories_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_github_repositories_updated_at
+            BEFORE UPDATE ON public.github_repositories
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_github_commits_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_github_commits_updated_at
+            BEFORE UPDATE ON public.github_commits
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_github_resource_snapshots_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_github_resource_snapshots_updated_at
+            BEFORE UPDATE ON public.github_resource_snapshots
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_github_repos_user_private ON public.github_repositories(user_id, private)",
+    "CREATE INDEX IF NOT EXISTS idx_github_repos_user_pushed ON public.github_repositories(user_id, pushed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_github_commits_user_time ON public.github_commits(user_id, committed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_github_commits_repo_time ON public.github_commits(user_id, repo_full_name, committed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_github_resources_user_type_time ON public.github_resource_snapshots(user_id, resource_type, occurred_at DESC)",
 ]
 
 
-SCHEMA_VERSION = "2026_05_16_001"
+SCHEMA_VERSION = "2026_05_19_001"
 
 REQUIRED_TABLES = (
     "profiles",
@@ -778,6 +916,10 @@ REQUIRED_TABLES = (
     "cal_watch_channels",
     "user_ai_settings",
     "journal_entries",
+    "github_auth",
+    "github_repositories",
+    "github_commits",
+    "github_resource_snapshots",
 )
 
 SCHEMA_MIGRATIONS_DDL = """
@@ -856,7 +998,14 @@ def verify_required_tables() -> list[str]:
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 
 def init_db(*, raise_on_error: bool = False) -> None:
-    """Create or migrate the database schema. Called once at application startup."""
+    """Create or migrate the database schema. Called once at application startup.
+
+    The statements in TABLES are intentionally idempotent. Always executing
+    them is safer than trusting only the schema_migrations row because it lets
+    partially initialized databases repair themselves on the next startup.
+    Existing tables are migrated with ALTER/CREATE IF NOT EXISTS statements;
+    missing tables are created in the same pass.
+    """
     current_stmt = ""
     conn = None
     cur = None
@@ -870,40 +1019,39 @@ def init_db(*, raise_on_error: bool = False) -> None:
         _ensure_schema_migration_table(cur)
 
         latest = _latest_schema_revision(cur)
-        missing_tables = _missing_required_tables(cur)
-        is_latest = (
-            latest is not None
-            and latest[0] == SCHEMA_VERSION
-            and latest[1] == checksum
-            and latest[2] == len(TABLES)
-            and not missing_tables
-        )
+        missing_before = _missing_required_tables(cur)
 
-        if is_latest:
-            log.info("Database schema is current (%s).", SCHEMA_VERSION)
+        if latest is None:
+            log.info("Database schema bootstrap needed; no migration record found.")
+        elif missing_before:
+            log.info(
+                "Database schema repair needed; missing tables before migration: %s",
+                ", ".join(missing_before),
+            )
+        elif latest[0] != SCHEMA_VERSION or latest[1] != checksum or latest[2] != len(TABLES):
+            log.info(
+                "Database schema migration needed; current=%s target=%s.",
+                latest[0],
+                SCHEMA_VERSION,
+            )
         else:
-            if missing_tables:
-                log.info(
-                    "Database schema bootstrap needed; missing tables: %s",
-                    ", ".join(missing_tables),
-                )
-            elif latest is None:
-                log.info("Database schema bootstrap needed; no migration record found.")
-            else:
-                log.info(
-                    "Database schema migration needed; current=%s target=%s.",
-                    latest[0],
-                    SCHEMA_VERSION,
-                )
+            log.info("Database schema is current; verifying idempotent migrations anyway.")
 
-            for stmt in TABLES:
-                current_stmt = stmt
-                cur.execute(stmt)
+        for stmt in TABLES:
+            current_stmt = stmt
+            cur.execute(stmt)
 
-            current_stmt = "INSERT INTO public.numa_schema_migrations"
-            _record_schema_revision(cur, checksum)
-            conn.commit()
-            log.info("Database schema verified / migrated to %s.", SCHEMA_VERSION)
+        missing_after = _missing_required_tables(cur)
+        if missing_after:
+            raise RuntimeError(
+                "Database schema migration incomplete; missing tables: "
+                + ", ".join(missing_after)
+            )
+
+        current_stmt = "INSERT INTO public.numa_schema_migrations"
+        _record_schema_revision(cur, checksum)
+        conn.commit()
+        log.info("Database schema verified / migrated to %s.", SCHEMA_VERSION)
     except Exception:
         preview = " ".join(current_stmt.strip().split())[:240]
         message = (

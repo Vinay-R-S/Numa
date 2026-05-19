@@ -776,6 +776,7 @@ const INTEGRATION_GROUPS: IntegrationGroup[] = [
     fields: [
       { key: "github_client_id", label: "Client ID", isSecret: true },
       { key: "github_client_secret", label: "Client Secret", isSecret: true },
+      { key: "github_oauth_redirect_uri", label: "OAuth Redirect URI", isSecret: false },
     ],
   },
   {
@@ -809,6 +810,12 @@ function IntegrationKeysSection() {
         setKeysStatus(data)
         if (data.leetcode_username_value) {
           setValues((prev) => ({ ...prev, leetcode_username: data.leetcode_username_value }))
+        }
+        if (data.github_oauth_redirect_uri_value) {
+          setValues((prev) => ({
+            ...prev,
+            github_oauth_redirect_uri: data.github_oauth_redirect_uri_value,
+          }))
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load key status")

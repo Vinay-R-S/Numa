@@ -49,7 +49,7 @@ function ChartContainer({
         {...props}
       >
         <ChartStyle id={chartId} config={config} />
-        <RechartsPrimitive.ResponsiveContainer>
+        <RechartsPrimitive.ResponsiveContainer minWidth={0} minHeight={0}>
           {children}
         </RechartsPrimitive.ResponsiveContainer>
       </div>
@@ -170,6 +170,12 @@ const ChartTooltipContent = React.forwardRef<HTMLDivElement, ChartTooltipContent
             const key = `${nameKey || item.name || item.dataKey || "value"}`
             const itemConfig = config[key]
             const indicatorColor = color || (item.payload?.fill as string) || item.color
+            const indicatorClass =
+              indicator === "line"
+                ? "h-3 w-1"
+                : indicator === "dashed"
+                  ? "h-0 w-3 border-t border-dashed bg-transparent"
+                  : "h-2.5 w-2.5"
 
             return (
               <div
@@ -180,7 +186,7 @@ const ChartTooltipContent = React.forwardRef<HTMLDivElement, ChartTooltipContent
               >
                 {!hideIndicator && (
                   <div
-                    className={cn("h-2.5 w-2.5 shrink-0 rounded-[2px]")}
+                    className={cn("shrink-0 rounded-[2px]", indicatorClass)}
                     style={{ backgroundColor: indicatorColor }}
                   />
                 )}

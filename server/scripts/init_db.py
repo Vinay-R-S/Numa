@@ -16,4 +16,4 @@ if __name__ == "__main__":
     missing = verify_required_tables()
     if missing:
         raise SystemExit(f"Schema init finished, but tables are still missing: {', '.join(missing)}")
-    print(f"Database schema is ready: {SCHEMA_VERSION}")
+    print(f"Database schema created/repaired/migrated to: {SCHEMA_VERSION}")

@@ -1,13 +1,12 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import {
   BarChart,
   Bar,
   XAxis,
   YAxis,
   CartesianGrid,
-  ResponsiveContainer,
   Cell,
   PieChart,
   Pie,
@@ -25,13 +24,7 @@ import {
 } from "lucide-react"
 import { format, parseISO } from "date-fns"
 import type { TaskStats } from "./types"
-import {
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-  type ChartConfig,
-} from "@/components/ui/chart"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 
@@ -56,12 +49,47 @@ const STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
 }
 
-const chartConfig = {
-  count: {
-    label: "Tasks",
-    color: "hsl(var(--chart-1))",
-  },
-} satisfies ChartConfig
+function MeasuredChartFrame({
+  className,
+  children,
+}: {
+  className: string
+  children: (size: { width: number; height: number }) => React.ReactNode
+}) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null)
+
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return
+
+    const updateSize = (width: number, height: number) => {
+      const next = {
+        width: Math.floor(width),
+        height: Math.floor(height),
+      }
+      setSize((current) =>
+        current?.width === next.width && current?.height === next.height ? current : next
+      )
+    }
+
+    const rect = node.getBoundingClientRect()
+    updateSize(rect.width, rect.height)
+
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry.contentRect
+      updateSize(box.width, box.height)
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div ref={ref} className={className}>
+      {size && size.width > 0 && size.height > 0 ? children(size) : null}
+    </div>
+  )
+}
 
 function formatDateLabel(date: string, period: string): string {
   try {
@@ -109,8 +137,6 @@ export function AnalyticsDashboard({ stats, loading }: AnalyticsDashboardProps) 
     stats?.by_status.find((s) => s.status === "completed")?.count ?? 0
   const inProgressCount =
     stats?.by_status.find((s) => s.status === "inprogress")?.count ?? 0
-  const plannedCount =
-    stats?.by_status.find((s) => s.status === "planned")?.count ?? 0
   const pendingCount =
     stats?.by_status.find((s) => s.status === "pending")?.count ?? 0
 
@@ -194,7 +220,7 @@ export function AnalyticsDashboard({ stats, loading }: AnalyticsDashboardProps) 
       {/* Charts Row */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Completion Bar Chart */}
-        <div className="lg:col-span-2 rounded-2xl border border-border/50 bg-card p-5">
+        <div className="min-w-0 rounded-2xl border border-border/50 bg-card p-5 lg:col-span-2">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-semibold text-sm text-foreground">Tasks Completed</h3>
             <Tabs
@@ -217,74 +243,91 @@ export function AnalyticsDashboard({ stats, loading }: AnalyticsDashboardProps) 
               No completed tasks in {PERIOD_LABELS[period].toLowerCase()} yet
             </div>
           ) : (
-            <ChartContainer config={chartConfig} className="h-52 w-full">
-              <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -16 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.05)" />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
-                  axisLine={false}
-                  tickLine={false}
-                  interval="preserveStartEnd"
-                />
-                <YAxis
-                  tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
-                  axisLine={false}
-                  tickLine={false}
-                  allowDecimals={false}
-                />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={40}>
-                  {chartData.map((_, i) => (
-                    <Cell
-                      key={i}
-                      fill={`hsl(${160 + i * 3}, 70%, 55%)`}
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ChartContainer>
+            <MeasuredChartFrame className="h-52 w-full min-w-0">
+              {({ width, height }) => (
+                <BarChart
+                  data={chartData}
+                  height={height}
+                  margin={{ top: 4, right: 8, bottom: 0, left: -16 }}
+                  width={width}
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.05)" />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    allowDecimals={false}
+                  />
+                  <RechartsTooltip
+                    contentStyle={{
+                      backgroundColor: "var(--card)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      fontSize: 12,
+                    }}
+                    formatter={(value) => [value, "Tasks"]}
+                  />
+                  <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={40}>
+                    {chartData.map((_, i) => (
+                      <Cell
+                        key={i}
+                        fill={`hsl(${160 + i * 3}, 70%, 55%)`}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              )}
+            </MeasuredChartFrame>
           )}
         </div>
 
         {/* Status Donut */}
-        <div className="rounded-2xl border border-border/50 bg-card p-5">
+        <div className="min-w-0 rounded-2xl border border-border/50 bg-card p-5">
           <h3 className="mb-4 font-semibold text-sm text-foreground">Status Breakdown</h3>
           {pieData.length === 0 || pieData.every((d) => d.value === 0) ? (
             <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
               No tasks yet
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  innerRadius={50}
-                  outerRadius={80}
-                  paddingAngle={3}
-                  dataKey="value"
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={index} fill={entry.fill} />
-                  ))}
-                </Pie>
-                <RechartsTooltip
-                  contentStyle={{
-                    backgroundColor: "var(--card)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
-                />
-                <Legend
-                  formatter={(value) => (
-                    <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>
-                      {value}
-                    </span>
-                  )}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+            <MeasuredChartFrame className="h-[200px] w-full min-w-0">
+              {({ width, height }) => (
+                <PieChart height={height} width={width}>
+                  <Pie
+                    data={pieData}
+                    innerRadius={50}
+                    outerRadius={80}
+                    paddingAngle={3}
+                    dataKey="value"
+                  >
+                    {pieData.map((entry, index) => (
+                      <Cell key={index} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                  <RechartsTooltip
+                    contentStyle={{
+                      backgroundColor: "var(--card)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      fontSize: 12,
+                    }}
+                  />
+                  <Legend
+                    formatter={(value) => (
+                      <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>
+                        {value}
+                      </span>
+                    )}
+                  />
+                </PieChart>
+              )}
+            </MeasuredChartFrame>
           )}
 
           {/* Legend with counts */}
