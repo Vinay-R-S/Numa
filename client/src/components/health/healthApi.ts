@@ -47,6 +47,13 @@ export interface HealthSyncResult {
   detail?: string | null
 }
 
+export interface HealthSyncAllResult {
+  ok: boolean
+  detail?: string | null
+  google_fit?: HealthSyncResult[]
+  strava?: HealthSyncResult[]
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function authHeaders(): HeadersInit {
@@ -112,12 +119,12 @@ export async function syncStrava(): Promise<HealthSyncResult> {
   return parseJson<HealthSyncResult>(res, "Failed to sync Strava")
 }
 
-export async function syncAllHealth(): Promise<Record<string, unknown>> {
+export async function syncAllHealth(): Promise<HealthSyncAllResult> {
   const res = await fetch("/api/health-agent/sync/all", {
     method: "POST",
     headers: authHeaders(),
   })
-  return parseJson<Record<string, unknown>>(res, "Failed to sync health data")
+  return parseJson<HealthSyncAllResult>(res, "Failed to sync health data")
 }
 
 // ── Chat ───────────────────────────────────────────────────────────────────────

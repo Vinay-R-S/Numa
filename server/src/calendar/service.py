@@ -116,6 +116,9 @@ DATETIME_FORMATS = [
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/fitness.activity.read",
+    "https://www.googleapis.com/auth/fitness.sleep.read",
+    "https://www.googleapis.com/auth/fitness.location.read",
 ]
 
 
@@ -209,6 +212,25 @@ def has_calendar_credentials(user_id: str) -> bool:
     return _user_token_file(user_id).exists()
 
 
+def _token_missing_required_scopes(token_path: Path) -> bool:
+    try:
+        token_data = json.loads(token_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+    raw_scopes = token_data.get("scopes") or token_data.get("scope")
+    if not raw_scopes:
+        return False
+    if isinstance(raw_scopes, str):
+        granted_scopes = set(raw_scopes.split())
+    elif isinstance(raw_scopes, list):
+        granted_scopes = {str(scope) for scope in raw_scopes}
+    else:
+        return False
+
+    return bool(set(GOOGLE_SCOPES) - granted_scopes)
+
+
 def build_google_oauth_authorization_url(redirect_uri: str, state: str) -> str:
     _, _, Flow, _ = _require_google_calendar_deps()
 
@@ -218,7 +240,7 @@ def build_google_oauth_authorization_url(redirect_uri: str, state: str) -> str:
     authorization_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes=False,
-        prompt="consent",
+        prompt="consent select_account",
     )
     return authorization_url
 
@@ -255,6 +277,10 @@ def get_credentials(user_id: Optional[str] = None):
 
     creds = None
     if token_path.exists():
+        if _token_missing_required_scopes(token_path):
+            raise RuntimeError(
+                "Google token is missing newly required scopes. Please reconnect Google from the app."
+            )
         creds = Credentials.from_authorized_user_file(str(token_path), GOOGLE_SCOPES)
 
     if not creds or not creds.valid:

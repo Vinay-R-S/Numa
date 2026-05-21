@@ -158,6 +158,8 @@ def delete_settings(current_user: dict = Depends(get_current_user)):
 _INTEGRATION_CHECK_KEYS = {
     "GOOGLE_FIT_CLIENT_ID": "google_fit_client_id",
     "GOOGLE_FIT_CLIENT_SECRET": "google_fit_client_secret",
+    "GOOGLE_FIT_CREDENTIALS_FILE": "google_fit_credentials_file",
+    "GOOGLE_FIT_TOKEN_FILE": "google_fit_token_file",
     "SLACK_CLIENT_ID": "slack_client_id",
     "SLACK_CLIENT_SECRET": "slack_client_secret",
     "SLACK_BOT_TOKEN": "slack_bot_token",
@@ -167,11 +169,15 @@ _INTEGRATION_CHECK_KEYS = {
     "LEETCODE_USERNAME": "leetcode_username",
     "STRAVA_CLIENT_ID": "strava_client_id",
     "STRAVA_CLIENT_SECRET": "strava_client_secret",
+    "STRAVA_REFRESH_TOKEN": "strava_refresh_token",
+    "STRAVA_TOKEN_FILE": "strava_token_file",
 }
 
 _INTEGRATION_ALLOWED_KEYS = {
     "google_fit_client_id": "GOOGLE_FIT_CLIENT_ID",
     "google_fit_client_secret": "GOOGLE_FIT_CLIENT_SECRET",
+    "google_fit_credentials_file": "GOOGLE_FIT_CREDENTIALS_FILE",
+    "google_fit_token_file": "GOOGLE_FIT_TOKEN_FILE",
     "slack_client_id": "SLACK_CLIENT_ID",
     "slack_client_secret": "SLACK_CLIENT_SECRET",
     "slack_bot_token": "SLACK_BOT_TOKEN",
@@ -181,6 +187,8 @@ _INTEGRATION_ALLOWED_KEYS = {
     "leetcode_username": "LEETCODE_USERNAME",
     "strava_client_id": "STRAVA_CLIENT_ID",
     "strava_client_secret": "STRAVA_CLIENT_SECRET",
+    "strava_refresh_token": "STRAVA_REFRESH_TOKEN",
+    "strava_token_file": "STRAVA_TOKEN_FILE",
 }
 
 
@@ -200,6 +208,15 @@ def get_integration_keys(current_user: dict = Depends(get_current_user)):
     github_redirect_uri = os.getenv("GITHUB_OAUTH_REDIRECT_URI", "").strip()
     if github_redirect_uri:
         keys_status["github_oauth_redirect_uri_value"] = github_redirect_uri
+    google_fit_credentials_file = os.getenv("GOOGLE_FIT_CREDENTIALS_FILE", "").strip()
+    if google_fit_credentials_file:
+        keys_status["google_fit_credentials_file_value"] = google_fit_credentials_file
+    google_fit_token_file = os.getenv("GOOGLE_FIT_TOKEN_FILE", "").strip()
+    if google_fit_token_file:
+        keys_status["google_fit_token_file_value"] = google_fit_token_file
+    strava_token_file = os.getenv("STRAVA_TOKEN_FILE", "").strip()
+    if strava_token_file:
+        keys_status["strava_token_file_value"] = strava_token_file
 
     return keys_status
 

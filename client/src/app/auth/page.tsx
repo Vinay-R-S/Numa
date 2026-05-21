@@ -86,13 +86,21 @@ export default function AuthPage() {
 
   const handleOAuth = async (provider: "google" | "github") => {
     setError(null);
+    if (provider === "google") {
+      localStorage.setItem("numa_connect_google_services_after_auth", "1");
+    } else {
+      localStorage.removeItem("numa_connect_google_services_after_auth");
+    }
     // Supabase JS handles the OAuth dance; our /auth/callback page
     // will exchange the Supabase token for our backend JWT.
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider,
       options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
-    if (err) setError(err.message);
+    if (err) {
+      localStorage.removeItem("numa_connect_google_services_after_auth");
+      setError(err.message);
+    }
   };
 
   const inputCls =

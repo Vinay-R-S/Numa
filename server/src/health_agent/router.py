@@ -44,16 +44,15 @@ router = APIRouter(prefix="/health-agent", tags=["health-agent"])
 
 # ── Google Fit API (lazy singleton) ──────────────────────────────────────────
 
-_google_fit_instance = None
+_google_fit_instances: Dict[str, object] = {}
 
 
-def _get_google_fit():
+def _get_google_fit(user_id: str):
     """Lazy-init Google Fit API client."""
-    global _google_fit_instance
-    if _google_fit_instance is None:
+    if user_id not in _google_fit_instances:
         from .google_fit_client import GoogleFitClient
-        _google_fit_instance = GoogleFitClient()
-    return _google_fit_instance
+        _google_fit_instances[user_id] = GoogleFitClient(user_id=user_id)
+    return _google_fit_instances[user_id]
 
 
 def _is_google_fit_configured() -> bool:
@@ -62,11 +61,30 @@ def _is_google_fit_configured() -> bool:
         'GOOGLE_FIT_CREDENTIALS_FILE',
         os.path.join(config_dir, 'credentials.json'),
     )
-    return os.path.exists(creds_file)
+    if creds_file and not os.path.isabs(creds_file):
+        creds_file = os.path.join(config_dir, creds_file)
+    has_credentials_file = os.path.exists(creds_file)
+    has_env_client = bool(
+        os.getenv("GOOGLE_FIT_CLIENT_ID") and os.getenv("GOOGLE_FIT_CLIENT_SECRET")
+    )
+    return has_credentials_file or has_env_client
 
 
 def _is_strava_configured() -> bool:
-    return bool(os.getenv("STRAVA_CLIENT_ID") and os.getenv("STRAVA_CLIENT_SECRET"))
+    return bool(
+        (os.getenv("STRAVA_CLIENT_ID") or "").strip().strip("\"'")
+        and (os.getenv("STRAVA_CLIENT_SECRET") or "").strip().strip("\"'")
+        and (os.getenv("STRAVA_REFRESH_TOKEN") or "").strip().strip("\"'")
+    )
+
+
+def _sync_strava_with_health_all() -> bool:
+    return (os.getenv("HEALTH_SYNC_STRAVA_WITH_ALL") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
@@ -183,6 +201,41 @@ def upsert_health_snapshot(
         conn.close()
 
 
+def delete_health_snapshot(user_id: str, source: str, snapshot_date: date) -> None:
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM public.health_snapshots
+            WHERE user_id = %s AND source = %s AND snapshot_date = %s
+            """,
+            (user_id, source, snapshot_date),
+        )
+        conn.commit()
+        cur.close()
+    except Exception as exc:
+        log.warning("delete_health_snapshot failed: %s", exc)
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+def _has_health_values(data: Dict) -> bool:
+    numeric_keys = ("steps", "active_minutes", "calories", "distance_km", "sleep_hours")
+    if any((data.get(key) or 0) > 0 for key in numeric_keys):
+        return True
+    sleep_stages = data.get("sleep_stages")
+    if isinstance(sleep_stages, dict) and any((value or 0) > 0 for value in sleep_stages.values()):
+        return True
+    activities = data.get("activities")
+    if isinstance(activities, dict) and any((value or 0) > 0 for value in activities.values()):
+        return True
+    if isinstance(activities, list) and len(activities) > 0:
+        return True
+    return False
+
+
 def get_health_snapshots(
     user_id: str,
     source: Optional[str] = None,
@@ -257,13 +310,21 @@ def sync_google_fit_for_user(user_id: str, target_date: Optional[date] = None) -
     """Fetch Google Fit data for target_date and store in Supabase."""
     target = target_date or date.today()
     try:
-        gfit = _get_google_fit()
+        gfit = _get_google_fit(user_id)
         start_dt = datetime.combine(target, datetime.min.time())
         end_dt = datetime.combine(target, datetime.max.time())
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(end_dt.timestamp() * 1000)
 
         raw = gfit.fetch_all_data(start_ms, end_ms)
+        if not _has_health_values(raw):
+            delete_health_snapshot(user_id, "google_fit", target)
+            return {
+                "ok": False,
+                "source": "google_fit",
+                "snapshot_date": target.isoformat(),
+                "detail": "Google Fit returned no health data for this date. Make sure the Google account that owns the Fit data completed OAuth.",
+            }
 
         ok = upsert_health_snapshot(
             user_id=user_id,
@@ -293,14 +354,14 @@ def sync_strava_for_user(user_id: str, target_date: Optional[date] = None) -> Di
         return {"ok": False, "source": "strava", "detail": "Strava not configured"}
 
     try:
-        from ..api.strava_api import fetch_all_strava_data
+        from ..api.strava_api import StravaAPI
 
         start_dt = datetime.combine(target, datetime.min.time())
         end_dt = datetime.combine(target, datetime.max.time())
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(end_dt.timestamp() * 1000)
 
-        raw = fetch_all_strava_data(start_ms, end_ms)
+        raw = StravaAPI().fetch_all_data(start_ms, end_ms)
 
         summary = raw.get("summary", {})
         snapshot_data = {
@@ -311,6 +372,14 @@ def sync_strava_for_user(user_id: str, target_date: Optional[date] = None) -> Di
             "sleep_hours": None,
             "activities": raw.get("activities", []),
         }
+        if not _has_health_values(snapshot_data):
+            delete_health_snapshot(user_id, "strava", target)
+            return {
+                "ok": False,
+                "source": "strava",
+                "snapshot_date": target.isoformat(),
+                "detail": "Strava returned no activities for this date.",
+            }
 
         ok = upsert_health_snapshot(
             user_id=user_id,
@@ -330,13 +399,37 @@ def sync_strava_for_user(user_id: str, target_date: Optional[date] = None) -> Di
 
 
 def sync_health_for_user(user_id: str) -> Dict:
-    """Sync both Google Fit + Strava for a user. Called by data_sync."""
-    gfit_result = sync_google_fit_for_user(user_id)
-    strava_result = sync_strava_for_user(user_id)
+    """Sync recent health data for a user. Called by data_sync."""
+    days = 8
+    gfit_results = []
+    strava_results = []
+    sync_strava = _sync_strava_with_health_all()
+    for offset in range(days):
+        target = date.today() - timedelta(days=offset)
+        gfit_results.append(sync_google_fit_for_user(user_id, target_date=target))
+        if sync_strava:
+            strava_results.append(sync_strava_for_user(user_id, target_date=target))
+
+    gfit_ok = sum(1 for result in gfit_results if result.get("ok"))
+    strava_ok = sum(1 for result in strava_results if result.get("ok"))
+    details = []
+    if gfit_ok:
+        details.append(f"Google Fit synced {gfit_ok}/{days} days")
+    else:
+        details.append(gfit_results[0].get("detail") or "Google Fit returned no recent data")
+    if sync_strava:
+        if strava_ok:
+            details.append(f"Strava synced {strava_ok}/{days} days")
+        else:
+            details.append(strava_results[0].get("detail") or "Strava returned no recent data")
+    else:
+        details.append("Strava skipped")
+
     return {
-        "ok": gfit_result.get("ok", False) or strava_result.get("ok", False),
-        "google_fit": gfit_result,
-        "strava": strava_result,
+        "ok": bool(gfit_ok or strava_ok),
+        "detail": " | ".join(details),
+        "google_fit": gfit_results,
+        "strava": strava_results,
     }
 
 

@@ -70,6 +70,37 @@ export default function AuthCallbackPage() {
         }
 
         localStorage.setItem("numa_token", json.access_token);
+
+        if (localStorage.getItem("numa_connect_google_services_after_auth") === "1") {
+          const headers = { Authorization: `Bearer ${json.access_token}` };
+          const healthRes = await fetch("/api/calendar/token/health", {
+            headers,
+            cache: "no-store",
+          });
+          const health = healthRes.ok ? await healthRes.json() : null;
+
+          if (!health?.valid) {
+            const startRes = await fetch("/api/calendar/oauth/start", {
+              method: "POST",
+              headers,
+            });
+            const start = startRes.ok ? await startRes.json() : null;
+
+            if (start?.authorization_url) {
+              localStorage.removeItem("numa_connect_google_services_after_auth");
+              window.location.href = start.authorization_url;
+              return;
+            }
+
+            if (health?.reconnect_url) {
+              localStorage.removeItem("numa_connect_google_services_after_auth");
+              window.location.href = health.reconnect_url;
+              return;
+            }
+          }
+        }
+
+        localStorage.removeItem("numa_connect_google_services_after_auth");
         router.replace("/home");
       } catch {
         router.replace("/auth?error=network_error");

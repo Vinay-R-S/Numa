@@ -151,11 +151,16 @@ cp server/.env.example server/.env
 
 1. Google Fit is deprecated for new signups, so only keep it if your project already has access. For a new health stack, prefer Health Connect instead.
 2. If you are continuing with Google Fit, reuse the same Google Cloud project and OAuth client used for Calendar when possible.
-3. Enable the fitness scopes your backend needs, such as activity, sleep, and body data, then make sure the consent screen still only requests the minimum necessary scopes.
-4. In Strava, open Settings → API and create a new application.
-5. Set the Authorization Callback Domain to `localhost` so your local callback can complete the OAuth flow.
-6. Copy the Strava Client ID and Client Secret and store them in `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`.
-7. At runtime, the backend uses those credentials to exchange user consent for tokens.
+3. Enable the fitness scopes your backend needs, such as activity, sleep, and location read access, then make sure the consent screen still only requests the minimum necessary scopes.
+4. Google Fit uses the same OAuth callback as Calendar: `http://localhost:8000/calendar/oauth/callback`. Add that exact redirect URI to the Google OAuth client.
+5. After changing Fit scopes, reconnect Google from the app so the saved token includes the Fitness permissions.
+6. In Strava, open Settings -> API and create a new application.
+7. Set the Authorization Callback Domain to `localhost` so your local callback can complete the OAuth flow.
+8. Copy the Strava Client ID and Client Secret and store them in `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`.
+9. Generate or exchange for a Strava refresh token and store it in `STRAVA_REFRESH_TOKEN`. Strava sync requires all three values.
+10. Set `GOOGLE_FIT_TOKEN_FILE` to a JSON token file path, such as `D:/Numa/server/apiConfig/google/tokens/google_fit_token.json`. If you give a directory, the backend writes `google_fit_token.json` inside it for the legacy standalone flow.
+11. Set `STRAVA_TOKEN_FILE` to `D:/Numa/server/apiConfig/strava/token.json` if you want refreshed Strava access tokens persisted locally.
+12. You can enter Google Fit and Strava values from Settings -> Integration Keys. They are saved into `server/.env`.
 
 ### 5. Slack complete setup with Ngrok
 
@@ -218,6 +223,8 @@ GOOGLE_CALENDAR_CLIENT_SECRET=your-google-calendar-client-secret
 # ===== GOOGLE FIT =====
 GOOGLE_FIT_CLIENT_ID=your-google-fit-client-id
 GOOGLE_FIT_CLIENT_SECRET=your-google-fit-client-secret
+GOOGLE_FIT_CREDENTIALS_FILE=credentials.json
+GOOGLE_FIT_TOKEN_FILE=D:/Numa/server/apiConfig/google/tokens/google_fit_token.json
 
 # ===== SLACK =====
 SLACK_BOT_TOKEN=xoxb-your-bot-token
@@ -235,6 +242,8 @@ GITHUB_OAUTH_REDIRECT_URI=http://localhost:8000/api/github/callback
 # ===== STRAVA =====
 STRAVA_CLIENT_ID=your-strava-client-id
 STRAVA_CLIENT_SECRET=your-strava-client-secret
+STRAVA_REFRESH_TOKEN=your-strava-refresh-token
+STRAVA_TOKEN_FILE=D:/Numa/server/apiConfig/strava/token.json
 REDIRECT_URI=http://localhost:8501
 
 # ===== LLM PROVIDERS =====

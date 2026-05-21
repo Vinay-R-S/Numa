@@ -18,9 +18,52 @@ Usage:
     summary = strava.get_summary(activities)
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
+import json
+import os
+import time
+
 import requests
+
+
+def _clean_secret(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = str(value).strip().strip("\"'")
+    return cleaned or None
+
+
+def _server_dir() -> str:
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+def _default_strava_dir() -> str:
+    return os.path.join(_server_dir(), "apiConfig", "strava")
+
+
+def _resolve_file_path(path: Optional[str], default_name: str) -> str:
+    candidate = _clean_secret(path)
+    if not candidate:
+        candidate = os.path.join(_default_strava_dir(), default_name)
+    elif not os.path.isabs(candidate):
+        candidate = os.path.join(_default_strava_dir(), candidate)
+    if os.path.isdir(candidate) or candidate.endswith((os.sep, "/", "\\")):
+        candidate = os.path.join(candidate, default_name)
+    return candidate
+
+
+def _parse_expires_at(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(datetime.fromisoformat(str(value).strip().strip("\"'").replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
 
 
 class StravaAPI:
@@ -34,7 +77,7 @@ class StravaAPI:
     API_BASE = "https://www.strava.com/api/v3"
     TOKEN_URL = "https://www.strava.com/oauth/token"
     
-    def __init__(self, client_id: str = None, client_secret: str = None, 
+    def __init__(self, client_id: str = None, client_secret: str = None,
                  refresh_token: str = None):
         """
         Initialize the Strava API client.
@@ -49,15 +92,44 @@ class StravaAPI:
             client_secret: Strava application client secret (optional if set in .env)
             refresh_token: User's refresh token for obtaining access tokens (optional if set in .env)
         """
-        import os
-        import json
-        
-        # Try to load from environment variables first
-        self.client_id = client_id or os.getenv('STRAVA_CLIENT_ID')
-        self.client_secret = client_secret or os.getenv('STRAVA_CLIENT_SECRET')
-        self.refresh_token = refresh_token or os.getenv('STRAVA_REFRESH_TOKEN')
-        
-        # If still missing, try to load from config file
+        self.token_file = _resolve_file_path(os.getenv("STRAVA_TOKEN_FILE"), "token.json")
+        self.credentials_file = _resolve_file_path(
+            os.getenv("STRAVA_CREDENTIALS_FILE"),
+            "credentials.json",
+        )
+
+        saved_token = self._load_json(self.token_file)
+        saved_credentials = self._load_json(self.credentials_file)
+
+        # Try to load from explicit params, environment variables, token file, then credentials file.
+        self.client_id = (
+            _clean_secret(client_id)
+            or _clean_secret(os.getenv('STRAVA_CLIENT_ID'))
+            or _clean_secret(saved_token.get('client_id'))
+            or _clean_secret(saved_credentials.get('client_id'))
+        )
+        self.client_secret = (
+            _clean_secret(client_secret)
+            or _clean_secret(os.getenv('STRAVA_CLIENT_SECRET'))
+            or _clean_secret(saved_credentials.get('client_secret'))
+        )
+        self.refresh_token = (
+            _clean_secret(refresh_token)
+            or _clean_secret(os.getenv('STRAVA_REFRESH_TOKEN'))
+            or _clean_secret(saved_token.get('refresh_token'))
+            or _clean_secret(saved_credentials.get('refresh_token'))
+        )
+        self._access_token = (
+            _clean_secret(os.getenv('STRAVA_ACCESS_TOKEN'))
+            or _clean_secret(saved_token.get('access_token'))
+        )
+        self._expires_at = (
+            _parse_expires_at(os.getenv('STRAVA_TOKEN_EXPIRES_AT'))
+            or _parse_expires_at(saved_token.get('expires_at'))
+            or _parse_expires_at(saved_token.get('expires_at_iso'))
+        )
+
+        # Backward compatibility for older local config paths.
         if not all([self.client_id, self.client_secret, self.refresh_token]):
             config_dir = os.path.join(os.path.dirname(__file__), '..', 'config')
             config_file = os.path.join(config_dir, 'strava_credentials.json')
@@ -65,11 +137,43 @@ class StravaAPI:
             if os.path.exists(config_file):
                 with open(config_file, 'r') as f:
                     config = json.load(f)
-                    self.client_id = self.client_id or config.get('client_id')
-                    self.client_secret = self.client_secret or config.get('client_secret')
-                    self.refresh_token = self.refresh_token or config.get('refresh_token')
-        
-        self._access_token: Optional[str] = None
+                    self.client_id = self.client_id or _clean_secret(config.get('client_id'))
+                    self.client_secret = self.client_secret or _clean_secret(config.get('client_secret'))
+                    self.refresh_token = self.refresh_token or _clean_secret(config.get('refresh_token'))
+
+    @staticmethod
+    def _load_json(path: str) -> Dict[str, Any]:
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _save_token(self, data: Dict[str, Any]) -> None:
+        expires_at = _parse_expires_at(data.get("expires_at"))
+        payload = {
+            "access_token": data.get("access_token"),
+            "refresh_token": data.get("refresh_token") or self.refresh_token,
+            "expires_at": expires_at,
+            "expires_at_iso": (
+                datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
+                if expires_at
+                else None
+            ),
+            "token_type": data.get("token_type"),
+            "scope": data.get("scope"),
+            "athlete": data.get("athlete"),
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        os.makedirs(os.path.dirname(self.token_file), exist_ok=True)
+        with open(self.token_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+    def _has_valid_access_token(self) -> bool:
+        return bool(self._access_token and self._expires_at and self._expires_at > int(time.time()) + 60)
     
     def _get_access_token(self) -> Optional[str]:
         """
@@ -81,6 +185,9 @@ class StravaAPI:
         Returns:
             Access token string if successful, None otherwise
         """
+        if self._has_valid_access_token():
+            return self._access_token
+
         if not all([self.client_id, self.client_secret, self.refresh_token]):
             return None
         
@@ -92,11 +199,14 @@ class StravaAPI:
         }
         
         try:
-            response = requests.post(self.TOKEN_URL, data=payload)
+            response = requests.post(self.TOKEN_URL, data=payload, timeout=20)
             
             if response.status_code == 200:
                 data = response.json()
-                self._access_token = data.get("access_token")
+                self._access_token = _clean_secret(data.get("access_token"))
+                self.refresh_token = _clean_secret(data.get("refresh_token")) or self.refresh_token
+                self._expires_at = _parse_expires_at(data.get("expires_at"))
+                self._save_token(data)
                 return self._access_token
             else:
                 print(f"Token refresh failed: {response.status_code} - {response.text}")
@@ -130,11 +240,25 @@ class StravaAPI:
             response = requests.get(
                 f"{self.API_BASE}{endpoint}",
                 headers=headers,
-                params=params or {}
+                params=params or {},
+                timeout=20,
             )
             
             if response.status_code == 200:
                 return response.json()
+            if response.status_code == 401:
+                self._access_token = None
+                headers = {"Authorization": f"Bearer {self._get_access_token()}"}
+                response = requests.get(
+                    f"{self.API_BASE}{endpoint}",
+                    headers=headers,
+                    params=params or {},
+                    timeout=20,
+                )
+                if response.status_code == 200:
+                    return response.json()
+                print(f"API request failed: {response.status_code} - {response.text}")
+                return None
             else:
                 print(f"API request failed: {response.status_code} - {response.text}")
                 return None
@@ -183,20 +307,27 @@ class StravaAPI:
         start_epoch = start_millis // 1000
         end_epoch = end_millis // 1000
         
-        # Fetch activities from Strava API
-        raw_activities = self._make_request(
-            "/athlete/activities",
-            params={
-                "after": start_epoch,
-                "before": end_epoch,
-                "per_page": 100  # Maximum activities per request
-            }
-        )
-        
-        if not raw_activities:
-            return []
-        
-        # Normalize all activities
+        raw_activities: List[Dict] = []
+        page = 1
+        per_page = 100
+
+        while True:
+            page_items = self._make_request(
+                "/athlete/activities",
+                params={
+                    "after": start_epoch,
+                    "before": end_epoch,
+                    "per_page": per_page,
+                    "page": page,
+                },
+            )
+            if not page_items:
+                break
+            raw_activities.extend(page_items)
+            if len(page_items) < per_page:
+                break
+            page += 1
+
         return [self._normalize_activity(activity) for activity in raw_activities]
     
     def get_summary(self, activities: List[Dict]) -> Dict[str, Any]:

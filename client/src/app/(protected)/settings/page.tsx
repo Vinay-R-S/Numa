@@ -751,6 +751,8 @@ const INTEGRATION_GROUPS: IntegrationGroup[] = [
     fields: [
       { key: "google_fit_client_id", label: "Client ID", isSecret: true },
       { key: "google_fit_client_secret", label: "Client Secret", isSecret: true },
+      { key: "google_fit_credentials_file", label: "Credentials File Path", isSecret: false },
+      { key: "google_fit_token_file", label: "Token File Path", isSecret: false },
     ],
   },
   {
@@ -759,6 +761,8 @@ const INTEGRATION_GROUPS: IntegrationGroup[] = [
     fields: [
       { key: "strava_client_id", label: "Client ID", isSecret: true },
       { key: "strava_client_secret", label: "Client Secret", isSecret: true },
+      { key: "strava_refresh_token", label: "Refresh Token", isSecret: true },
+      { key: "strava_token_file", label: "Token File Path", isSecret: false },
     ],
   },
   {
@@ -815,6 +819,24 @@ function IntegrationKeysSection() {
           setValues((prev) => ({
             ...prev,
             github_oauth_redirect_uri: data.github_oauth_redirect_uri_value,
+          }))
+        }
+        if (data.google_fit_credentials_file_value) {
+          setValues((prev) => ({
+            ...prev,
+            google_fit_credentials_file: data.google_fit_credentials_file_value,
+          }))
+        }
+        if (data.google_fit_token_file_value) {
+          setValues((prev) => ({
+            ...prev,
+            google_fit_token_file: data.google_fit_token_file_value,
+          }))
+        }
+        if (data.strava_token_file_value) {
+          setValues((prev) => ({
+            ...prev,
+            strava_token_file: data.strava_token_file_value,
           }))
         }
       } catch (err) {

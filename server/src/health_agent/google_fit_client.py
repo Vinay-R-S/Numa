@@ -9,6 +9,7 @@ Token file:       server/config/token.json
 """
 
 import os
+import threading
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -35,29 +36,70 @@ class GoogleFitClient:
     }
     EXCLUDED = {"still", "unknown", "tilting", "automotive", "sleeping"}
 
-    def __init__(self, credentials_file: str = None, token_file: str = None):
+    def __init__(self, credentials_file: str = None, token_file: str = None, user_id: str = None):
         config_dir = os.path.join(os.path.dirname(__file__), '..', 'config')
         default_creds = os.getenv('GOOGLE_FIT_CREDENTIALS_FILE', 'credentials.json')
         if not os.path.isabs(default_creds):
             default_creds = os.path.join(config_dir, default_creds)
         self.credentials_file = credentials_file or default_creds
-        self.token_file = token_file or os.path.join(config_dir, 'token.json')
+        default_token = os.getenv('GOOGLE_FIT_TOKEN_FILE', 'token.json')
+        if not os.path.isabs(default_token):
+            default_token = os.path.join(config_dir, default_token)
+        self.token_file = self._normalize_token_file(token_file or default_token)
+        self.user_id = user_id
         self._service = None
+        self._request_lock = threading.RLock()
+
+    @staticmethod
+    def _normalize_token_file(path: str) -> str:
+        path = os.path.expanduser(path.strip().strip("\"'"))
+        if os.path.isdir(path) or path.endswith((os.sep, "/", "\\")):
+            return os.path.join(path, "google_fit_token.json")
+        return path
+
+    def _client_config_from_env(self) -> Optional[dict]:
+        client_id = os.getenv("GOOGLE_FIT_CLIENT_ID", "").strip()
+        client_secret = os.getenv("GOOGLE_FIT_CLIENT_SECRET", "").strip()
+        if not client_id or not client_secret:
+            return None
+
+        return {
+            "installed": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["http://localhost"],
+            }
+        }
 
     def _authenticate(self) -> Credentials:
+        if self.user_id:
+            try:
+                from ..calendar.service import get_credentials
+                return get_credentials(user_id=self.user_id)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    "Google Fit is not connected for this user. Reconnect Google from Calendar so the token includes Fitness scopes."
+                ) from exc
+
         creds = None
-        if os.path.exists(self.token_file):
+        if os.path.isfile(self.token_file):
             creds = Credentials.from_authorized_user_file(self.token_file, self.SCOPES)
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
                 if not os.path.exists(self.credentials_file):
-                    raise FileNotFoundError(
-                        f"'{self.credentials_file}' not found. "
-                        "Download OAuth credentials from Google Cloud Console."
-                    )
-                flow = InstalledAppFlow.from_client_secrets_file(self.credentials_file, self.SCOPES)
+                    client_config = self._client_config_from_env()
+                    if not client_config:
+                        raise FileNotFoundError(
+                            f"'{self.credentials_file}' not found and GOOGLE_FIT_CLIENT_ID/GOOGLE_FIT_CLIENT_SECRET are not set. "
+                            "Add Google Fit credentials in Settings or download OAuth credentials from Google Cloud Console."
+                        )
+                    flow = InstalledAppFlow.from_client_config(client_config, self.SCOPES)
+                else:
+                    flow = InstalledAppFlow.from_client_secrets_file(self.credentials_file, self.SCOPES)
                 creds = flow.run_local_server(port=0)
             os.makedirs(os.path.dirname(self.token_file), exist_ok=True)
             with open(self.token_file, 'w') as f:
@@ -67,7 +109,7 @@ class GoogleFitClient:
     def _get_service(self):
         if not self._service:
             creds = self._authenticate()
-            self._service = build('fitness', 'v1', credentials=creds)
+            self._service = build('fitness', 'v1', credentials=creds, cache_discovery=False)
         return self._service
 
     # ── Extraction helpers ───────────────────────────────────────────────────
@@ -200,24 +242,29 @@ class GoogleFitClient:
     # ── Main entry point ─────────────────────────────────────────────────────
 
     def fetch_all_data(self, start_ms: int, end_ms: int) -> Dict[str, Any]:
-        sleep_result = self.fetch_sleep(start_ms, end_ms)
-        distance = self.fetch_distance(start_ms, end_ms)
-        steps = self.fetch_steps(start_ms, end_ms)
+        # googleapiclient/httplib2 connections are not safe to share across
+        # concurrent requests. Health sync can be triggered by the dashboard,
+        # master agent, and background sync at the same time, so serialize all
+        # Fit API calls for this user/client.
+        with self._request_lock:
+            sleep_result = self.fetch_sleep(start_ms, end_ms)
+            distance = self.fetch_distance(start_ms, end_ms)
+            steps = self.fetch_steps(start_ms, end_ms)
 
-        if distance is None and steps:
-            distance = round((steps * 0.762) / 1000, 2)
+            if distance is None and steps:
+                distance = round((steps * 0.762) / 1000, 2)
 
-        return {
-            "steps": steps,
-            "active_minutes": self.fetch_active_minutes(start_ms, end_ms),
-            "calories": self.fetch_calories(start_ms, end_ms),
-            "distance_km": distance,
-            "sleep_hours": sleep_result['hours'] if sleep_result else None,
-            "sleep_stages": sleep_result['stages'] if sleep_result else None,
-            "activities": self.fetch_activities(start_ms, end_ms),
-            "time_range": {
-                "start": datetime.fromtimestamp(start_ms / 1000).strftime('%Y-%m-%d %H:%M'),
-                "end": datetime.fromtimestamp(end_ms / 1000).strftime('%Y-%m-%d %H:%M'),
-            },
-            "last_updated": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
+            return {
+                "steps": steps,
+                "active_minutes": self.fetch_active_minutes(start_ms, end_ms),
+                "calories": self.fetch_calories(start_ms, end_ms),
+                "distance_km": distance,
+                "sleep_hours": sleep_result['hours'] if sleep_result else None,
+                "sleep_stages": sleep_result['stages'] if sleep_result else None,
+                "activities": self.fetch_activities(start_ms, end_ms),
+                "time_range": {
+                    "start": datetime.fromtimestamp(start_ms / 1000).strftime('%Y-%m-%d %H:%M'),
+                    "end": datetime.fromtimestamp(end_ms / 1000).strftime('%Y-%m-%d %H:%M'),
+                },
+                "last_updated": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            }

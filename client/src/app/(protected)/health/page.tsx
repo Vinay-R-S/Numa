@@ -12,7 +12,6 @@ import {
   RefreshCw,
   Send,
   Sparkles,
-  TrendingDown,
   TrendingUp,
   Wifi,
   WifiOff,
@@ -40,6 +39,13 @@ function formatNumber(n: number | null | undefined): string {
 function pct(value: number | null, goal: number): number {
   if (!value) return 0
   return Math.min(100, Math.round((value / goal) * 100))
+}
+
+function localDateString(date = new Date()): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
 }
 
 // ── Metric Card ─────────────────────────────────────────────────────────────────
@@ -129,7 +135,7 @@ function WeeklyBar({ snapshots }: { snapshots: HealthSnapshot[] }) {
 
   const maxSteps = Math.max(...gfitDays.map((d) => d.steps || 0), 1)
   const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDateString()
 
   return (
     <div className="flex items-end gap-2 h-40 px-2">
@@ -381,10 +387,15 @@ export default function HealthPage() {
   const handleSync = useCallback(async () => {
     setSyncing(true)
     try {
-      await syncAllHealth()
+      const result = await syncAllHealth()
       await loadData()
-    } catch {
-      // ignore sync errors
+      if (!result.ok) {
+        setError(result.detail || "No recent health data was returned from Google Fit or Strava")
+      } else if (result.detail) {
+        setError(null)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to sync health data")
     } finally {
       setSyncing(false)
     }
@@ -425,9 +436,10 @@ export default function HealthPage() {
 
   // ── Derived data ──────────────────────────────────────────────────────────────
 
-  const todayStr = new Date().toISOString().slice(0, 10)
+  const todayStr = localDateString()
   const todayGfit = snapshots.find((s) => s.source === "google_fit" && s.snapshot_date === todayStr) || null
   const isLive = snapshots.length > 0
+  const isConfigured = Boolean(status?.google_fit_configured || status?.strava_configured)
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -457,7 +469,7 @@ export default function HealthPage() {
               : "border-border/30 bg-background/40 text-muted-foreground"
           }`}>
             {isLive ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-            {isLive ? "Live Data" : "No Data"}
+            {isLive ? "Live Data" : isConfigured ? "No Data" : "Not Configured"}
           </div>
           <Button variant="ghost" size="sm" onClick={() => void handleSync()} className="gap-2 text-muted-foreground hover:text-foreground">
             <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />

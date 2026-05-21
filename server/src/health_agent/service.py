@@ -79,6 +79,7 @@ def _health_toolset(tool_decorator, user_id: str):
     from .router import (
         get_health_snapshots,
         sync_google_fit_for_user,
+        _sync_strava_with_health_all,
         sync_strava_for_user,
     )
     from ..tasks.agent_tools import make_task_tools
@@ -145,9 +146,11 @@ def _health_toolset(tool_decorator, user_id: str):
         if source in ("all", "google_fit"):
             r = sync_google_fit_for_user(user_id)
             results.append(f"Google Fit: {'synced' if r.get('ok') else r.get('detail', 'failed')}")
-        if source in ("all", "strava"):
+        if source == "strava" or (source == "all" and _sync_strava_with_health_all()):
             r = sync_strava_for_user(user_id)
             results.append(f"Strava: {'synced' if r.get('ok') else r.get('detail', 'failed')}")
+        elif source == "all":
+            results.append("Strava: skipped")
         return " | ".join(results)
 
     @tool_decorator
