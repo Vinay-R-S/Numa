@@ -34,6 +34,7 @@ class SlackMessageOut(BaseModel):
     id: str
     user_id: Optional[str] = None
     slack_user_id: str
+    sender_name: Optional[str] = None
     slack_channel_id: str
     channel_name: Optional[str] = None
     text: Optional[str] = None

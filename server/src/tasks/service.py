@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -158,11 +159,7 @@ def delete_task_by_external_ref(user_id: str, external_ref: str) -> int:
         cur.close()
 
         if deleted and row and row[0]:
-            memory_service.delete_snapshot(
-                user_id=user_id,
-                source="task",
-                external_id=str(row[0]),
-            )
+            delete_task_snapshot(user_id, str(row[0]))
 
         return deleted
     finally:
@@ -175,20 +172,60 @@ def create_task_for_user(
     description: Optional[str] = None,
     status: str = "planned",
     due_date: Optional[datetime] = None,
+    source_name: Optional[str] = None,
+    source_logo: Optional[str] = None,
+    external_ref: Optional[str] = None,
 ) -> Dict:
+    normalized_title = title.strip()
+    if not normalized_title:
+        raise ValueError("Task title is required")
+
+    dedupe_ref = external_ref
+    if not dedupe_ref:
+        due_key = due_date.isoformat() if hasattr(due_date, "isoformat") else str(due_date or "")
+        raw_key = "|".join(
+            [
+                normalized_title.lower(),
+                (description or "").strip().lower(),
+                status.strip().lower(),
+                due_key,
+                (source_name or "agent").strip().lower(),
+            ]
+        )
+        dedupe_ref = f"agent:{hashlib.sha256(raw_key.encode('utf-8')).hexdigest()[:24]}"
+
     conn = _get_conn()
     try:
         cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO public.tasks
-                (user_id, title, description, status, due_date, position)
-            VALUES (%s, %s, %s, %s, %s, 0)
+                (user_id, title, description, status, due_date, position,
+                 source_name, source_logo, external_ref)
+            VALUES (%s, %s, %s, %s, %s, 0, %s, %s, %s)
+            ON CONFLICT (user_id, external_ref)
+            DO UPDATE SET
+                title = EXCLUDED.title,
+                description = EXCLUDED.description,
+                status = EXCLUDED.status,
+                due_date = EXCLUDED.due_date,
+                source_name = EXCLUDED.source_name,
+                source_logo = EXCLUDED.source_logo,
+                updated_at = NOW()
             RETURNING id, user_id, title, description, status, priority,
                       due_date, reminder_at, source_name, source_logo,
                       external_ref, position, completed_at, created_at, updated_at
             """,
-            (user_id, title, description, status, due_date),
+            (
+                user_id,
+                normalized_title,
+                description,
+                status,
+                due_date,
+                source_name,
+                source_logo,
+                dedupe_ref,
+            ),
         )
         task = _row_to_dict(cur.fetchone(), cur.description)
         conn.commit()

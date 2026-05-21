@@ -1281,14 +1281,13 @@ def _sync_calendar_event_to_task(user_id: Optional[str], event: Dict) -> None:
     else:
         return  # No usable date - skip
 
-    ical_uid    = str(event.get("iCalUID")         or "").strip()
     event_id    = str(event.get("id")              or "").strip()
     calendar_id = str(event.get("_calendar_id")    or "primary")
 
-    if not ical_uid and not event_id:
+    if not event_id:
         return
 
-    external_ref = f"gcal:ical:{ical_uid}" if ical_uid else task_service.calendar_external_ref(calendar_id, event_id)
+    external_ref = task_service.calendar_external_ref(calendar_id, event_id)
 
     if str(event.get("status") or "").lower() == "cancelled":
         _run_parallel_best_effort(

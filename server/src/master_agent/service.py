@@ -31,6 +31,8 @@ MASTER_AGENT_SYSTEM_PROMPT = (
     "RULES:\n"
     "1. Use delegation tools when the query belongs to a sub-agent domain.\n"
     "2. Use task tools directly for task operations.\n"
+    "2a. For task card moves, always update the existing task status. Do not delete and recreate cards.\n"
+    "2b. For a request to add one task, call create_task exactly once.\n"
     "3. For general or small-talk queries, respond directly without tools.\n"
     "4. When delegating, pass the user's full query for best results.\n"
     "5. Never fabricate data - always use tools to fetch real information.\n"
@@ -41,7 +43,9 @@ TASK_SUBAGENT_SYSTEM_PROMPT = (
     "You are NUMA Task sub-agent. "
     "You can only operate through tools to create, update, delete, and list tasks. "
     "If required details are missing, ask a short clarification question. "
-    "Never invent task IDs or claim updates you did not perform."
+    "Never invent task IDs or claim updates you did not perform. "
+    "For card moves, update status only. Do not delete and recreate the task. "
+    "For a request to add one task, call create_task exactly once."
 )
 
 
@@ -178,6 +182,7 @@ def _task_toolset(tool_decorator, user_id: str):
                 description=description.strip() or None,
                 status=normalized_status,
                 due_date=due,
+                source_name="NUMA Agent",
             )
             return f"Task created: {task.get('title')} [{task.get('status')}]."
         except Exception as exc:
@@ -424,6 +429,7 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
         "refreshGithub": False,
         "refreshJournal": False,
         "delegated_to": [],
+        "_task_mutation_done": False,
     }
 
     @tool_decorator
@@ -705,9 +711,20 @@ def _build_master_graph(user_id: str, model_override: Optional[str] = None):
                 result = f"Unknown tool '{name}'."
             else:
                 try:
-                    result = tool_map[name].invoke(args)
-                    if name in task_mutation_tools and not str(result).lower().startswith("error"):
+                    if name in task_mutation_tools and refresh_tracker.get("_task_mutation_done"):
+                        result = (
+                            "A task mutation has already been completed for this request. "
+                            "Do not run another create, update, or delete."
+                        )
+                    else:
+                        result = tool_map[name].invoke(args)
+                    result_text = str(result).lower()
+                    mutation_succeeded = result_text.startswith(
+                        ("task created:", "task updated:", "task deleted:")
+                    )
+                    if name in task_mutation_tools and mutation_succeeded:
                         refresh_tracker["refreshTasks"] = True
+                        refresh_tracker["_task_mutation_done"] = True
                 except Exception as exc:
                     result = f"Error running {name}: {exc}"
             out.append(ToolMessage(content=str(result), tool_call_id=tid))
@@ -792,6 +809,7 @@ def run_master_agent_chat(
         for k in _empty:
             refresh_tracker[k] = False
         refresh_tracker["delegated_to"] = []
+        refresh_tracker["_task_mutation_done"] = False
         # Store pre-loaded context so delegation tools can pass it to sub-agents
         refresh_tracker["_preloaded_context"] = semantic_context
 

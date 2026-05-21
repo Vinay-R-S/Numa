@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { AtSign, Bot, Hash, Lock, Megaphone, MessageSquare, RefreshCw, Send, Slack, Sparkles, User, Wifi, WifiOff, X, Zap } from "lucide-react"
+import { AlertTriangle, AtSign, Bot, Hash, Lock, Megaphone, MessageSquare, RefreshCw, Send, Slack, Sparkles, User, Wifi, WifiOff, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -136,7 +136,7 @@ function ChannelItem({ ch, active, onClick }: { ch: SlackChannel; active: boolea
 function ChannelMessageItem({ msg }: { msg: SlackMessage }) {
   const displayText = formatSlackText(msg.text || "")
   const isThread = Boolean(msg.thread_ts && msg.thread_ts !== msg.ts)
-  const senderName = msg.slack_user_id
+  const senderName = msg.sender_name || msg.slack_user_id
 
   return (
     <div className={`group flex items-start gap-3 px-4 py-2 transition-colors hover:bg-accent/20 ${isThread ? "ml-8 border-l-2 border-primary/20 pl-4" : ""}`}>
@@ -210,6 +210,7 @@ export default function SlackPage() {
   const [filterMentions, setFilterMentions] = useState(false)
   const [filterBroadcasts, setFilterBroadcasts] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
 
   // Compose (inline at bottom of messages area)
   const [composeText, setComposeText] = useState("")
@@ -232,6 +233,8 @@ export default function SlackPage() {
   const [chatError, setChatError] = useState<string | null>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const initialSyncAttemptedRef = useRef(false)
+  const syncingRef = useRef(false)
 
   // ── Status check ─────────────────────────────────────────────────────────────
 
@@ -250,8 +253,15 @@ export default function SlackPage() {
     try {
       const chs = await getSlackChannels()
       setChannels(chs)
-    } catch {
-      // fail silently
+      setSyncError(null)
+      setActiveChannel((current) => {
+        if (current && chs.some((channel) => channel.slack_id === current)) {
+          return current
+        }
+        return chs[0]?.slack_id ?? ""
+      })
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "Failed to load Slack channels")
     }
   }, [])
 
@@ -265,7 +275,13 @@ export default function SlackPage() {
     setLoadingMsgs(true)
     try {
       const msgs = await getSlackMessages({ channel: activeChannel, limit: 60 })
-      setMessages(msgs)
+      setMessages(
+        [...msgs].sort((a, b) => {
+          const aTime = new Date(a.created_at || Number(a.ts) * 1000).getTime()
+          const bTime = new Date(b.created_at || Number(b.ts) * 1000).getTime()
+          return aTime - bTime
+        })
+      )
     } catch {
       // fail silently
     } finally {
@@ -274,13 +290,21 @@ export default function SlackPage() {
   }, [activeChannel])
 
   const syncMessages = useCallback(async () => {
+    if (syncingRef.current) return
+
+    syncingRef.current = true
     setSyncing(true)
+    setSyncError(null)
     try {
-      await syncSlack()
-    } catch {
-      // ignore sync failures
+      const result = await syncSlack()
+      if (!result.ok) {
+        throw new Error(result.detail || "Slack sync failed")
+      }
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "Slack sync failed")
     } finally {
       setSyncing(false)
+      syncingRef.current = false
       await loadChannels()
       await loadMessages()
     }
@@ -295,10 +319,16 @@ export default function SlackPage() {
 
   useEffect(() => {
     if (!activeChannel) return
-    loadMessages()
-    const id = setInterval(loadMessages, 30_000)
+    void loadMessages()
+    const id = setInterval(() => {
+      if (status?.connected) {
+        void syncMessages()
+      } else {
+        void loadMessages()
+      }
+    }, 20_000)
     return () => clearInterval(id)
-  }, [loadMessages, activeChannel])
+  }, [loadMessages, activeChannel, status?.connected, syncMessages])
 
   // ── Auto-scroll to bottom of messages ────────────────────────────────────────
 
@@ -317,9 +347,18 @@ export default function SlackPage() {
   useEffect(() => {
     if (searchParams.get("connected") === "1") {
       checkStatus()
-      loadChannels()
+      void syncMessages()
     }
-  }, [searchParams, checkStatus, loadChannels])
+  }, [searchParams, checkStatus, syncMessages])
+
+  useEffect(() => {
+    if (!status?.connected || channels.length > 0 || syncing || initialSyncAttemptedRef.current) {
+      return
+    }
+
+    initialSyncAttemptedRef.current = true
+    void syncMessages()
+  }, [channels.length, status?.connected, syncing, syncMessages])
 
   // ── Select channel ───────────────────────────────────────────────────────────
 
@@ -461,6 +500,13 @@ export default function SlackPage() {
       </div>
 
       {/* ── Main chat area: sidebar + messages ───────────────────────────────── */}
+      {syncError && (
+        <div className="flex shrink-0 items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{syncError}</span>
+        </div>
+      )}
+
       <div className="flex flex-1 min-h-0 rounded-2xl border border-border/40 bg-card/40 overflow-hidden">
 
         {/* ── Channel sidebar (desktop) ──────────────────────────────────────── */}

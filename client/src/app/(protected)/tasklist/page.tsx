@@ -1,11 +1,12 @@
 "use client"
 
 import React, { useEffect, useState, useCallback, useRef } from "react"
-import { CheckSquare, Bell, ChevronDown, ChevronRight, History } from "lucide-react"
+import { CheckSquare, Bell, ChevronDown, ChevronRight, History, RefreshCw } from "lucide-react"
 import { KanbanBoard } from "@/components/tasklist/KanbanBoard"
 import { AnalyticsDashboard } from "@/components/tasklist/AnalyticsDashboard"
 import { TaskDetailSheet } from "@/components/tasklist/TaskDetailSheet"
 import { useTasksStore } from "@/lib/stores"
+import { fetchLatestAgentData } from "@/components/agents/masterAgentApi"
 import type { Task } from "@/components/tasklist/types"
 import { PRIORITY_CONFIG } from "@/components/tasklist/types"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -35,6 +36,7 @@ export default function TasklistPage() {
 
   // History (completed tasks from previous days)
   const [historyExpanded, setHistoryExpanded] = useState(false)
+  const [syncingAll, setSyncingAll] = useState(false)
   const [notificationPermission, setNotificationPermission] =
     useState<NotificationPermission | null>(null)
 
@@ -77,10 +79,21 @@ export default function TasklistPage() {
   )
 
   // Handle manual refresh
-  const handleRefresh = useCallback(() => {
-    fetchAllTasks(true)
-    fetchAllStats(true)
-  }, [fetchAllTasks, fetchAllStats])
+  const handleRefresh = useCallback(async () => {
+    await Promise.all([fetchAllTasks(true), fetchAllStats(true), fetchAllHistory(true)])
+  }, [fetchAllTasks, fetchAllStats, fetchAllHistory])
+
+  const handleSyncAll = useCallback(async () => {
+    if (syncingAll) return
+
+    setSyncingAll(true)
+    try {
+      await fetchLatestAgentData()
+      await handleRefresh()
+    } finally {
+      setSyncingAll(false)
+    }
+  }, [handleRefresh, syncingAll])
 
   // Web Push reminder scheduler - only prompt once, persist choice
   useEffect(() => {
@@ -125,18 +138,29 @@ export default function TasklistPage() {
             </p>
           </div>
         </div>
-        {notificationPermission !== null && notificationPermission !== "granted" && (
+        <div className="flex items-center gap-2">
           <button
-            title="Enable notifications for task reminders"
-            onClick={() => {
-              void Notification.requestPermission().then(setNotificationPermission)
-            }}
-            className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            title={syncingAll ? "Syncing all task sources" : "Sync all task sources"}
+            onClick={() => void handleSyncAll()}
+            disabled={syncingAll}
+            className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-70"
           >
-            <Bell className="h-4 w-4" />
-            <span className="hidden sm:inline">Enable Notifications</span>
+            <RefreshCw className={`h-4 w-4 ${syncingAll ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">{syncingAll ? "Syncing..." : "Sync All"}</span>
           </button>
-        )}
+          {notificationPermission !== null && notificationPermission !== "granted" && (
+            <button
+              title="Enable notifications for task reminders"
+              onClick={() => {
+                void Notification.requestPermission().then(setNotificationPermission)
+              }}
+              className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            >
+              <Bell className="h-4 w-4" />
+              <span className="hidden sm:inline">Enable Notifications</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Kanban Board ─────────────────────────────────────────────────────── */}
@@ -158,6 +182,7 @@ export default function TasklistPage() {
             tasks={tasks}
             onTasksChange={handleTasksChange}
             onRefresh={handleRefresh}
+            refreshing={loadingTasks || syncingAll}
           />
         </div>
       )}

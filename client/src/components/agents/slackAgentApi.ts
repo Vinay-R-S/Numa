@@ -22,6 +22,7 @@ export interface SlackMessage {
   id: string
   user_id?: string | null
   slack_user_id: string
+  sender_name?: string | null
   slack_channel_id: string
   channel_name?: string | null
   text?: string | null
@@ -65,6 +66,18 @@ function authHeaders(): HeadersInit {
   }
 }
 
+const SLACK_AGENT_TIMEOUT_MS = 45_000
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    window.clearTimeout(timeoutId)
+  }
+}
+
 async function parseJson<T>(res: Response, fallback: string): Promise<T> {
   if (!res.ok) {
     let detail = fallback
@@ -85,11 +98,23 @@ export async function sendSlackAgentCommand(
   query: string,
   history: SlackAgentMessage[] = []
 ): Promise<SlackChatResponse> {
-  const res = await fetch("/api/slack/chat", {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify({ query, history }),
-  })
+  let res: Response
+  try {
+    res = await fetchWithTimeout(
+      "/api/slack/chat",
+      {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ query, history }),
+      },
+      SLACK_AGENT_TIMEOUT_MS
+    )
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("Slack agent request timed out. The action may still have completed in Slack.")
+    }
+    throw err
+  }
   const data = await parseJson<SlackChatResponse>(res, "Slack agent request failed")
   if (data.success === false) {
     throw new Error(data.response || "Slack agent request failed")

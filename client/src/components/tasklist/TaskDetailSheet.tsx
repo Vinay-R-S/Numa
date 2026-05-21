@@ -4,6 +4,7 @@ import React from "react"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -90,6 +91,9 @@ export function TaskDetailSheet({
           <DialogTitle className="text-lg leading-snug pr-2">
             {task.title}
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            Task details including status, priority, due date, source, and description.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto space-y-4 pr-1">

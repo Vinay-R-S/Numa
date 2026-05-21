@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from "react"
 import {
   Bot, Calendar, CheckCircle2, XCircle, RefreshCw, AlertTriangle, Loader2,
   Key, Server, Thermometer, ChevronDown, RotateCcw, Eye, EyeOff, Save,
-  Timer,
+  Slack, Timer,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -24,6 +24,11 @@ import {
   getGoogleCalendarAuthorizationUrl,
   TokenHealthResult,
 } from "@/components/calendar/api"
+import {
+  connectSlack,
+  getSlackStatus,
+  type SlackStatus,
+} from "@/components/agents/slackAgentApi"
 
 const PROVIDER_ICONS: Record<string, React.ReactNode> = {
   groq: <span className="text-[10px] font-black tracking-tight text-orange-400">GROQ</span>,
@@ -66,6 +71,12 @@ export default function SettingsPage() {
   const [tokenChecking, setTokenChecking] = useState(false)
   const [tokenConnecting, setTokenConnecting] = useState(false)
   const [tokenError, setTokenError] = useState<string | null>(null)
+
+  // Slack token state
+  const [slackStatus, setSlackStatus] = useState<SlackStatus | null>(null)
+  const [slackChecking, setSlackChecking] = useState(false)
+  const [slackConnecting, setSlackConnecting] = useState(false)
+  const [slackError, setSlackError] = useState<string | null>(null)
 
   // Timeline settings state
   const [tlInterval, setTlInterval] = useState(300_000)
@@ -123,6 +134,19 @@ export default function SettingsPage() {
     }
   }, [])
 
+  const checkSlack = useCallback(async () => {
+    setSlackChecking(true)
+    setSlackError(null)
+    try {
+      const result = await getSlackStatus()
+      setSlackStatus(result)
+    } catch (err) {
+      setSlackError(err instanceof Error ? err.message : "Slack status check failed")
+    } finally {
+      setSlackChecking(false)
+    }
+  }, [])
+
   const loadAiSettings = useCallback(async () => {
     setAiLoading(true)
     setAiError(null)
@@ -150,8 +174,9 @@ export default function SettingsPage() {
 
   useEffect(() => {
     checkToken()
+    checkSlack()
     loadAiSettings()
-  }, [checkToken, loadAiSettings])
+  }, [checkSlack, checkToken, loadAiSettings])
 
   useEffect(() => {
     if (selectedProvider !== "ollama") return
@@ -179,6 +204,17 @@ export default function SettingsPage() {
     } catch (err) {
       setTokenError(err instanceof Error ? err.message : "Could not start Google OAuth")
       setTokenConnecting(false)
+    }
+  }
+
+  const handleSlackReconnect = async () => {
+    setSlackConnecting(true)
+    setSlackError(null)
+    try {
+      await connectSlack()
+    } catch (err) {
+      setSlackError(err instanceof Error ? err.message : "Could not start Slack OAuth")
+      setSlackConnecting(false)
     }
   }
 
@@ -251,6 +287,22 @@ export default function SettingsPage() {
 
   const { text: statusText, color: statusColor, Icon: StatusIcon, spin: statusSpin } = tokenStatusLabel()
   const needsReconnect = !tokenChecking && tokenHealth !== null && !tokenHealth.valid
+
+  const slackStatusLabel = () => {
+    if (slackChecking) return { text: "Checking...", color: "text-muted-foreground", Icon: Loader2, spin: true }
+    if (!slackStatus) return { text: "Unknown", color: "text-muted-foreground", Icon: AlertTriangle, spin: false }
+    if (slackStatus.connected) return { text: "Connected", color: "text-emerald-400", Icon: CheckCircle2, spin: false }
+    if (slackStatus.bot_configured) return { text: "Bot token configured", color: "text-amber-400", Icon: AlertTriangle, spin: false }
+    return { text: "Not connected", color: "text-rose-400", Icon: XCircle, spin: false }
+  }
+
+  const {
+    text: slackStatusText,
+    color: slackStatusColor,
+    Icon: SlackStatusIcon,
+    spin: slackStatusSpin,
+  } = slackStatusLabel()
+  const needsSlackReconnect = !slackChecking && !slackStatus?.connected
 
   return (
     <div className="flex min-h-full w-full flex-col gap-4 px-4 py-4 sm:gap-6 sm:px-6 sm:py-6">
@@ -534,6 +586,81 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground">
               Connect your Google Calendar to enable AI-powered scheduling, event sync, and
               holiday/birthday visibility in the Calendar view.
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* Slack Integration */}
+      <section className="rounded-xl border border-border/40 bg-card/40 p-4 sm:rounded-2xl sm:p-5">
+        <div className="mb-4 flex items-start gap-3">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-primary/20 sm:h-9 sm:w-9">
+            <Slack className="h-4 w-4 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-foreground sm:text-lg">Slack</h2>
+            <p className="text-xs text-muted-foreground sm:text-sm">
+              Connect or reconnect Slack so channels, messages, task actions, and team invites can
+              use the latest workspace authorization.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 rounded-xl border border-border/40 bg-background/40 px-3 py-3 sm:px-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
+              <SlackStatusIcon
+                className={cn("h-4 w-4 shrink-0", slackStatusColor, slackStatusSpin && "animate-spin")}
+              />
+              <span>
+                Status:{" "}
+                <span className={cn("font-semibold", slackStatusColor)}>{slackStatusText}</span>
+              </span>
+              {slackStatus?.team_name && (
+                <span className="text-xs text-muted-foreground">
+                  Workspace: {slackStatus.team_name}
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={checkSlack}
+                disabled={slackChecking || slackConnecting}
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", slackChecking && "animate-spin")} />
+                Re-check
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="gap-1.5"
+                onClick={handleSlackReconnect}
+                disabled={slackConnecting || slackChecking}
+                variant={needsSlackReconnect ? "default" : "outline"}
+              >
+                {slackConnecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Slack className="h-3.5 w-3.5" />}
+                {slackStatus?.connected ? "Reconnect Slack" : "Connect Slack"}
+              </Button>
+            </div>
+          </div>
+
+          {slackError && (
+            <p className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">
+              {slackError}
+            </p>
+          )}
+          {!slackChecking && slackStatus?.connected && (
+            <p className="text-xs text-muted-foreground">
+              Slack is connected. Reconnect after changing Slack app scopes or reinstalling the app.
+            </p>
+          )}
+          {!slackChecking && !slackStatus?.connected && (
+            <p className="text-xs text-muted-foreground">
+              Connect Slack from here after saving your Slack client ID, client secret, and bot token.
             </p>
           )}
         </div>

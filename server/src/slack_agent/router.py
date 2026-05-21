@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import asyncio
 import json
 import logging
 import os
@@ -53,6 +54,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/slack", tags=["slack"])
 
 _last_channel_backfill = 0.0
+_slack_user_name_cache: dict[str, tuple[float, str]] = {}
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -75,6 +77,45 @@ def _bot_token() -> str:
     return os.getenv("SLACK_BOT_TOKEN", "").strip()
 
 
+DEFAULT_SLACK_BOT_SCOPES = [
+    "app_mentions:read",
+    "channels:history",
+    "channels:join",
+    "channels:manage",
+    "channels:read",
+    "channels:write.invites",
+    "chat:write",
+    "commands",
+    "files:read",
+    "files:write",
+    "groups:history",
+    "groups:read",
+    "im:history",
+    "im:read",
+    "im:write",
+    "mpim:history",
+    "mpim:read",
+    "mpim:write",
+    "reactions:read",
+    "reactions:write",
+    "search:read.files",
+    "search:read.public",
+    "search:read.users",
+    "team:read",
+    "users:read",
+    "users:read.email",
+]
+
+
+def _oauth_scopes() -> str:
+    configured = os.getenv("SLACK_BOT_SCOPES", "").strip()
+    scopes = [s.strip() for s in configured.split(",") if s.strip()] if configured else []
+    for scope in DEFAULT_SLACK_BOT_SCOPES:
+        if scope not in scopes:
+            scopes.append(scope)
+    return ",".join(scopes)
+
+
 def _build_slack_authorization_url(user_id: str) -> str:
     cid = _client_id()
     if not cid:
@@ -82,8 +123,7 @@ def _build_slack_authorization_url(user_id: str) -> str:
 
     params = urlencode({
         "client_id":    cid,
-        "scope":        "channels:history,channels:read,chat:write,users:read,team:read",
-        "user_scope":   "channels:history,chat:write",
+        "scope":        _oauth_scopes(),
         "redirect_uri": _redirect_uri(),
         "state":        user_id,
     })
@@ -96,7 +136,12 @@ def _row_to_dict(row, description) -> dict:
     return {col.name: val for col, val in zip(description, row)}
 
 
-def _get_or_create_channel(slack_id: str, name: Optional[str], team_id: str) -> Optional[str]:
+def _get_or_create_channel(
+    slack_id: str,
+    name: Optional[str],
+    team_id: str,
+    is_private: bool = False,
+) -> Optional[str]:
     """Return the UUID of a slack_channels row, creating it if necessary."""
     conn = _get_conn()
     try:
@@ -110,15 +155,25 @@ def _get_or_create_channel(slack_id: str, name: Optional[str], team_id: str) -> 
             channel_id, existing_name = row
             if name and (not existing_name or existing_name != name):
                 cur.execute(
-                    "UPDATE public.slack_channels SET name = %s WHERE id = %s",
-                    (name, channel_id),
+                    "UPDATE public.slack_channels SET name = %s, is_private = %s WHERE id = %s",
+                    (name, is_private, channel_id),
+                )
+                conn.commit()
+            elif is_private:
+                cur.execute(
+                    "UPDATE public.slack_channels SET is_private = %s WHERE id = %s",
+                    (is_private, channel_id),
                 )
                 conn.commit()
             cur.close()
             return str(channel_id)
         cur.execute(
-            "INSERT INTO public.slack_channels (slack_id, name, team_id) VALUES (%s, %s, %s) RETURNING id",
-            (slack_id, name, team_id),
+            """
+            INSERT INTO public.slack_channels (slack_id, name, team_id, is_private)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (slack_id, name, team_id, is_private),
         )
         new_id = str(cur.fetchone()[0])
         conn.commit()
@@ -168,6 +223,168 @@ def _resolve_user_id_by_slack(slack_user_id: str) -> Optional[str]:
         conn.close()
 
 
+def _user_ids_for_slack_team(team_id: str) -> list[str]:
+    if not team_id:
+        return []
+
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT user_id FROM public.slack_auth WHERE slack_team_id = %s",
+            (team_id,),
+        )
+        rows = cur.fetchall() or []
+        cur.close()
+        return [str(row[0]) for row in rows if row and row[0]]
+    except Exception as exc:
+        log.warning("_user_ids_for_slack_team failed: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+
+def _team_bot_token(team_id: str) -> Optional[str]:
+    if not team_id:
+        return None
+
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT bot_token, access_token
+            FROM public.slack_auth
+            WHERE slack_team_id = %s
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (team_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            return None
+        return (row[0] or row[1] or "").strip() or None
+    except Exception as exc:
+        log.warning("_team_bot_token failed: %s", exc)
+        return None
+    finally:
+        conn.close()
+
+
+def _raw_payload_dict(raw_payload) -> dict:
+    if isinstance(raw_payload, dict):
+        return raw_payload
+    if isinstance(raw_payload, str):
+        try:
+            parsed = json.loads(raw_payload)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _name_from_slack_profile(payload: dict) -> Optional[str]:
+    profile = payload.get("user_profile")
+    if not isinstance(profile, dict):
+        profile = {}
+
+    for value in (
+        profile.get("real_name"),
+        profile.get("display_name"),
+        profile.get("name"),
+        payload.get("username"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return None
+
+
+def _resolve_slack_user_name(team_id: str, slack_user_id: str, raw_payload=None) -> Optional[str]:
+    payload_name = _name_from_slack_profile(_raw_payload_dict(raw_payload))
+    if payload_name:
+        return payload_name
+
+    if not team_id or not slack_user_id:
+        return None
+
+    cache_key = f"{team_id}:{slack_user_id}"
+    cached = _slack_user_name_cache.get(cache_key)
+    if cached and time.time() - cached[0] < 3600:
+        return cached[1]
+
+    token = _team_bot_token(team_id) or _bot_token()
+    if not token:
+        return None
+
+    try:
+        with httpx.Client(timeout=8.0) as client:
+            resp = client.get(
+                "https://slack.com/api/users.info",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"user": slack_user_id},
+            )
+        data = resp.json()
+        if not data.get("ok"):
+            return None
+        user = data.get("user") if isinstance(data.get("user"), dict) else {}
+        profile = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+        for value in (
+            profile.get("real_name"),
+            profile.get("display_name"),
+            user.get("real_name"),
+            user.get("name"),
+        ):
+            if isinstance(value, str) and value.strip():
+                name = value.strip()
+                _slack_user_name_cache[cache_key] = (time.time(), name)
+                return name
+    except Exception as exc:
+        log.info("Slack user name lookup skipped for %s: %s", slack_user_id, exc)
+
+    return None
+
+
+def _cache_workspace_user_names(client: httpx.Client, token: str, team_id: str) -> None:
+    if not token or not team_id:
+        return
+
+    cursor = ""
+    while True:
+        resp = client.get(
+            "https://slack.com/api/users.list",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"limit": "500", **({"cursor": cursor} if cursor else {})},
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            log.info("Slack users.list skipped: %s", data.get("error"))
+            return
+
+        for member in data.get("members", []):
+            if not isinstance(member, dict) or member.get("deleted"):
+                continue
+            slack_user_id = str(member.get("id") or "").strip()
+            if not slack_user_id:
+                continue
+            profile = member.get("profile") if isinstance(member.get("profile"), dict) else {}
+            for value in (
+                profile.get("real_name"),
+                profile.get("display_name"),
+                member.get("real_name"),
+                member.get("name"),
+            ):
+                if isinstance(value, str) and value.strip():
+                    _slack_user_name_cache[f"{team_id}:{slack_user_id}"] = (time.time(), value.strip())
+                    break
+
+        cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            return
+
+
 def _save_slack_message(event: dict, channel_name: Optional[str] = None):
     """Persist a Slack message/event to slack_messages and ingest into Qdrant."""
     slack_user_id = event.get("user", "")
@@ -179,7 +396,22 @@ def _save_slack_message(event: dict, channel_name: Optional[str] = None):
     if not slack_user_id or not ts:
         return
 
-    user_id    = _resolve_user_id_by_slack(slack_user_id)
+    target_user_ids = _user_ids_for_slack_team(slack_team_id)
+    if not target_user_ids:
+        resolved = _resolve_user_id_by_slack(slack_user_id)
+        target_user_ids = [resolved] if resolved else []
+
+    if target_user_ids:
+        for target_user_id in target_user_ids:
+            _save_slack_message_for_user(
+                user_id=target_user_id,
+                event=event,
+                channel_name=channel_name,
+                team_id=slack_team_id,
+            )
+        return
+
+    user_id = None
     resolved_channel_name = channel_name or _get_channel_name_from_db(slack_chan_id)
     channel_uuid = _get_or_create_channel(slack_chan_id, resolved_channel_name, slack_team_id) if slack_chan_id else None
 
@@ -192,7 +424,16 @@ def _save_slack_message(event: dict, channel_name: Optional[str] = None):
                 (user_id, slack_user_id, slack_team_id, channel_id, slack_channel_id,
                  channel_name, text, ts, thread_ts, message_type, raw_payload)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ts) DO NOTHING
+            ON CONFLICT (ts) DO UPDATE SET
+                user_id = COALESCE(public.slack_messages.user_id, EXCLUDED.user_id),
+                slack_team_id = EXCLUDED.slack_team_id,
+                channel_id = COALESCE(public.slack_messages.channel_id, EXCLUDED.channel_id),
+                slack_channel_id = EXCLUDED.slack_channel_id,
+                channel_name = COALESCE(EXCLUDED.channel_name, public.slack_messages.channel_name),
+                text = EXCLUDED.text,
+                thread_ts = EXCLUDED.thread_ts,
+                message_type = EXCLUDED.message_type,
+                raw_payload = EXCLUDED.raw_payload
             """,
             (
                 user_id,
@@ -370,7 +611,18 @@ def _save_slack_message_for_user(
                 (user_id, slack_user_id, slack_team_id, channel_id, slack_channel_id,
                  channel_name, text, ts, thread_ts, message_type, raw_payload, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ts) DO NOTHING
+            ON CONFLICT (ts) DO UPDATE SET
+                user_id = EXCLUDED.user_id,
+                slack_user_id = EXCLUDED.slack_user_id,
+                slack_team_id = EXCLUDED.slack_team_id,
+                channel_id = COALESCE(EXCLUDED.channel_id, public.slack_messages.channel_id),
+                slack_channel_id = EXCLUDED.slack_channel_id,
+                channel_name = COALESCE(EXCLUDED.channel_name, public.slack_messages.channel_name),
+                text = EXCLUDED.text,
+                thread_ts = EXCLUDED.thread_ts,
+                message_type = EXCLUDED.message_type,
+                raw_payload = EXCLUDED.raw_payload,
+                created_at = EXCLUDED.created_at
             """,
             (
                 user_id,
@@ -459,7 +711,7 @@ def fetch_latest_slack_for_user(user_id: str) -> dict:
         return {"ok": True, "fetched": 0, "channels": 0, "detail": "Slack not connected"}
 
     access_token, bot_token, team_id = row
-    token = (bot_token or _bot_token() or access_token or "").strip()
+    token = (bot_token or access_token or _bot_token() or "").strip()
     if not token:
         return {"ok": False, "fetched": 0, "channels": 0, "detail": "Slack token not configured"}
 
@@ -467,32 +719,69 @@ def fetch_latest_slack_for_user(user_id: str) -> dict:
     headers = {"Authorization": f"Bearer {token}"}
     fetched = 0
     channels_seen = 0
+    channels_synced = 0
 
     try:
         with httpx.Client(timeout=20.0) as client:
-            channels_resp = client.get(
-                "https://slack.com/api/conversations.list",
-                headers=headers,
-                params={
-                    "types": "public_channel,private_channel",
-                    "exclude_archived": "true",
-                    "limit": "200",
-                },
-            )
-            channels_data = channels_resp.json()
-            if not channels_data.get("ok"):
-                return {
-                    "ok": False,
-                    "fetched": 0,
-                    "channels": 0,
-                    "detail": channels_data.get("error", "Slack channel fetch failed"),
-                }
+            _cache_workspace_user_names(client, token, team_id)
 
-            for channel in channels_data.get("channels", []):
+            cursor = ""
+            channels: list[dict] = []
+            while True:
+                channels_resp = client.get(
+                    "https://slack.com/api/conversations.list",
+                    headers=headers,
+                    params={
+                        "types": "public_channel,private_channel",
+                        "exclude_archived": "true",
+                        "limit": "500",
+                        **({"cursor": cursor} if cursor else {}),
+                    },
+                )
+                channels_data = channels_resp.json()
+                if not channels_data.get("ok"):
+                    return {
+                        "ok": False,
+                        "fetched": 0,
+                        "channels": channels_seen,
+                        "detail": channels_data.get("error", "Slack channel fetch failed"),
+                    }
+                channels.extend(channels_data.get("channels", []))
+                cursor = (channels_data.get("response_metadata") or {}).get("next_cursor") or ""
+                if not cursor:
+                    break
+
+            for channel in channels:
                 channel_id = channel.get("id")
                 if not channel_id:
                     continue
                 channels_seen += 1
+                channel_name = channel.get("name") or channel_id
+                is_private = bool(channel.get("is_private"))
+                _get_or_create_channel(
+                    slack_id=channel_id,
+                    name=channel_name,
+                    team_id=team_id,
+                    is_private=is_private,
+                )
+                channels_synced += 1
+
+                if not is_private and not channel.get("is_member"):
+                    join_resp = client.post(
+                        "https://slack.com/api/conversations.join",
+                        headers=headers,
+                        json={"channel": channel_id},
+                    )
+                    join_data = join_resp.json()
+                    if join_data.get("ok"):
+                        channel["is_member"] = True
+                    elif join_data.get("error") not in {"already_in_channel", "method_not_supported_for_channel_type"}:
+                        log.info(
+                            "Slack join skipped for channel %s: %s",
+                            channel_id,
+                            join_data.get("error"),
+                        )
+
                 history_resp = client.get(
                     "https://slack.com/api/conversations.history",
                     headers=headers,
@@ -511,7 +800,6 @@ def fetch_latest_slack_for_user(user_id: str) -> dict:
                     )
                     continue
 
-                channel_name = channel.get("name") or channel_id
                 for message in history_data.get("messages", []):
                     if message.get("subtype") in {"message_changed", "message_deleted"}:
                         continue
@@ -527,7 +815,7 @@ def fetch_latest_slack_for_user(user_id: str) -> dict:
         log.warning("fetch_latest_slack_for_user failed: %s", exc)
         return {"ok": False, "fetched": fetched, "channels": channels_seen, "detail": str(exc)}
 
-    return {"ok": True, "fetched": fetched, "channels": channels_seen, "detail": "Slack fetch complete"}
+    return {"ok": True, "fetched": fetched, "channels": channels_synced, "detail": "Slack fetch complete"}
 
 
 def _upsert_slack_auth(
@@ -604,8 +892,8 @@ def _verify_slack_signature(request_body: bytes, timestamp: str, signature: str)
 
 # ── Resolve channel name via Slack API ────────────────────────────────────────
 
-def _resolve_channel_name(channel_id: str) -> Optional[str]:
-    bot = _bot_token()
+def _resolve_channel_name(channel_id: str, team_id: Optional[str] = None) -> Optional[str]:
+    bot = _team_bot_token(team_id or "") or _bot_token()
     if not bot:
         return None
     try:
@@ -663,7 +951,7 @@ async def slack_events(request: Request):
         if subtype == "message_changed":
             message = event.get("message") if isinstance(event.get("message"), dict) else {}
             channel_id = event.get("channel") or message.get("channel") or ""
-            channel_name = _resolve_channel_name(channel_id) if channel_id else None
+            channel_name = _resolve_channel_name(channel_id, payload.get("team_id")) if channel_id else None
             _update_slack_message(event, channel_name)
             return Response(status_code=200)
 
@@ -677,7 +965,7 @@ async def slack_events(request: Request):
 
         # Try to resolve channel name (best-effort)
         channel_id   = event.get("channel", "")
-        channel_name = _resolve_channel_name(channel_id) if channel_id else None
+        channel_name = _resolve_channel_name(channel_id, payload.get("team_id")) if channel_id else None
 
         # Persist + ingest
         _save_slack_message(event, channel_name)
@@ -818,7 +1106,7 @@ def send_slack_message(
         raise HTTPException(status_code=400, detail="Slack not connected")
 
     access_token, bot_token = row
-    token = (bot_token or _bot_token() or access_token or "").strip()
+    token = (bot_token or access_token or _bot_token() or "").strip()
     if not token:
         raise HTTPException(status_code=400, detail="No Slack token available")
 
@@ -877,27 +1165,40 @@ def get_slack_messages(
         if channel:
             cur.execute(
                 """
-                SELECT id, user_id, slack_user_id, slack_channel_id, channel_name,
-                       text, ts, thread_ts, message_type, created_at
-                FROM public.slack_messages
-                WHERE user_id = %s
-                  AND created_at > NOW() - INTERVAL '7 days'
-                  AND LOWER(channel_name) = LOWER(%s)
-                ORDER BY created_at DESC
-                LIMIT %s
+                SELECT *
+                FROM (
+                    SELECT id, user_id, slack_user_id, slack_team_id, slack_channel_id,
+                           channel_name, text, ts, thread_ts, message_type, raw_payload,
+                           created_at
+                    FROM public.slack_messages
+                    WHERE user_id = %s
+                      AND created_at > NOW() - INTERVAL '7 days'
+                      AND (
+                          LOWER(channel_name) = LOWER(%s)
+                          OR slack_channel_id = %s
+                      )
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                ) recent
+                ORDER BY created_at ASC
                 """,
-                (user_id, channel.lstrip("#"), limit),
+                (user_id, channel.lstrip("#"), channel, limit),
             )
         else:
             cur.execute(
                 """
-                SELECT id, user_id, slack_user_id, slack_channel_id, channel_name,
-                       text, ts, thread_ts, message_type, created_at
-                FROM public.slack_messages
-                WHERE user_id = %s
-                  AND created_at > NOW() - INTERVAL '7 days'
-                ORDER BY created_at DESC
-                LIMIT %s
+                SELECT *
+                FROM (
+                    SELECT id, user_id, slack_user_id, slack_team_id, slack_channel_id,
+                           channel_name, text, ts, thread_ts, message_type, raw_payload,
+                           created_at
+                    FROM public.slack_messages
+                    WHERE user_id = %s
+                      AND created_at > NOW() - INTERVAL '7 days'
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                ) recent
+                ORDER BY created_at ASC
                 """,
                 (user_id, limit),
             )
@@ -909,6 +1210,11 @@ def get_slack_messages(
                 id=str(m["id"]),
                 user_id=str(m["user_id"]) if m.get("user_id") else None,
                 slack_user_id=m["slack_user_id"],
+                sender_name=_resolve_slack_user_name(
+                    str(m.get("slack_team_id") or ""),
+                    str(m.get("slack_user_id") or ""),
+                    m.get("raw_payload"),
+                ),
                 slack_channel_id=m["slack_channel_id"],
                 channel_name=m.get("channel_name"),
                 text=m.get("text"),
@@ -930,37 +1236,85 @@ def get_slack_messages(
 
 @router.get("/channels", response_model=list[SlackChannelOut], summary="List tracked Slack channels")
 def get_slack_channels(current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("sub") if isinstance(current_user, dict) else None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    team_id = None
     conn = _get_conn()
     try:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT DISTINCT sc.id, sc.slack_id, sc.name, sc.team_id, sc.is_private, sc.created_at
+            SELECT slack_team_id
+            FROM public.slack_auth
+            WHERE user_id = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        auth_row = cur.fetchone()
+        if not auth_row:
+            cur.close()
+            return []
+        team_id = auth_row[0]
+
+        cur.execute(
+            """
+            SELECT sc.id, sc.slack_id, sc.name, sc.team_id, sc.is_private, sc.created_at
             FROM public.slack_channels sc
-            INNER JOIN public.slack_messages sm ON sm.channel_id = sc.id
-            WHERE sm.created_at > NOW() - INTERVAL '7 days'
+            WHERE sc.team_id = %s
             ORDER BY sc.name ASC
             """,
+            (team_id,),
         )
         rows = cur.fetchall()
         chs  = [_row_to_dict(r, cur.description) for r in rows]
         cur.close()
-        return [
-            SlackChannelOut(
-                id=str(c["id"]),
-                slack_id=c["slack_id"],
-                name=c.get("name"),
-                team_id=c["team_id"],
-                is_private=c.get("is_private", False),
-                created_at=c.get("created_at"),
-            )
-            for c in chs
-        ]
     except Exception as exc:
         log.error("get_slack_channels failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to fetch channels")
     finally:
         conn.close()
+
+    if not chs and team_id:
+        sync_result = fetch_latest_slack_for_user(user_id)
+        if not sync_result.get("ok"):
+            detail = sync_result.get("detail") or "Slack channel sync failed"
+            raise HTTPException(status_code=502, detail=f"Slack sync failed: {detail}")
+
+        conn = _get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT sc.id, sc.slack_id, sc.name, sc.team_id, sc.is_private, sc.created_at
+                FROM public.slack_channels sc
+                WHERE sc.team_id = %s
+                ORDER BY sc.name ASC
+                """,
+                (team_id,),
+            )
+            rows = cur.fetchall()
+            chs = [_row_to_dict(r, cur.description) for r in rows]
+            cur.close()
+        except Exception as exc:
+            log.error("get_slack_channels post-sync fetch failed: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to fetch synced channels")
+        finally:
+            conn.close()
+
+    return [
+        SlackChannelOut(
+            id=str(c["id"]),
+            slack_id=c["slack_id"],
+            name=c.get("name"),
+            team_id=c["team_id"],
+            is_private=c.get("is_private", False),
+            created_at=c.get("created_at"),
+        )
+        for c in chs
+    ]
 
 
 # ── 5. Status ─────────────────────────────────────────────────────────────────
@@ -975,7 +1329,7 @@ def get_slack_status(current_user: dict = Depends(get_current_user)):
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT slack_user_id, slack_team_id, team_name FROM public.slack_auth WHERE user_id = %s",
+            "SELECT slack_user_id, slack_team_id, team_name, bot_token FROM public.slack_auth WHERE user_id = %s",
             (user_id,),
         )
         row = cur.fetchone()
@@ -987,7 +1341,7 @@ def get_slack_status(current_user: dict = Depends(get_current_user)):
                 slack_user_id=row[0],
                 slack_team_id=row[1],
                 team_name=row[2],
-                bot_configured=bool(_bot_token()),
+                bot_configured=bool(_bot_token() or row[3]),
             )
         return SlackStatusOut(connected=False, bot_configured=bool(_bot_token()))
     except Exception as exc:
@@ -1042,9 +1396,10 @@ async def slack_callback(code: str = Query(...), state: str = Query("")):
     team         = data.get("team", {})
     slack_user_id = authed_user.get("id", "")
     slack_team_id = team.get("id", "")
-    access_token  = authed_user.get("access_token") or data.get("access_token", "")
     bot_token_val = data.get("access_token", "")  # bot token is at root level
-    team_name     = team.get("name")
+    user_token_val = authed_user.get("access_token", "")
+    access_token = user_token_val or bot_token_val
+    team_name = team.get("name")
 
     # state = NUMA user_id (set during /connect)
     user_id = state.strip() if state.strip() else None
@@ -1055,10 +1410,14 @@ async def slack_callback(code: str = Query(...), state: str = Query("")):
             slack_user_id=slack_user_id,
             slack_team_id=slack_team_id,
             access_token=access_token,
-            bot_token=bot_token_val if bot_token_val != access_token else None,
+            bot_token=bot_token_val or None,
             team_name=team_name,
             authed_user_obj=authed_user,
         )
+        try:
+            await asyncio.to_thread(fetch_latest_slack_for_user, user_id)
+        except Exception as exc:
+            log.warning("Slack initial sync after OAuth failed: %s", exc)
 
     # Redirect to Slack page in the frontend
     return RedirectResponse(url=f"{_frontend_url()}/slack?connected=1", status_code=302)

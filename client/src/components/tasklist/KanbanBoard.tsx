@@ -63,9 +63,10 @@ interface KanbanBoardProps {
   tasks: Task[]
   onTasksChange: (tasks: Task[]) => void
   onRefresh: () => void
+  refreshing?: boolean
 }
 
-export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProps) {
+export function KanbanBoard({ tasks, onTasksChange, onRefresh, refreshing = false }: KanbanBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   // Local copy for optimistic drag/edit updates - parent is notified only after confirmed API responses
   const [localTasks, setLocalTasks] = useState(tasks)
@@ -273,8 +274,15 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh }: KanbanBoardProp
               </SelectContent>
             </Select>
           </div>
-          <Button variant="ghost" size="icon" onClick={onRefresh} className="text-muted-foreground">
-            <RefreshCw className="h-4 w-4" />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="text-muted-foreground"
+            title={refreshing ? "Syncing tasks" : "Refresh tasks"}
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           </Button>
           <Button
             size="sm"

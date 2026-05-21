@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -145,6 +146,9 @@ export function TaskDialog({
       <DialogContent className="max-w-lg flex flex-col max-h-[90dvh]">
         <DialogHeader className="shrink-0">
           <DialogTitle>{task ? "Edit Task" : "New Task"}</DialogTitle>
+          <DialogDescription className="sr-only">
+            {task ? "Edit task details, dates, status, and reminders." : "Create a task with details, dates, status, and reminders."}
+          </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col flex-1 min-h-0">
@@ -203,10 +207,10 @@ export function TaskDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">None</SelectItem>
-                  <SelectItem value="low">🟦 Low</SelectItem>
-                  <SelectItem value="medium">🟦 Medium</SelectItem>
-                  <SelectItem value="high">🟧 High</SelectItem>
-                  <SelectItem value="urgent">🔴 Urgent</SelectItem>
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="urgent">Urgent</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -259,7 +263,7 @@ export function TaskDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={saving}>
-              {saving ? "Saving…" : task ? "Save Changes" : "Create Task"}
+              {saving ? "Saving..." : task ? "Save Changes" : "Create Task"}
             </Button>
           </DialogFooter>
         </form>
