@@ -39,6 +39,8 @@ class HealthSnapshotOut(BaseModel):
     calories: Optional[int] = None
     distance_km: Optional[float] = None
     sleep_hours: Optional[float] = None
+    heart_rate_bpm: Optional[float] = None
+    heart_points: Optional[float] = None
     sleep_stages: Optional[Dict[str, Any]] = None
     activities: Optional[Any] = None
     created_at: Optional[datetime] = None

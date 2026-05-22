@@ -8,6 +8,7 @@ import {
   Flame,
   Footprints,
   Heart,
+  HeartPulse,
   MapPin,
   Moon,
   RefreshCw,
@@ -20,7 +21,9 @@ import {
   Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
+import { useSessionMessages } from "@/lib/useSessionMessages"
 import {
   HealthAgentMessage,
   HealthSnapshot,
@@ -277,6 +280,85 @@ function WeeklyBar({ snapshots }: { snapshots: HealthSnapshot[] }) {
   )
 }
 
+function HeartMetricCard({
+  icon: Icon,
+  label,
+  value,
+  unit,
+  goal,
+  helper,
+  accent,
+}: {
+  icon: React.ElementType
+  label: string
+  value: number | null
+  unit: string
+  goal: number
+  helper: string
+  accent: {
+    text: string
+    stroke: string
+    bg: string
+    ring: string
+  }
+}) {
+  const percentage = pct(value, goal)
+  const displayValue = value == null ? "-" : formatNumber(value)
+
+  return (
+    <div className="rounded-2xl border border-border/40 bg-card/40 p-4 sm:p-5">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="mb-3 flex items-center gap-2">
+            <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${accent.bg} ${accent.ring}`}>
+              <Icon className={`h-4 w-4 ${accent.text}`} />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-foreground">{label}</p>
+              <p className="text-[11px] text-muted-foreground">{helper}</p>
+            </div>
+          </div>
+
+          <div className="flex items-baseline gap-1.5">
+            <span className={`text-3xl font-black tabular-nums ${accent.text}`}>
+              {displayValue}
+            </span>
+            <span className="text-sm font-medium text-muted-foreground">{unit}</span>
+          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            {value == null ? "No heart data synced yet" : `${percentage}% of reference ${goal} ${unit}`}
+          </p>
+        </div>
+
+        <div className="relative h-24 w-24 shrink-0 sm:h-28 sm:w-28">
+          <svg viewBox="0 0 80 80" className="h-full w-full">
+            <path
+              d="M40 70C20 55 10 44 10 29C10 18 17 11 27 11C33 11 38 14 40 20C42 14 47 11 53 11C63 11 70 18 70 29C70 44 60 55 40 70Z"
+              fill="currentColor"
+              className="text-border/20"
+            />
+            <path
+              d="M40 70C20 55 10 44 10 29C10 18 17 11 27 11C33 11 38 14 40 20C42 14 47 11 53 11C63 11 70 18 70 29C70 44 60 55 40 70Z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              pathLength={100}
+              strokeDasharray={100}
+              strokeDashoffset={100 - percentage}
+              className={accent.stroke}
+            />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <Icon className={`h-6 w-6 ${accent.text}`} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Sleep card ───────────────────────────────────────────────────────────────────
 
 function SleepCard({ snapshot }: { snapshot: HealthSnapshot | null }) {
@@ -455,7 +537,7 @@ function ChatBubble({ msg }: { msg: HealthAgentMessage }) {
       <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-line ${
         isUser ? "bg-primary/15 text-foreground rounded-br-sm" : "bg-muted/50 text-foreground rounded-bl-sm"
       }`}>
-        {msg.content}
+        <AgentMessageContent content={msg.content} />
       </div>
     </div>
   )
@@ -472,7 +554,7 @@ export default function HealthPage() {
 
   // Agent panel
   const [agentOpen, setAgentOpen] = useState(false)
-  const [chatMessages, setChatMessages] = useState<HealthAgentMessage[]>([
+  const [chatMessages, setChatMessages] = useSessionMessages<HealthAgentMessage>("numa:session:health-agent-chat", [
     { role: "assistant", content: "Hi! I'm your NUMA Health agent. I can show your fitness data, weekly trends, and personalized insights from Google Fit and Strava. What would you like to know?" },
   ])
   const [chatInput, setChatInput] = useState("")
@@ -611,6 +693,38 @@ export default function HealthPage() {
 
       {/* Health Score */}
       <HealthScore snapshot={todayGfit} />
+
+      {/* Heart Metrics */}
+      <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <HeartMetricCard
+          icon={HeartPulse}
+          label="Heart Rate"
+          value={todayGfit?.heart_rate_bpm ?? null}
+          unit="bpm"
+          goal={120}
+          helper="Daily average from Google Fit"
+          accent={{
+            text: "text-rose-400",
+            stroke: "text-rose-400",
+            bg: "bg-rose-500/10",
+            ring: "ring-1 ring-rose-500/20",
+          }}
+        />
+        <HeartMetricCard
+          icon={Heart}
+          label="Heart Points"
+          value={todayGfit?.heart_points ?? null}
+          unit="pts"
+          goal={30}
+          helper="Move minutes with higher intensity"
+          accent={{
+            text: "text-pink-400",
+            stroke: "text-pink-400",
+            bg: "bg-pink-500/10",
+            ring: "ring-1 ring-pink-500/20",
+          }}
+        />
+      </section>
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">

@@ -29,6 +29,25 @@ log = logging.getLogger(__name__)
 _SLACK_EMBED_DIM = 384          # all-MiniLM-L6-v2
 _RETENTION_DAYS  = int(os.getenv("SLACK_MESSAGE_RETENTION_DAYS", "7"))
 
+_TRANSIENT_NETWORK_MARKERS = (
+    "getaddrinfo failed",
+    "could not translate host name",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "unable to find the server",
+    "server closed the connection unexpectedly",
+    "connection unexpectedly",
+    "connection reset",
+    "connection refused",
+    "timed out",
+    "timeout",
+)
+
+
+def _is_transient_network_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _TRANSIENT_NETWORK_MARKERS)
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -64,7 +83,10 @@ def _slack_collection_names(qdrant) -> List[str]:
             if getattr(collection, "name", "").endswith("_slack")
         ]
     except Exception as exc:
-        log.warning("Slack Qdrant purge: failed to list collections: %s", exc)
+        if _is_transient_network_error(exc):
+            log.debug("Slack Qdrant purge skipped while listing collections: %s", exc)
+        else:
+            log.warning("Slack Qdrant purge: failed to list collections: %s", exc)
         return []
 
 
@@ -337,5 +359,8 @@ def purge_old_messages(cutoff: Optional[datetime] = None) -> int:
         )
         return -1  # Qdrant delete returns no count; caller logs approximate
     except Exception as exc:
-        log.warning("Slack Qdrant purge failed: %s", exc)
+        if _is_transient_network_error(exc):
+            log.debug("Slack Qdrant purge skipped: %s", exc)
+        else:
+            log.warning("Slack Qdrant purge failed: %s", exc)
         return 0

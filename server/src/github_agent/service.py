@@ -27,7 +27,7 @@ GITHUB_AGENT_SYSTEM_PROMPT = (
     "commits, pull requests, repositories, and contribution stats. "
     "Always use tools to fetch real data from the GitHub API - never fabricate numbers. "
     "If GitHub is not connected, guide users to Settings to connect their account. "
-    "Keep responses concise and developer-friendly."
+    "Keep responses concise and developer-friendly. Do not use emojis. Use plain Markdown when structure helps."
 )
 
 
@@ -133,7 +133,7 @@ def _github_toolset(tool_decorator, user_id: str):
             lines.append(
                 f"  - {r['full_name']} ({vis}) | "
                 f"{r.get('language') or 'N/A'} | "
-                f"⭐ {r['stars']} | 🍴 {r['forks']}"
+                f"stars {r['stars']} | forks {r['forks']}"
             )
         return "\n".join(lines)
 

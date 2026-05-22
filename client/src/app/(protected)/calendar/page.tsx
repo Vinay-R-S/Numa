@@ -7,6 +7,7 @@ import CalendarView from "@/components/calendar/CalendarView"
 import DayTimeline from "@/components/calendar/DayTimeline"
 import { EventEditDialog } from "@/components/calendar/EventEditDialog"
 import { AgentSuggestions } from "@/components/calendar/AgentSuggestions"
+import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 import { Button } from "@/components/ui/button"
 import { useCalendarStore } from "@/lib/stores"
 import {
@@ -325,7 +326,7 @@ export default function CalendarPage() {
                     : "mr-auto w-fit max-w-[90%] rounded-lg bg-muted/60 px-3 py-2 text-sm text-foreground"
                 }
               >
-                {message.content}
+                <AgentMessageContent content={message.content} />
               </div>
             ))}
           </div>

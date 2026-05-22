@@ -13,7 +13,26 @@ import httpx
 log = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
-GITHUB_TIMEOUT = httpx.Timeout(connect=3.0, read=6.0, write=3.0, pool=3.0)
+GITHUB_TIMEOUT = httpx.Timeout(connect=4.0, read=10.0, write=4.0, pool=4.0)
+
+_TRANSIENT_NETWORK_MARKERS = (
+    "getaddrinfo failed",
+    "could not translate host name",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "unable to find the server",
+    "connection reset",
+    "connection refused",
+    "timed out",
+    "timeout",
+)
+
+
+def _is_transient_network_error(exc: Exception) -> bool:
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in _TRANSIENT_NETWORK_MARKERS)
 
 
 class GitHubClient:
@@ -76,7 +95,10 @@ class GitHubClient:
             try:
                 repo_commits = self._get(f"/repos/{full_name}/commits", {"per_page": per_repo})
             except Exception as exc:
-                log.warning("Failed to fetch commits for %s: %s", full_name, exc)
+                if _is_transient_network_error(exc):
+                    log.debug("Skipped fetching commits for %s: %s", full_name, exc)
+                else:
+                    log.warning("Failed to fetch commits for %s: %s", full_name, exc)
                 return []
 
             rows = []
@@ -104,7 +126,10 @@ class GitHubClient:
                 try:
                     commits.extend(future.result())
                 except Exception as exc:
-                    log.warning("Failed to collect GitHub commits: %s", exc)
+                    if _is_transient_network_error(exc):
+                        log.debug("Skipped collecting GitHub commits: %s", exc)
+                    else:
+                        log.warning("Failed to collect GitHub commits: %s", exc)
 
         return sorted(commits, key=lambda item: item.get("date") or "", reverse=True)[:20]
 
@@ -118,7 +143,10 @@ class GitHubClient:
             )
             return result.get("total_count", 0)
         except Exception as exc:
-            log.warning("Failed to count commits: %s", exc)
+            if _is_transient_network_error(exc):
+                log.debug("Skipped counting GitHub commits for %s: %s", username, exc)
+            else:
+                log.warning("Failed to count commits: %s", exc)
             return 0
 
     def get_open_prs(self, username: str) -> list[dict]:
@@ -140,7 +168,10 @@ class GitHubClient:
                 for pr in items
             ]
         except Exception as exc:
-            log.warning("Failed to fetch open PRs: %s", exc)
+            if _is_transient_network_error(exc):
+                log.debug("Skipped fetching open PRs: %s", exc)
+            else:
+                log.warning("Failed to fetch open PRs: %s", exc)
             return []
 
     def get_recent_activity(self, username: str, per_page: int = 30) -> list[dict]:
@@ -181,7 +212,10 @@ class GitHubClient:
                 try:
                     results[name] = future.result()
                 except Exception as exc:
-                    log.warning("GitHub stats segment failed (%s): %s", name, exc)
+                    if _is_transient_network_error(exc):
+                        log.debug("Skipped GitHub stats segment %s: %s", name, exc)
+                    else:
+                        log.warning("GitHub stats segment failed (%s): %s", name, exc)
 
         user = results.get("user") or {}
         repos = results.get("repos") or []

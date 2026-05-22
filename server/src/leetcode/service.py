@@ -28,7 +28,7 @@ LEETCODE_AGENT_SYSTEM_PROMPT = (
     "breakdown, ranking) and recent accepted submissions. "
     "Always use tools to fetch real data - never fabricate stats or problem names. "
     "If a username is not provided, ask the user for it. "
-    "Keep responses concise, encouraging, and coding-focused."
+    "Keep responses concise, encouraging, and coding-focused. Do not use emojis. Use plain Markdown when structure helps."
 )
 
 

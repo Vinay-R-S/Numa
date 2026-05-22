@@ -9,7 +9,6 @@ import {
   Sparkles,
   Loader2,
   X,
-  ChevronRight,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -20,7 +19,6 @@ import {
   createJournalEntry,
   updateJournalEntry,
   deleteJournalEntry,
-  generateDaySummary,
   autoGenerateJournal,
 } from "@/components/journal/journalApi"
 
@@ -166,7 +164,6 @@ export default function JournalPage() {
   // Action states
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [summarizing, setSummarizing] = useState(false)
   const [autoGenerating, setAutoGenerating] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
@@ -325,19 +322,6 @@ export default function JournalPage() {
 
   // ── Summarize ─────────────────────────────────────────────────────────────────
 
-  const handleSummarize = async () => {
-    setSummarizing(true)
-    setError(null)
-    try {
-      const result = await generateDaySummary(entryDate)
-      setAiSummary(result.summary)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate summary")
-    } finally {
-      setSummarizing(false)
-    }
-  }
-
   // ── Auto Generate ─────────────────────────────────────────────────────────────
 
   const handleAutoGenerate = async () => {
@@ -397,10 +381,9 @@ export default function JournalPage() {
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            variant="outline"
             onClick={() => void handleAutoGenerate()}
             disabled={autoGenerating}
-            className="gap-2 border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300"
+            className="gap-2 bg-amber-500 text-black shadow-sm hover:bg-amber-400"
           >
             {autoGenerating ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -408,7 +391,7 @@ export default function JournalPage() {
               <Sparkles className="h-4 w-4" />
             )}
             <span className="hidden sm:inline">
-              {autoGenerating ? "Generating…" : "Auto Generate"}
+              {autoGenerating ? "Generating..." : "Auto Generate"}
             </span>
           </Button>
           <Button size="sm" onClick={handleNew} className="gap-2">
@@ -564,25 +547,11 @@ export default function JournalPage() {
 
               {/* AI Summary */}
               <div className="rounded-xl border border-border/40 bg-card/40 px-5 py-4">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2 mb-2">
                   <div className="flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-amber-400" />
                     <p className="text-xs font-semibold text-muted-foreground">AI Summary</p>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void handleSummarize()}
-                    disabled={summarizing}
-                    className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    {summarizing ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Sparkles className="h-3.5 w-3.5" />
-                    )}
-                    {summarizing ? "Generating…" : "Summarize My Day"}
-                  </Button>
                 </div>
                 {aiSummary ? (
                   <p className="text-sm text-foreground/80 leading-relaxed whitespace-pre-line">
@@ -590,7 +559,7 @@ export default function JournalPage() {
                   </p>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">
-                    No summary yet. Click &ldquo;Summarize My Day&rdquo; to generate one with AI.
+                    Auto Generate will create the entry and summary from your day data.
                   </p>
                 )}
               </div>

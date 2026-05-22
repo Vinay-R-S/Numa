@@ -392,6 +392,8 @@ CREATE TABLE IF NOT EXISTS public.health_snapshots (
         calories        INTEGER,
         distance_km     REAL,
         sleep_hours     REAL,
+        heart_rate_bpm  REAL,
+        heart_points    REAL,
         sleep_stages    JSONB,
         activities      JSONB,
         raw_data        JSONB,
@@ -399,6 +401,10 @@ CREATE TABLE IF NOT EXISTS public.health_snapshots (
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (user_id, source, snapshot_date)
     );
+
+ALTER TABLE public.health_snapshots ADD COLUMN IF NOT EXISTS heart_rate_bpm REAL;
+
+ALTER TABLE public.health_snapshots ADD COLUMN IF NOT EXISTS heart_points REAL;
 
 DO $$ BEGIN
         IF NOT EXISTS (

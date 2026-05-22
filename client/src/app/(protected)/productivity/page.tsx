@@ -9,6 +9,7 @@ import {
   GitFork,
   GitPullRequest,
   Loader2,
+  RefreshCw,
   Star,
   Trophy,
   Unlink,
@@ -259,7 +260,7 @@ function GitHubSection() {
           disabled={refreshing}
           className="text-muted-foreground hover:text-foreground gap-1.5"
         >
-          <Loader2 className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+          <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
           <span className="hidden sm:inline">{refreshing ? "Refreshing" : "Refresh"}</span>
         </Button>
         <Button

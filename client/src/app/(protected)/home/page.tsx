@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts"
 import {
   Bot, BrainCircuit, Send, RefreshCw, CalendarDays, CheckSquare,
-  MessageSquare, Activity, GitBranch, Code2, BookOpen, Loader2,
+  Slack, Activity, GitBranch, Code2, BookOpen, Loader2,
   ArrowRight, TrendingUp, Footprints, Flame, Moon, Clock, Sparkles, X,
   ListTodo, AlertCircle, Zap, MapPin, Heart,
 } from "lucide-react"
@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { cn } from "@/lib/utils"
+import { useSessionMessages } from "@/lib/useSessionMessages"
 import { useDashboardStore } from "@/lib/stores"
 import { getHealthSnapshots, type HealthSnapshot } from "@/components/health/healthApi"
 import {
@@ -20,6 +21,7 @@ import {
   fetchLatestAgentData,
   sendMasterAgentCommand,
 } from "@/components/agents/masterAgentApi"
+import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 
 interface User { id: string; email: string; full_name?: string }
 
@@ -372,7 +374,7 @@ export default function HomePage() {
   const [healthSnapshots, setHealthSnapshots] = useState<HealthSnapshot[]>([])
   const [syncingAll, setSyncingAll] = useState(false)
 
-  const [messages, setMessages] = useState<MasterAgentMessage[]>([
+  const [messages, setMessages] = useSessionMessages<MasterAgentMessage>("numa:session:master-agent-chat", [
     { role: "assistant", content: "I'm your Master Agent. I can manage Calendar, Tasks, Slack, Health, GitHub, LeetCode, and Journal for you. What would you like to do?" },
   ])
   const [input, setInput] = useState("")
@@ -513,7 +515,7 @@ export default function HomePage() {
             {/* Calendar + Slack + Journal Row */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <StatCard icon={CalendarDays} label="Events Today" value={stats.calendar.today_events} sub={`${upcomingEvents.length} upcoming`} href="/calendar" iconColor={ICON_COLORS.calendar} />
-              <StatCard icon={MessageSquare} label="Slack Messages" value={stats.slack.messages_7d} sub={`${stats.slack.active_channels} channels (7d)`} href="/slack" iconColor={ICON_COLORS.slack} />
+              <StatCard icon={Slack} label="Slack Messages" value={stats.slack.messages_7d} sub={`${stats.slack.active_channels} channels (7d)`} href="/slack" iconColor={ICON_COLORS.slack} />
               <StatCard icon={BookOpen} label="Journal Streak" value={`${stats.journal.streak}d`} sub={stats.journal.today_mood ? `Today: ${stats.journal.today_mood}` : "No entry yet"} href="/journal" iconColor={ICON_COLORS.journal} />
             </div>
 
@@ -671,7 +673,7 @@ export default function HomePage() {
                 )}
               >
                 {msg.role === "assistant" && <Bot className="mr-1 inline h-3 w-3 text-primary" />}
-                {msg.content}
+                <AgentMessageContent content={msg.content} />
               </div>
             ))}
             {sending && (

@@ -193,7 +193,8 @@ def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
         health_today = _safe_query(
             conn,
             """
-            SELECT source, steps, active_minutes, calories, distance_km, sleep_hours
+            SELECT source, steps, active_minutes, calories, distance_km, sleep_hours,
+                   heart_rate_bpm, heart_points
             FROM public.health_snapshots
             WHERE user_id = %s AND snapshot_date = %s
             """,
@@ -211,6 +212,10 @@ def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
                 health_summary["sleep_hours"] = max(health_summary.get("sleep_hours") or 0, h["sleep_hours"])
             if h.get("distance_km"):
                 health_summary["distance_km"] = max(health_summary.get("distance_km") or 0, h["distance_km"])
+            if h.get("heart_rate_bpm"):
+                health_summary["heart_rate_bpm"] = max(health_summary.get("heart_rate_bpm") or 0, h["heart_rate_bpm"])
+            if h.get("heart_points"):
+                health_summary["heart_points"] = (health_summary.get("heart_points") or 0) + h["heart_points"]
 
         # ── GitHub ─────────────────────────────────────────────────────────
         github_row = _safe_query(

@@ -115,7 +115,8 @@ def _fetch_health_data(user_id: str, target_date: date) -> str:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT source, steps, active_minutes, calories, distance_km, sleep_hours
+            SELECT source, steps, active_minutes, calories, distance_km, sleep_hours,
+                   heart_rate_bpm, heart_points
             FROM public.health_snapshots
             WHERE user_id = %s AND snapshot_date = %s
             """,
@@ -126,7 +127,7 @@ def _fetch_health_data(user_id: str, target_date: date) -> str:
         if not rows:
             return ""
         lines = ["Health data:"]
-        for src, steps, active, cal, dist, sleep in rows:
+        for src, steps, active, cal, dist, sleep, heart_rate, heart_points in rows:
             parts = [f"Source: {src}"]
             if steps:
                 parts.append(f"Steps: {steps:,}")
@@ -138,6 +139,10 @@ def _fetch_health_data(user_id: str, target_date: date) -> str:
                 parts.append(f"Distance: {dist}km")
             if sleep:
                 parts.append(f"Sleep: {sleep}h")
+            if heart_rate:
+                parts.append(f"Heart rate: {heart_rate:g} bpm")
+            if heart_points:
+                parts.append(f"Heart points: {heart_points:g}")
             lines.append(f"  {', '.join(parts)}")
         return "\n".join(lines)
     except Exception:
@@ -154,13 +159,21 @@ def _fetch_slack_highlights(user_id: str, target_date: date) -> str:
         end = start + timedelta(days=1)
         cur.execute(
             """
-            SELECT channel_name, sender_name, content
+            SELECT channel_name, sender_name, text
             FROM public.slack_messages
-            WHERE user_id = %s AND ts >= %s AND ts < %s
-            ORDER BY ts DESC
+            WHERE user_id = %s
+              AND (
+                (created_at >= %s AND created_at < %s)
+                OR (
+                  ts ~ '^[0-9]+(\.[0-9]+)?$'
+                  AND to_timestamp(ts::double precision) >= %s
+                  AND to_timestamp(ts::double precision) < %s
+                )
+              )
+            ORDER BY created_at DESC
             LIMIT 15
             """,
-            (user_id, start, end),
+            (user_id, start, end, start, end),
         )
         rows = cur.fetchall()
         cur.close()
@@ -177,7 +190,7 @@ def _fetch_slack_highlights(user_id: str, target_date: date) -> str:
         conn.close()
 
 
-def _fetch_github_activity(user_id: str) -> str:
+def _fetch_github_activity(user_id: str, target_date: date | None = None) -> str:
     conn = _get_conn()
     try:
         cur = conn.cursor()
@@ -189,7 +202,31 @@ def _fetch_github_activity(user_id: str) -> str:
         cur.close()
         if not row or not row[0]:
             return ""
-        return f"GitHub: Connected as {row[0]}"
+        username = row[0]
+        if target_date is None:
+            return f"GitHub: Connected as {username}"
+
+        cur = conn.cursor()
+        start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        end = start + timedelta(days=1)
+        cur.execute(
+            """
+            SELECT repo_full_name, message
+            FROM public.github_commits
+            WHERE user_id = %s AND committed_at >= %s AND committed_at < %s
+            ORDER BY committed_at DESC
+            LIMIT 10
+            """,
+            (user_id, start, end),
+        )
+        commits = cur.fetchall()
+        cur.close()
+        if not commits:
+            return f"GitHub: Connected as {username}"
+        lines = [f"GitHub activity for {username} ({len(commits)} cached commits):"]
+        for repo, message in commits:
+            lines.append(f"  - {repo}: {(message or 'Commit')[:120]}")
+        return "\n".join(lines)
     except Exception:
         return ""
     finally:
@@ -291,6 +328,8 @@ def generate_daily_summary(user_id: str, target_date: date) -> str:
         _fetch_calendar_events(user_id, target_date),
         _fetch_completed_tasks(user_id, target_date),
         _fetch_health_data(user_id, target_date),
+        _fetch_slack_highlights(user_id, target_date),
+        _fetch_github_activity(user_id, target_date),
     ]
 
     data_block = "\n\n".join(s for s in sections if s)

@@ -87,6 +87,30 @@ def _sync_strava_with_health_all() -> bool:
     }
 
 
+_TRANSIENT_SYNC_ERROR_MARKERS = (
+    "getaddrinfo failed",
+    "could not translate host name",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "unable to find the server",
+    "server closed the connection unexpectedly",
+    "connection unexpectedly",
+    "connection reset",
+    "connection refused",
+    "timed out",
+    "timeout",
+)
+
+
+def _is_transient_sync_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _TRANSIENT_SYNC_ERROR_MARKERS)
+
+
+def _sync_temporarily_unavailable_detail(source: str) -> str:
+    return f"{source} temporarily unavailable; sync skipped"
+
+
 # ── DB helpers ───────────────────────────────────────────────────────────────
 
 def _row_to_dict(row, description) -> dict:
@@ -127,6 +151,8 @@ def _store_health_snapshot_vector(
             f"Calories: {data.get('calories') if data.get('calories') is not None else 'unknown'}.\n"
             f"Distance km: {data.get('distance_km') if data.get('distance_km') is not None else 'unknown'}.\n"
             f"Sleep hours: {data.get('sleep_hours') if data.get('sleep_hours') is not None else 'unknown'}.\n"
+            f"Heart rate bpm: {data.get('heart_rate_bpm') if data.get('heart_rate_bpm') is not None else 'unknown'}.\n"
+            f"Heart points: {data.get('heart_points') if data.get('heart_points') is not None else 'unknown'}.\n"
             f"Sleep stages: {sleep_text or 'none'}.\n"
             f"Activities: {activities_text or 'none'}."
         )
@@ -143,6 +169,8 @@ def _store_health_snapshot_vector(
                 "calories": data.get("calories"),
                 "distance_km": data.get("distance_km"),
                 "sleep_hours": data.get("sleep_hours"),
+                "heart_rate_bpm": data.get("heart_rate_bpm"),
+                "heart_points": data.get("heart_points"),
             },
         )
     except Exception as exc:
@@ -163,8 +191,9 @@ def upsert_health_snapshot(
             """
             INSERT INTO public.health_snapshots
                 (user_id, source, snapshot_date, steps, active_minutes, calories,
-                 distance_km, sleep_hours, sleep_stages, activities)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 distance_km, sleep_hours, heart_rate_bpm, heart_points,
+                 sleep_stages, activities)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, source, snapshot_date)
             DO UPDATE SET
                 steps          = EXCLUDED.steps,
@@ -172,6 +201,8 @@ def upsert_health_snapshot(
                 calories       = EXCLUDED.calories,
                 distance_km    = EXCLUDED.distance_km,
                 sleep_hours    = EXCLUDED.sleep_hours,
+                heart_rate_bpm = EXCLUDED.heart_rate_bpm,
+                heart_points   = EXCLUDED.heart_points,
                 sleep_stages   = EXCLUDED.sleep_stages,
                 activities     = EXCLUDED.activities,
                 updated_at     = NOW()
@@ -185,6 +216,8 @@ def upsert_health_snapshot(
                 data.get("calories"),
                 data.get("distance_km"),
                 data.get("sleep_hours"),
+                data.get("heart_rate_bpm"),
+                data.get("heart_points"),
                 json.dumps(data.get("sleep_stages")) if data.get("sleep_stages") else None,
                 json.dumps(data.get("activities")) if data.get("activities") else None,
             ),
@@ -222,7 +255,15 @@ def delete_health_snapshot(user_id: str, source: str, snapshot_date: date) -> No
 
 
 def _has_health_values(data: Dict) -> bool:
-    numeric_keys = ("steps", "active_minutes", "calories", "distance_km", "sleep_hours")
+    numeric_keys = (
+        "steps",
+        "active_minutes",
+        "calories",
+        "distance_km",
+        "sleep_hours",
+        "heart_rate_bpm",
+        "heart_points",
+    )
     if any((data.get(key) or 0) > 0 for key in numeric_keys):
         return True
     sleep_stages = data.get("sleep_stages")
@@ -250,7 +291,8 @@ def get_health_snapshots(
             cur.execute(
                 """
                 SELECT id, user_id, source, snapshot_date, steps, active_minutes,
-                       calories, distance_km, sleep_hours, sleep_stages, activities,
+                       calories, distance_km, sleep_hours, heart_rate_bpm,
+                       heart_points, sleep_stages, activities,
                        created_at, updated_at
                 FROM public.health_snapshots
                 WHERE user_id = %s AND source = %s AND snapshot_date >= %s
@@ -262,7 +304,8 @@ def get_health_snapshots(
             cur.execute(
                 """
                 SELECT id, user_id, source, snapshot_date, steps, active_minutes,
-                       calories, distance_km, sleep_hours, sleep_stages, activities,
+                       calories, distance_km, sleep_hours, heart_rate_bpm,
+                       heart_points, sleep_stages, activities,
                        created_at, updated_at
                 FROM public.health_snapshots
                 WHERE user_id = %s AND snapshot_date >= %s
@@ -341,8 +384,17 @@ def sync_google_fit_for_user(user_id: str, target_date: Optional[date] = None) -
     except FileNotFoundError as exc:
         return {"ok": False, "source": "google_fit", "detail": str(exc)}
     except Exception as exc:
+        if _is_transient_sync_error(exc):
+            log.debug("Google Fit sync skipped: %s", exc)
+            return {
+                "ok": False,
+                "source": "google_fit",
+                "snapshot_date": target.isoformat(),
+                "detail": _sync_temporarily_unavailable_detail("Google Fit"),
+                "transient": True,
+            }
         log.error("Google Fit sync failed: %s", exc)
-        return {"ok": False, "source": "google_fit", "detail": str(exc)}
+        return {"ok": False, "source": "google_fit", "snapshot_date": target.isoformat(), "detail": str(exc)}
 
 
 # ── Strava sync ──────────────────────────────────────────────────────────────
@@ -370,6 +422,8 @@ def sync_strava_for_user(user_id: str, target_date: Optional[date] = None) -> Di
             "calories": summary.get("total_calories"),
             "distance_km": summary.get("total_distance_km"),
             "sleep_hours": None,
+            "heart_rate_bpm": None,
+            "heart_points": None,
             "activities": raw.get("activities", []),
         }
         if not _has_health_values(snapshot_data):
@@ -404,9 +458,14 @@ def sync_health_for_user(user_id: str) -> Dict:
     gfit_results = []
     strava_results = []
     sync_strava = _sync_strava_with_health_all()
+    gfit_unavailable = False
     for offset in range(days):
         target = date.today() - timedelta(days=offset)
-        gfit_results.append(sync_google_fit_for_user(user_id, target_date=target))
+        if not gfit_unavailable:
+            gfit_result = sync_google_fit_for_user(user_id, target_date=target)
+            gfit_results.append(gfit_result)
+            if gfit_result.get("transient"):
+                gfit_unavailable = True
         if sync_strava:
             strava_results.append(sync_strava_for_user(user_id, target_date=target))
 
@@ -469,6 +528,8 @@ def get_snapshots(
             calories=r.get("calories"),
             distance_km=r.get("distance_km"),
             sleep_hours=r.get("sleep_hours"),
+            heart_rate_bpm=r.get("heart_rate_bpm"),
+            heart_points=r.get("heart_points"),
             sleep_stages=r.get("sleep_stages"),
             activities=r.get("activities"),
             created_at=r.get("created_at"),

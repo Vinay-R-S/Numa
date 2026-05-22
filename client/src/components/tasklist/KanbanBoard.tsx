@@ -13,7 +13,7 @@ import {
   type DragEndEvent,
   type DragOverEvent,
 } from "@dnd-kit/core"
-import { Plus, RefreshCw } from "lucide-react"
+import { LoaderCircle, Plus } from "lucide-react"
 import type { Task, TaskStatus } from "./types"
 import { KanbanColumn } from "./KanbanColumn"
 import { TaskCard } from "./TaskCard"
@@ -282,7 +282,7 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh, refreshing = fals
             className="text-muted-foreground"
             title={refreshing ? "Syncing tasks" : "Refresh tasks"}
           >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            <LoaderCircle className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           </Button>
           <Button
             size="sm"

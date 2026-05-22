@@ -27,6 +27,8 @@ export interface HealthSnapshot {
   calories: number | null
   distance_km: number | null
   sleep_hours: number | null
+  heart_rate_bpm: number | null
+  heart_points: number | null
   sleep_stages: { deep?: number; light?: number; rem?: number; generic?: number } | null
   activities: Record<string, number> | Array<Record<string, unknown>> | null
   created_at?: string | null

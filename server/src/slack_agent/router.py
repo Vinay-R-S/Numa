@@ -56,6 +56,36 @@ router = APIRouter(prefix="/slack", tags=["slack"])
 _last_channel_backfill = 0.0
 _slack_user_name_cache: dict[str, tuple[float, str]] = {}
 
+_TRANSIENT_DEPENDENCY_MARKERS = (
+    "getaddrinfo failed",
+    "could not translate host name",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "unable to find the server",
+    "server closed the connection unexpectedly",
+    "connection unexpectedly",
+    "connection reset",
+    "connection refused",
+    "timed out",
+    "timeout",
+)
+
+
+def _is_transient_dependency_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _TRANSIENT_DEPENDENCY_MARKERS)
+
+
+def _temporary_unavailable_detail(service: str) -> str:
+    return f"{service} temporarily unavailable; sync skipped"
+
+
+def _log_dependency_exception(message: str, exc: Exception, *args) -> None:
+    if _is_transient_dependency_error(exc):
+        log.debug(message, *args, exc)
+    else:
+        log.warning(message, *args, exc)
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 def _signing_secret() -> str:
@@ -227,8 +257,9 @@ def _user_ids_for_slack_team(team_id: str) -> list[str]:
     if not team_id:
         return []
 
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
             "SELECT user_id FROM public.slack_auth WHERE slack_team_id = %s",
@@ -238,10 +269,11 @@ def _user_ids_for_slack_team(team_id: str) -> list[str]:
         cur.close()
         return [str(row[0]) for row in rows if row and row[0]]
     except Exception as exc:
-        log.warning("_user_ids_for_slack_team failed: %s", exc)
+        _log_dependency_exception("_user_ids_for_slack_team failed: %s", exc)
         return []
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def _team_bot_token(team_id: str) -> Optional[str]:
@@ -668,18 +700,20 @@ def _save_slack_message_for_user(
 
 
 def get_all_connected_slack_user_ids() -> list[str]:
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute("SELECT user_id FROM public.slack_auth")
         rows = cur.fetchall() or []
         cur.close()
         return [str(row[0]) for row in rows]
     except Exception as exc:
-        log.warning("get_all_connected_slack_user_ids failed: %s", exc)
+        _log_dependency_exception("get_all_connected_slack_user_ids failed: %s", exc)
         return []
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def fetch_latest_slack_for_user(user_id: str) -> dict:
@@ -702,10 +736,12 @@ def fetch_latest_slack_for_user(user_id: str) -> dict:
         row = cur.fetchone()
         cur.close()
     except Exception as exc:
-        log.warning("fetch_latest_slack_for_user auth lookup failed: %s", exc)
-        return {"ok": False, "fetched": 0, "channels": 0, "detail": str(exc)}
+        _log_dependency_exception("fetch_latest_slack_for_user auth lookup failed: %s", exc)
+        detail = _temporary_unavailable_detail("Slack database") if _is_transient_dependency_error(exc) else str(exc)
+        return {"ok": False, "fetched": 0, "channels": 0, "detail": detail}
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
     if not row:
         return {"ok": True, "fetched": 0, "channels": 0, "detail": "Slack not connected"}
@@ -812,8 +848,9 @@ def fetch_latest_slack_for_user(user_id: str) -> dict:
                     ):
                         fetched += 1
     except Exception as exc:
-        log.warning("fetch_latest_slack_for_user failed: %s", exc)
-        return {"ok": False, "fetched": fetched, "channels": channels_seen, "detail": str(exc)}
+        _log_dependency_exception("fetch_latest_slack_for_user failed: %s", exc)
+        detail = _temporary_unavailable_detail("Slack") if _is_transient_dependency_error(exc) else str(exc)
+        return {"ok": False, "fetched": fetched, "channels": channels_seen, "detail": detail}
 
     return {"ok": True, "fetched": fetched, "channels": channels_synced, "detail": "Slack fetch complete"}
 
@@ -1434,8 +1471,11 @@ def purge_old_slack_messages():
     purge_old_messages()
 
     # 2. PostgreSQL purge
-    conn = _get_conn()
+    conn = None
+    db_ok = True
+    message = "Old Slack data purged (7-day window)"
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
             "DELETE FROM public.slack_messages WHERE created_at < NOW() - INTERVAL '7 days'"
@@ -1445,9 +1485,13 @@ def purge_old_slack_messages():
         cur.close()
         log.info("Purged %d slack_messages rows older than 7 days", deleted)
     except Exception as exc:
-        log.warning("DB purge failed: %s", exc)
-        conn.rollback()
+        db_ok = False
+        _log_dependency_exception("DB purge failed: %s", exc)
+        message = _temporary_unavailable_detail("Slack database") if _is_transient_dependency_error(exc) else str(exc)
+        if conn:
+            conn.rollback()
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
-    return {"ok": True, "message": "Old Slack data purged (7-day window)"}
+    return {"ok": db_ok, "message": message}

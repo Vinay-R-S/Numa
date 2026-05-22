@@ -31,6 +31,8 @@ interface DashboardStats {
     calories?: number
     sleep_hours?: number
     distance_km?: number
+    heart_rate_bpm?: number
+    heart_points?: number
   }
   github: { connected: boolean; username?: string | null }
   journal: { has_today: boolean; today_mood?: string | null; streak: number }

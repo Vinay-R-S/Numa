@@ -31,7 +31,7 @@ HEALTH_AGENT_SYSTEM_PROMPT = (
     "sync fresh data, provide personalized health insights, and recommend diet plans. "
     "Always use tools to fetch real data - never fabricate health numbers. "
     "If Google Fit is not configured, guide users to set it up. "
-    "Keep responses encouraging, concise, and health-focused. "
+    "Keep responses encouraging, concise, and health-focused. Do not use emojis. Use plain Markdown when structure helps. "
     "When providing diet or food recommendations, ALWAYS include this disclaimer at the start: "
     "'DISCLAIMER: These are general suggestions based on your activity data and are NOT medical advice. "
     "Consult a healthcare professional or registered dietitian before making dietary changes.' "
@@ -98,6 +98,8 @@ def _build_diet_recommendation(user_id: str) -> str:
     calories = best_metric("calories")
     distance = best_metric("distance_km")
     sleep = best_metric("sleep_hours")
+    heart_rate = best_metric("heart_rate_bpm")
+    heart_points = best_metric("heart_points")
 
     available = {
         "steps": steps,
@@ -105,6 +107,8 @@ def _build_diet_recommendation(user_id: str) -> str:
         "calories": calories,
         "distance_km": distance,
         "sleep_hours": sleep,
+        "heart_rate_bpm": heart_rate,
+        "heart_points": heart_points,
     }
     used_metrics = {k: v for k, v in available.items() if v is not None}
 
@@ -177,6 +181,10 @@ def _build_diet_recommendation(user_id: str) -> str:
             lines.append(f"- Distance: {_fmt_metric(distance, 'km')}")
         if sleep is not None:
             lines.append(f"- Sleep: {_fmt_metric(sleep, 'hours')}")
+        if heart_rate is not None:
+            lines.append(f"- Heart rate: {_fmt_metric(heart_rate, 'bpm')}")
+        if heart_points is not None:
+            lines.append(f"- Heart points: {_fmt_metric(heart_points, 'points')}")
     else:
         lines.append("No usable health metrics are available yet, so this is a general balanced plan.")
 
@@ -268,7 +276,7 @@ def _health_toolset(tool_decorator, user_id: str):
 
     @tool_decorator
     def get_todays_health() -> str:
-        """Get today's health data (steps, calories, active minutes, sleep, distance) from stored snapshots.
+        """Get today's health data (steps, calories, active minutes, sleep, distance, heart rate, heart points) from stored snapshots.
         Use this when the user asks about their current health, today's progress, or metrics."""
         snapshots = get_health_snapshots(user_id, days=1)
         today_snaps = [s for s in snapshots if s.get("snapshot_date") == date.today()]
@@ -294,6 +302,10 @@ def _health_toolset(tool_decorator, user_id: str):
                         stages = json.loads(stages)
                     lines.append(f"    Deep: {stages.get('deep', 0)}h, Light: {stages.get('light', 0)}h, "
                                  f"REM: {stages.get('rem', 0)}h")
+            if s.get("heart_rate_bpm") is not None:
+                lines.append(f"  Heart Rate: {s['heart_rate_bpm']} bpm")
+            if s.get("heart_points") is not None:
+                lines.append(f"  Heart Points: {s['heart_points']}")
             acts = s.get("activities")
             if acts:
                 if isinstance(acts, str):
@@ -316,7 +328,12 @@ def _health_toolset(tool_decorator, user_id: str):
             cal = s.get("calories", 0) or 0
             active = s.get("active_minutes", 0) or 0
             sleep = s.get("sleep_hours") or 0
-            lines.append(f"  {d}: {steps:,} steps, {cal:,} kcal, {active} min active, {sleep}h sleep")
+            heart_rate = s.get("heart_rate_bpm") or 0
+            heart_points = s.get("heart_points") or 0
+            lines.append(
+                f"  {d}: {steps:,} steps, {cal:,} kcal, {active} min active, "
+                f"{sleep}h sleep, {heart_rate} bpm, {heart_points} heart points"
+            )
         return "\n".join(lines)
 
     @tool_decorator

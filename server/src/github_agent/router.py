@@ -36,6 +36,32 @@ GITHUB_USER_URL = "https://api.github.com/user"
 
 _oauth_states: dict[str, str] = {}
 
+_TRANSIENT_DEPENDENCY_MARKERS = (
+    "getaddrinfo failed",
+    "could not translate host name",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "unable to find the server",
+    "server closed the connection unexpectedly",
+    "connection unexpectedly",
+    "connection reset",
+    "connection refused",
+    "timed out",
+    "timeout",
+)
+
+
+def _is_transient_dependency_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _TRANSIENT_DEPENDENCY_MARKERS)
+
+
+def _log_dependency_exception(message: str, exc: Exception, *args) -> None:
+    if _is_transient_dependency_error(exc):
+        log.debug(message, *args, exc)
+    else:
+        log.warning(message, *args, exc)
+
 GITHUB_EXPECTED_TOKEN_PERMISSIONS = {
     "actions": "read",
     "commit_statuses": "read",
@@ -113,18 +139,20 @@ def _parse_github_dt(value: str | None):
 
 
 def get_all_connected_github_user_ids() -> list[str]:
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute("SELECT user_id FROM public.github_auth")
         rows = cur.fetchall() or []
         cur.close()
         return [str(row[0]) for row in rows if row and row[0]]
     except Exception as exc:
-        log.warning("Could not list connected GitHub users: %s", exc)
+        _log_dependency_exception("Could not list connected GitHub users: %s", exc)
         return []
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def _store_github_stats_vector(user_id: str, stats: dict) -> None:
@@ -175,14 +203,15 @@ def _store_github_stats_vector(user_id: str, stats: dict) -> None:
             },
         )
     except Exception as exc:
-        log.warning("GitHub Qdrant upsert failed: %s", exc)
+        _log_dependency_exception("GitHub Qdrant upsert failed: %s", exc)
 
 
 def _cache_github_stats(user_id: str, stats: dict) -> None:
     repos = stats.get("recent_repos") or []
     commits = stats.get("recent_commits") or []
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         for repo in repos:
             cur.execute(
@@ -274,14 +303,16 @@ def _cache_github_stats(user_id: str, stats: dict) -> None:
         conn.commit()
         cur.close()
     except Exception as exc:
-        log.warning("GitHub DB cache update failed: %s", exc)
+        _log_dependency_exception("GitHub DB cache update failed: %s", exc)
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def _load_cached_github_stats(user_id: str, username: str) -> dict | None:
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -377,10 +408,11 @@ def _load_cached_github_stats(user_id: str, username: str) -> dict | None:
             "_last_synced_at": last_synced_at,
         }
     except Exception as exc:
-        log.warning("Could not load cached GitHub stats: %s", exc)
+        _log_dependency_exception("Could not load cached GitHub stats: %s", exc)
         return None
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def _cache_is_fresh(stats: dict | None, max_age_minutes: int = 10) -> bool:

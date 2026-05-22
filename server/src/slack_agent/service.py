@@ -42,7 +42,7 @@ SLACK_AGENT_SYSTEM_PROMPT = (
     "When creating a task from Slack, base it on an actual recent Slack message and include slack_ts when available. "
     "Do not invent placeholder tasks like Review PR #42 unless that exact content exists in Slack. "
     "If Slack credentials are not configured, inform the user politely and guide them to Settings → Connect Slack. "
-    "Keep responses concise and action-oriented."
+    "Do not use emojis. Keep responses concise and action-oriented. Use plain Markdown when structure helps."
 )
 
 

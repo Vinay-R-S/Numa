@@ -26,6 +26,7 @@ class GoogleFitClient:
         'https://www.googleapis.com/auth/fitness.activity.read',
         'https://www.googleapis.com/auth/fitness.sleep.read',
         'https://www.googleapis.com/auth/fitness.location.read',
+        'https://www.googleapis.com/auth/fitness.heart_rate.read',
     ]
 
     ACTIVITY_MAP = {
@@ -140,6 +141,19 @@ class GoogleFitClient:
                             total += float(val['intVal']); found = True
         return total if found else None
 
+    @staticmethod
+    def _extract_average_float(response: dict) -> Optional[float]:
+        total, count = 0.0, 0
+        for bucket in response.get('bucket', []):
+            for dataset in bucket.get('dataset', []):
+                for point in dataset.get('point', []):
+                    for val in point.get('value', []):
+                        if 'fpVal' in val:
+                            total += float(val['fpVal']); count += 1
+                        elif 'intVal' in val:
+                            total += float(val['intVal']); count += 1
+        return round(total / count, 1) if count else None
+
     def _aggregate(self, data_type: str, start_ms: int, end_ms: int,
                    source_id: Optional[str] = None) -> dict:
         agg = {"dataTypeName": data_type}
@@ -175,6 +189,13 @@ class GoogleFitClient:
     def fetch_distance(self, start_ms: int, end_ms: int) -> Optional[float]:
         r = self._extract_float(self._aggregate("com.google.distance.delta", start_ms, end_ms))
         return round(r / 1000, 2) if r is not None else None
+
+    def fetch_heart_rate(self, start_ms: int, end_ms: int) -> Optional[float]:
+        return self._extract_average_float(self._aggregate("com.google.heart_rate.bpm", start_ms, end_ms))
+
+    def fetch_heart_points(self, start_ms: int, end_ms: int) -> Optional[float]:
+        r = self._extract_float(self._aggregate("com.google.heart_minutes", start_ms, end_ms))
+        return round(r, 1) if r is not None else None
 
     def fetch_sleep(self, start_ms: int, end_ms: int) -> Optional[Dict]:
         """Fetch sleep data with stage breakdown."""
@@ -260,6 +281,8 @@ class GoogleFitClient:
                 "calories": self.fetch_calories(start_ms, end_ms),
                 "distance_km": distance,
                 "sleep_hours": sleep_result['hours'] if sleep_result else None,
+                "heart_rate_bpm": self.fetch_heart_rate(start_ms, end_ms),
+                "heart_points": self.fetch_heart_points(start_ms, end_ms),
                 "sleep_stages": sleep_result['stages'] if sleep_result else None,
                 "activities": self.fetch_activities(start_ms, end_ms),
                 "time_range": {

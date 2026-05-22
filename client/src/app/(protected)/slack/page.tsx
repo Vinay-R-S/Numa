@@ -2,8 +2,10 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { AlertTriangle, AtSign, Bot, Hash, Lock, Megaphone, MessageSquare, RefreshCw, Send, Slack, Sparkles, User, Wifi, WifiOff, X, Zap } from "lucide-react"
+import { AlertTriangle, AtSign, Bot, Hash, LoaderCircle, Lock, Megaphone, MessageSquare, RefreshCw, Send, Slack, Sparkles, User, Wifi, WifiOff, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
+import { useSessionMessages } from "@/lib/useSessionMessages"
 import {
   Select,
   SelectContent,
@@ -188,7 +190,7 @@ function ChatBubble({ msg }: { msg: SlackAgentMessage }) {
             : "bg-muted/50 text-foreground rounded-bl-sm"
         }`}
       >
-        {msg.content}
+        <AgentMessageContent content={msg.content} />
       </div>
     </div>
   )
@@ -221,7 +223,7 @@ export default function SlackPage() {
   const [agentOpen, setAgentOpen] = useState(false)
 
   // Agent chat
-  const [chatMessages, setChatMessages] = useState<SlackAgentMessage[]>([
+  const [chatMessages, setChatMessages] = useSessionMessages<SlackAgentMessage>("numa:session:slack-agent-chat", [
     {
       role: "assistant",
       content:
@@ -478,7 +480,7 @@ export default function SlackPage() {
             onClick={() => { void checkStatus(); void loadChannels(); void loadMessages() }}
             className="gap-2 text-muted-foreground hover:text-foreground"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${loadingMsgs ? "animate-spin" : ""}`} />
+            <LoaderCircle className={`h-3.5 w-3.5 ${loadingMsgs ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
           <Button
@@ -512,7 +514,7 @@ export default function SlackPage() {
         {/* ── Channel sidebar (desktop) ──────────────────────────────────────── */}
         <aside className="hidden md:flex w-[240px] shrink-0 flex-col border-r border-border/40 bg-card/60">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border/30 shrink-0">
-            <MessageSquare className="h-4 w-4 text-primary/70" />
+            <Slack className="h-4 w-4 text-[#E01E5A]" />
             <span className="text-sm font-semibold text-foreground">Channels</span>
             <span className="ml-auto rounded-full bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground">
               {channels.length}

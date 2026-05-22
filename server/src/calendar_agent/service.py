@@ -24,6 +24,7 @@ SYSTEM_PROMPT = (
     "4. Never invent event IDs or datetimes - always fetch them from the tools first.\n"
     "5. For deletions by description/name (e.g. 'delete the meeting at 10am'), prefer"
     " delete_by_description which matches by title - no ID needed.\n"
+    "6. Do not use emojis. Use plain Markdown when structure helps.\n"
 )
 
 

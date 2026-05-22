@@ -8,6 +8,15 @@ import {
   updateCalendarEvent,
   deleteCalendarEvent,
 } from "@/components/calendar/api"
+import { loadSessionMessages, saveSessionMessages } from "@/lib/useSessionMessages"
+
+const CALENDAR_AGENT_SESSION_KEY = "numa:session:calendar-agent-chat"
+const DEFAULT_CALENDAR_AGENT_MESSAGES: AgentChatMessage[] = [
+  {
+    role: "assistant",
+    content: "I am your Calendar sub-agent. Ask me to create, move, or cancel meetings. Changes sync to both Google Calendar and your task list.",
+  },
+]
 
 interface CalendarStore {
   // State
@@ -38,12 +47,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
   error: null,
   calendarConnected: true,   // optimistically true; set to false on 401
   lastFetchedAt: null,
-  agentMessages: [
-    {
-      role: "assistant",
-      content: "I am your Calendar sub-agent. Ask me to create, move, or cancel meetings. Changes sync to both Google Calendar and your task list.",
-    },
-  ],
+  agentMessages: loadSessionMessages(CALENDAR_AGENT_SESSION_KEY, DEFAULT_CALENDAR_AGENT_MESSAGES),
 
   fetchEvents: async (forceFresh = false) => {
     const { lastFetchedAt, loading } = get()
@@ -159,10 +163,17 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
 
   setEvents: (events) => set({ events }),
 
-  setAgentMessages: (messages) => set({ agentMessages: messages }),
+  setAgentMessages: (messages) => {
+    saveSessionMessages(CALENDAR_AGENT_SESSION_KEY, messages)
+    set({ agentMessages: messages })
+  },
 
   addAgentMessage: (message) =>
-    set((state) => ({ agentMessages: [...state.agentMessages, message] })),
+    set((state) => {
+      const agentMessages = [...state.agentMessages, message]
+      saveSessionMessages(CALENDAR_AGENT_SESSION_KEY, agentMessages)
+      return { agentMessages }
+    }),
 
   clearError: () => set({ error: null }),
 }))
