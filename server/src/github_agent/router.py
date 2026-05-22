@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -279,6 +279,125 @@ def _cache_github_stats(user_id: str, stats: dict) -> None:
         conn.close()
 
 
+def _load_cached_github_stats(user_id: str, username: str) -> dict | None:
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT avatar_url
+            FROM public.github_auth
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        )
+        auth_row = cur.fetchone()
+        avatar_url = auth_row[0] if auth_row else None
+
+        cur.execute(
+            """
+            SELECT name, full_name, private, language, stars, forks,
+                   updated_at_api, html_url, last_synced_at
+            FROM public.github_repositories
+            WHERE user_id = %s
+            ORDER BY COALESCE(pushed_at, updated_at_api, last_synced_at) DESC
+            LIMIT 8
+            """,
+            (user_id,),
+        )
+        repo_rows = cur.fetchall() or []
+        recent_repos = [
+            {
+                "name": row[0],
+                "full_name": row[1],
+                "private": bool(row[2]),
+                "language": row[3],
+                "stars": row[4] or 0,
+                "forks": row[5] or 0,
+                "updated_at": row[6].isoformat() if row[6] else None,
+                "html_url": row[7],
+            }
+            for row in repo_rows
+        ]
+        repo_last_synced = [row[8] for row in repo_rows if row[8]]
+
+        cur.execute(
+            """
+            SELECT repo_full_name, sha, message, author_name, committed_at, html_url, last_synced_at
+            FROM public.github_commits
+            WHERE user_id = %s
+            ORDER BY committed_at DESC NULLS LAST, last_synced_at DESC
+            LIMIT 20
+            """,
+            (user_id,),
+        )
+        commit_rows = cur.fetchall() or []
+        recent_commits = [
+            {
+                "repo": row[0],
+                "sha": (row[1] or "")[:12],
+                "message": row[2] or "Commit",
+                "author": row[3],
+                "date": row[4].isoformat() if row[4] else None,
+                "html_url": row[5],
+            }
+            for row in commit_rows
+        ]
+        commit_last_synced = [row[6] for row in commit_rows if row[6]]
+
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = today_start - timedelta(days=7)
+        total_commits_today = sum(
+            1 for row in commit_rows if row[4] and row[4] >= today_start
+        )
+        total_commits_week = sum(
+            1 for row in commit_rows if row[4] and row[4] >= week_start
+        )
+
+        if not recent_repos and not recent_commits:
+            cur.close()
+            return None
+
+        last_synced_values = repo_last_synced + commit_last_synced
+        last_synced_at = max(last_synced_values) if last_synced_values else None
+        cur.close()
+        return {
+            "username": username,
+            "avatar_url": avatar_url,
+            "public_repos": sum(1 for repo in recent_repos if not repo["private"]),
+            "private_repos": sum(1 for repo in recent_repos if repo["private"]),
+            "followers": 0,
+            "following": 0,
+            "total_commits_today": total_commits_today,
+            "total_commits_week": total_commits_week,
+            "open_prs": 0,
+            "recent_repos": recent_repos,
+            "recent_commits": recent_commits,
+            "_last_synced_at": last_synced_at,
+        }
+    except Exception as exc:
+        log.warning("Could not load cached GitHub stats: %s", exc)
+        return None
+    finally:
+        conn.close()
+
+
+def _cache_is_fresh(stats: dict | None, max_age_minutes: int = 10) -> bool:
+    if not stats:
+        return False
+    last_synced = stats.get("_last_synced_at")
+    if not isinstance(last_synced, datetime):
+        return False
+    return datetime.now(timezone.utc) - last_synced <= timedelta(minutes=max_age_minutes)
+
+
+def _strip_internal_stats_fields(stats: dict) -> dict:
+    cleaned = dict(stats)
+    cleaned.pop("_last_synced_at", None)
+    return cleaned
+
+
 def fetch_and_store_github_stats_for_user(user_id: str) -> dict:
     token = _get_github_token(user_id)
     if not token:
@@ -527,7 +646,10 @@ def disconnect_github(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/stats", response_model=GitHubUserStats)
-def github_stats(current_user: dict = Depends(get_current_user)):
+def github_stats(
+    force: bool = Query(False, description="Force a live GitHub API refresh"),
+    current_user: dict = Depends(get_current_user),
+):
     user_id = current_user.get("sub")
     if not user_id:
         raise HTTPException(401, "Missing user session")
@@ -540,12 +662,22 @@ def github_stats(current_user: dict = Depends(get_current_user)):
     if not username:
         raise HTTPException(400, "GitHub username not found")
 
-    from .github_client import GitHubClient
-    client = GitHubClient(token)
-    stats = client.get_contribution_stats(username)
-    _cache_github_stats(user_id, stats)
-    _store_github_stats_vector(user_id, stats)
-    return GitHubUserStats(**stats)
+    cached = _load_cached_github_stats(user_id, username)
+    if cached and not force:
+        return GitHubUserStats(**_strip_internal_stats_fields(cached))
+
+    try:
+        from .github_client import GitHubClient
+        client = GitHubClient(token)
+        stats = client.get_contribution_stats(username)
+        _cache_github_stats(user_id, stats)
+        _store_github_stats_vector(user_id, stats)
+        return GitHubUserStats(**stats)
+    except Exception as exc:
+        log.warning("Live GitHub stats fetch failed: %s", exc)
+        if cached:
+            return GitHubUserStats(**_strip_internal_stats_fields(cached))
+        raise HTTPException(504, "GitHub took too long to respond. Try again in a moment.")
 
 
 @router.post("/chat", response_model=GitHubChatResponse)

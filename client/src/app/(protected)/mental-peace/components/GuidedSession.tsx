@@ -41,6 +41,7 @@ export function GuidedSession({ mood, onEnd }: GuidedSessionProps) {
   const [isPlaying, setIsPlaying] = useState(true)
   const [timeRemaining, setTimeRemaining] = useState(30)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const yogaAudioRef = useRef<HTMLAudioElement | null>(null)
 
   const currentPose = poses[currentIndex]
   const progress = ((currentIndex + 1) / poses.length) * 100
@@ -69,6 +70,26 @@ export function GuidedSession({ mood, onEnd }: GuidedSessionProps) {
     }
   }, [isPlaying, currentIndex, poses.length, onEnd, timeRemaining])
 
+  useEffect(() => {
+    const audio = yogaAudioRef.current
+    if (!audio) return
+
+    audio.volume = 0.28
+    audio.loop = true
+
+    if (isPlaying) {
+      audio.play().catch(() => {
+        // Session controls continue normally if the browser blocks audio.
+      })
+    } else {
+      audio.pause()
+    }
+
+    return () => {
+      audio.pause()
+    }
+  }, [isPlaying])
+
   const handlePrevious = () => {
     if (currentIndex > 0) {
       setCurrentIndex(currentIndex - 1)
@@ -87,6 +108,13 @@ export function GuidedSession({ mood, onEnd }: GuidedSessionProps) {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
+      <audio
+        ref={yogaAudioRef}
+        src="/api/audio/yoga-flow.ogg"
+        preload="metadata"
+        loop
+      />
+
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border/40 p-4">
         <div className="flex items-center gap-4">

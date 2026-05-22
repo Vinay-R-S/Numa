@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useEffect, useState } from "react"
 import { MoodType } from "./yogaData"
 import { EntryScreen } from "./components/EntryScreen"
 import { MoodSelector } from "./components/MoodSelector"
@@ -21,6 +21,12 @@ const STAGES = {
 export default function MentalPeacePage() {
   const [stage, setStage] = useState<number>(STAGES.ENTRY)
   const [selectedMood, setSelectedMood] = useState<MoodType | null>(null)
+
+  useEffect(() => {
+    fetch("/api/audio-library/ensure", { method: "POST" }).catch(() => {
+      // The player shows its own retry/error state if local audio is unavailable.
+    })
+  }, [])
 
   const handleMoodSelect = (mood: MoodType) => {
     setSelectedMood(mood)

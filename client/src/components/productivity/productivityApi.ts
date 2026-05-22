@@ -110,8 +110,9 @@ export async function connectGitHubToken(accessToken: string): Promise<GitHubAut
   return res.json()
 }
 
-export async function getGitHubStats(): Promise<GitHubStats> {
-  const res = await fetch(`${API_BASE}/api/github/stats`, {
+export async function getGitHubStats(force = false): Promise<GitHubStats> {
+  const qs = force ? "?force=true" : ""
+  const res = await fetch(`${API_BASE}/api/github/stats${qs}`, {
     headers: getAuthHeaders(),
   })
   if (!res.ok) throw new Error("Failed to fetch GitHub stats")

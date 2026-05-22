@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 SERVER_ROOT = Path(__file__).resolve().parent
@@ -21,6 +22,7 @@ from src.journal.router import router as journal_router
 from src.github_agent.router import router as github_router
 from src.leetcode.router import router as leetcode_router
 from src.dashboard.router import router as dashboard_router
+from src.audio_library.router import router as audio_library_router
 from src.db import init_db
 
 log = logging.getLogger(__name__)
@@ -34,6 +36,8 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 IS_DEV = not FRONTEND_URL
 
 app = FastAPI(title="Numa API", version="1.0.0")
+AUDIO_ROOT = SERVER_ROOT / "audio"
+AUDIO_ROOT.mkdir(parents=True, exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,
@@ -137,6 +141,9 @@ app.include_router(journal_router)
 app.include_router(github_router)
 app.include_router(leetcode_router)
 app.include_router(dashboard_router)
+app.include_router(audio_library_router)
+
+app.mount("/audio", StaticFiles(directory=str(AUDIO_ROOT)), name="audio")
 
 
 # ── Public ────────────────────────────────────────────────────────────────────

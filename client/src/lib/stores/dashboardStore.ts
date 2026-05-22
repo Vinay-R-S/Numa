@@ -6,6 +6,12 @@ interface DashboardStats {
     completed: number
     inprogress: number
     pending: number
+    today?: {
+      total: number
+      completed: number
+      inprogress: number
+      pending: number
+    }
     streak: number
     recent: Array<{
       title: string

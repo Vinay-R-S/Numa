@@ -4,6 +4,7 @@ GitHub API v3 client - fetches user stats, commits, PRs, and repos.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -12,6 +13,7 @@ import httpx
 log = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
+GITHUB_TIMEOUT = httpx.Timeout(connect=3.0, read=6.0, write=3.0, pool=3.0)
 
 
 class GitHubClient:
@@ -25,7 +27,7 @@ class GitHubClient:
 
     def _get(self, path: str, params: Optional[dict] = None) -> dict | list:
         url = f"{GITHUB_API}{path}"
-        with httpx.Client(timeout=15) as client:
+        with httpx.Client(timeout=GITHUB_TIMEOUT, follow_redirects=True) as client:
             resp = client.get(url, headers=self._headers, params=params or {})
             resp.raise_for_status()
             return resp.json()
@@ -59,27 +61,29 @@ class GitHubClient:
             for r in repos
         ]
 
-    def get_recent_commits(self, per_repo: int = 3, repo_limit: int = 8) -> list[dict]:
+    def get_recent_commits(self, per_repo: int = 2, repo_limit: int = 5) -> list[dict]:
         """Fetch recent commits from repos the token can access, including private repos."""
         commits: list[dict] = []
         repos = self._get(
             "/user/repos",
             {"sort": "pushed", "per_page": repo_limit, "type": "all"},
         )
-        for repo in repos:
+
+        def fetch_repo_commits(repo: dict) -> list[dict]:
             full_name = repo.get("full_name")
             if not full_name:
-                continue
+                return []
             try:
                 repo_commits = self._get(f"/repos/{full_name}/commits", {"per_page": per_repo})
             except Exception as exc:
                 log.warning("Failed to fetch commits for %s: %s", full_name, exc)
-                continue
+                return []
 
+            rows = []
             for commit in repo_commits:
                 commit_data = commit.get("commit", {})
                 author_data = commit_data.get("author") or {}
-                commits.append(
+                rows.append(
                     {
                         "sha": commit.get("sha", "")[:12],
                         "full_sha": commit.get("sha", ""),
@@ -92,6 +96,15 @@ class GitHubClient:
                         "html_url": commit.get("html_url"),
                     }
                 )
+            return rows
+
+        with ThreadPoolExecutor(max_workers=min(5, len(repos) or 1)) as executor:
+            futures = [executor.submit(fetch_repo_commits, repo) for repo in repos]
+            for future in as_completed(futures):
+                try:
+                    commits.extend(future.result())
+                except Exception as exc:
+                    log.warning("Failed to collect GitHub commits: %s", exc)
 
         return sorted(commits, key=lambda item: item.get("date") or "", reverse=True)[:20]
 
@@ -152,12 +165,30 @@ class GitHubClient:
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - timedelta(days=7)
 
-        user = self.get_user()
-        repos = self.get_repos(per_page=10)
-        commits_today = self.get_commits_count(username, today_start)
-        commits_week = self.get_commits_count(username, week_start)
-        open_prs = self.get_open_prs(username)
-        recent_commits = self.get_recent_commits()
+        jobs = {
+            "user": lambda: self.get_user(),
+            "repos": lambda: self.get_repos(per_page=8),
+            "commits_today": lambda: self.get_commits_count(username, today_start),
+            "commits_week": lambda: self.get_commits_count(username, week_start),
+            "open_prs": lambda: self.get_open_prs(username),
+            "recent_commits": lambda: self.get_recent_commits(),
+        }
+        results: dict = {}
+        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            future_map = {executor.submit(fn): name for name, fn in jobs.items()}
+            for future in as_completed(future_map):
+                name = future_map[future]
+                try:
+                    results[name] = future.result()
+                except Exception as exc:
+                    log.warning("GitHub stats segment failed (%s): %s", name, exc)
+
+        user = results.get("user") or {}
+        repos = results.get("repos") or []
+        commits_today = int(results.get("commits_today") or 0)
+        commits_week = int(results.get("commits_week") or 0)
+        open_prs = results.get("open_prs") or []
+        recent_commits = results.get("recent_commits") or []
 
         return {
             "username": username,

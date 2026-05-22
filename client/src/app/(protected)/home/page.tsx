@@ -1,7 +1,8 @@
 "use client"
 
-import React, { useEffect, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts"
 import {
   Bot, BrainCircuit, Send, RefreshCw, CalendarDays, CheckSquare,
   MessageSquare, Activity, GitBranch, Code2, BookOpen, Loader2,
@@ -10,8 +11,10 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { cn } from "@/lib/utils"
 import { useDashboardStore } from "@/lib/stores"
+import { getHealthSnapshots, type HealthSnapshot } from "@/components/health/healthApi"
 import {
   MasterAgentMessage,
   fetchLatestAgentData,
@@ -37,6 +40,32 @@ const ICON_COLORS = {
   github: "text-violet-400",
   active: "text-emerald-400",
 } as const
+
+function localDateString(date = new Date()): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+function lastSevenDays(): Date[] {
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date()
+    date.setDate(date.getDate() - (6 - index))
+    return date
+  })
+}
+
+function formatCompactValue(value: number): string {
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`
+  return Math.round(value).toLocaleString()
+}
+
+function formatWeeklyMetric(value: number, metric: string | number): string {
+  if (metric === "distance_km") return `${value.toFixed(1)} km`
+  if (metric === "calories") return `${Math.round(value).toLocaleString()} kcal`
+  return `${formatCompactValue(value)} steps`
+}
 
 const StatCard = React.memo(function StatCard({ icon: Icon, label, value, sub, href, iconColor }: {
   icon: React.ElementType; label: string; value: string | number; sub?: string; href?: string; color?: string; iconColor?: string
@@ -97,43 +126,68 @@ function HealthRingCard({ icon: Icon, label, value, unit, goal, iconColor, ringC
 
 function TaskDistributionChart({ completed, inprogress, pending }: { completed: number; inprogress: number; pending: number }) {
   const total = completed + inprogress + pending
-  if (total === 0) return null
+  const donePct = total > 0 ? Math.round((completed / total) * 100) : 0
   const items = [
-    { label: "Completed", value: completed, color: "fill-emerald-400" },
-    { label: "In Progress", value: inprogress, color: "fill-amber-400" },
-    { label: "Pending", value: pending, color: "fill-rose-400" },
+    { label: "Completed", value: completed, fill: "#34d399" },
+    { label: "In Progress", value: inprogress, fill: "#fbbf24" },
+    { label: "Pending", value: pending, fill: "#fb7185" },
   ]
-  const maxVal = Math.max(...items.map((d) => d.value), 1)
-  const barW = 40
-  const gap = 24
-  const chartW = items.length * barW + (items.length - 1) * gap
-  const chartH = 80
+  const maxTaskValue = Math.max(...items.map((item) => item.value), 1)
+  const chartConfig = {
+    value: { label: "Tasks" },
+  } satisfies ChartConfig
+
   return (
-    <div className="rounded-xl border border-border/40 bg-card/40 p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <Zap className={cn("h-4 w-4", ICON_COLORS.tasks)} />
-        <span className="text-sm font-semibold text-foreground">Task Distribution</span>
+    <div className="rounded-xl border border-border/40 bg-card/40 p-4 sm:p-5">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <Zap className={cn("h-4 w-4", ICON_COLORS.tasks)} />
+          <div>
+            <span className="text-sm font-semibold text-foreground">Task Distribution</span>
+            <p className="text-[10px] text-muted-foreground">Today&apos;s tasks only</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="rounded-lg border border-border/30 bg-background/30 px-3 py-1.5">
+            <p className="text-[10px] font-medium uppercase text-muted-foreground/70">Total</p>
+            <p className="text-sm font-bold text-foreground tabular-nums">{total}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/30 px-3 py-1.5">
+            <p className="text-[10px] font-medium uppercase text-muted-foreground/70">Done</p>
+            <p className="text-sm font-bold text-foreground tabular-nums">{donePct}%</p>
+          </div>
+        </div>
       </div>
-      <div className="flex items-end justify-center">
-        <svg width={chartW} height={chartH + 20} viewBox={`0 0 ${chartW} ${chartH + 20}`}>
-          {items.map((item, i) => {
-            const barH = Math.max((item.value / maxVal) * chartH, 4)
-            const x = i * (barW + gap)
-            return (
-              <g key={item.label}>
-                <rect x={x} y={chartH - barH} width={barW} height={barH} rx={4} className={item.color} opacity={0.85} />
-                <text x={x + barW / 2} y={chartH - barH - 4} textAnchor="middle" className="fill-foreground text-[10px] font-medium">{item.value}</text>
-                <text x={x + barW / 2} y={chartH + 14} textAnchor="middle" className="fill-muted-foreground text-[9px]">{item.label}</text>
-              </g>
-            )
-          })}
-        </svg>
-      </div>
-      <div className="mt-3 flex items-center justify-center gap-4">
+
+      <ChartContainer config={chartConfig} className="h-48 w-full">
+        <BarChart data={items} layout="vertical" margin={{ left: 8, right: 20, top: 4, bottom: 4 }}>
+          <CartesianGrid horizontal={false} strokeDasharray="4 4" />
+          <XAxis type="number" hide domain={[0, maxTaskValue]} />
+          <YAxis
+            type="category"
+            dataKey="label"
+            width={86}
+            tickLine={false}
+            axisLine={false}
+            fontSize={12}
+          />
+          <ChartTooltip
+            cursor={{ fill: "hsl(var(--muted) / 0.18)" }}
+            content={<ChartTooltipContent hideLabel formatter={(value) => `${value} tasks`} />}
+          />
+          <Bar dataKey="value" radius={[0, 8, 8, 0]} barSize={26}>
+            {items.map((item) => (
+              <Cell key={item.label} fill={item.fill} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ChartContainer>
+
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-4">
         {items.map((item) => (
           <div key={item.label} className="flex items-center gap-1.5">
-            <div className={cn("h-2 w-2 rounded-full", item.color.replace("fill-", "bg-"))} />
-            <span className="text-[10px] text-muted-foreground">{item.label}</span>
+            <div className="h-2 w-2 rounded-full" style={{ backgroundColor: item.fill }} />
+            <span className="text-[10px] text-muted-foreground">{item.label}: {item.value}</span>
           </div>
         ))}
       </div>
@@ -141,45 +195,158 @@ function TaskDistributionChart({ completed, inprogress, pending }: { completed: 
   )
 }
 
-function WeeklyActivitySparkline({ todaySteps }: { todaySteps: number }) {
-  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-  const todayIdx = new Date().getDay()
-  const adjustedIdx = todayIdx === 0 ? 6 : todayIdx - 1
-  const data = days.map((d, i) => ({
-    label: d,
-    value: i === adjustedIdx ? todaySteps : 0,
-    isToday: i === adjustedIdx,
-  }))
-  const maxVal = Math.max(...data.map((d) => d.value), 1)
-  const barW = 24
-  const gap = 8
-  const chartW = data.length * barW + (data.length - 1) * gap
-  const chartH = 48
+function WeeklyActivityChart({
+  snapshots,
+  todayHealth,
+}: {
+  snapshots: HealthSnapshot[]
+  todayHealth: { steps?: number; calories?: number; distance_km?: number }
+}) {
+  const snapshotByDate = new Map(
+    snapshots
+      .filter((snapshot) => snapshot.source === "google_fit")
+      .map((snapshot) => [snapshot.snapshot_date, snapshot])
+  )
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+  const todayKey = localDateString()
+  const chartData = lastSevenDays().map((date) => {
+    const dateKey = localDateString(date)
+    const snapshot = snapshotByDate.get(dateKey)
+
+    return {
+      date: dateKey,
+      label: dayNames[date.getDay()],
+      steps: dateKey === todayKey ? (snapshot?.steps ?? todayHealth.steps ?? 0) : (snapshot?.steps ?? 0),
+      calories: dateKey === todayKey ? (snapshot?.calories ?? todayHealth.calories ?? 0) : (snapshot?.calories ?? 0),
+      distance_km: dateKey === todayKey ? (snapshot?.distance_km ?? todayHealth.distance_km ?? 0) : (snapshot?.distance_km ?? 0),
+    }
+  })
+  const totalSteps = chartData.reduce((sum, item) => sum + item.steps, 0)
+  const totalCalories = chartData.reduce((sum, item) => sum + item.calories, 0)
+  const totalDistance = chartData.reduce((sum, item) => sum + item.distance_km, 0)
+  const chartConfig = {
+    steps: {
+      label: "Steps",
+      color: "#22d3ee",
+    },
+    calories: {
+      label: "Calories",
+      color: "#fb923c",
+    },
+    distance_km: {
+      label: "Distance",
+      color: "#c084fc",
+    },
+  } satisfies ChartConfig
+  const legendItems = [
+    { key: "steps", label: "Steps", color: "#22d3ee", value: formatCompactValue(totalSteps) },
+    { key: "calories", label: "Calories", color: "#fb923c", value: `${formatCompactValue(totalCalories)} kcal` },
+    { key: "distance_km", label: "Distance", color: "#c084fc", value: `${totalDistance.toFixed(1)} km` },
+  ]
+
   return (
-    <div className="rounded-xl border border-border/40 bg-card/40 p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <Activity className={cn("h-4 w-4", ICON_COLORS.active)} />
-        <span className="text-sm font-semibold text-foreground">Weekly Activity</span>
-        <span className="ml-auto text-[10px] text-muted-foreground">Steps</span>
+    <div className="rounded-xl border border-border/40 bg-card/40 p-4 sm:p-5">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <Activity className={cn("h-4 w-4", ICON_COLORS.active)} />
+          <div>
+            <span className="text-sm font-semibold text-foreground">Weekly Activity</span>
+            <p className="text-[10px] text-muted-foreground">Last 7 days - steps, calories, and distance</p>
+          </div>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {legendItems.map((item) => (
+            <div key={item.key} className="rounded-lg border border-border/30 bg-background/30 px-3 py-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
+                <p className="text-[10px] font-medium uppercase text-muted-foreground/70">{item.label}</p>
+              </div>
+              <p className="text-sm font-bold text-foreground tabular-nums">{item.value}</p>
+            </div>
+          ))}
+        </div>
       </div>
-      <div className="flex items-end justify-center">
-        <svg width={chartW} height={chartH + 18} viewBox={`0 0 ${chartW} ${chartH + 18}`}>
-          {data.map((d, i) => {
-            const barH = d.value > 0 ? Math.max((d.value / maxVal) * chartH, 4) : 6
-            const x = i * (barW + gap)
-            return (
-              <g key={d.label}>
-                <rect
-                  x={x} y={chartH - barH} width={barW} height={barH} rx={3}
-                  className={d.isToday ? "fill-cyan-400" : "fill-muted/40"}
-                  opacity={d.isToday ? 0.9 : 0.5}
-                />
-                <text x={x + barW / 2} y={chartH + 14} textAnchor="middle" className={cn("text-[9px]", d.isToday ? "fill-foreground font-medium" : "fill-muted-foreground")}>{d.label}</text>
-              </g>
-            )
-          })}
-        </svg>
-      </div>
+
+      <ChartContainer config={chartConfig} className="h-60 w-full sm:h-64">
+        <AreaChart data={chartData} margin={{ left: 10, right: 8, top: 12, bottom: 0 }}>
+          <defs>
+            <linearGradient id="homeWeeklyStepsFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="var(--color-steps)" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="var(--color-steps)" stopOpacity={0.02} />
+            </linearGradient>
+            <linearGradient id="homeWeeklyCaloriesFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="var(--color-calories)" stopOpacity={0.18} />
+              <stop offset="95%" stopColor="var(--color-calories)" stopOpacity={0.01} />
+            </linearGradient>
+            <linearGradient id="homeWeeklyDistanceFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="var(--color-distance_km)" stopOpacity={0.18} />
+              <stop offset="95%" stopColor="var(--color-distance_km)" stopOpacity={0.01} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} strokeDasharray="4 4" />
+          <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={10} interval={0} fontSize={11} />
+          <YAxis
+            yAxisId="activity"
+            width={54}
+            tickLine={false}
+            axisLine={false}
+            fontSize={12}
+            tickFormatter={(value) => formatCompactValue(Number(value))}
+          />
+          <YAxis
+            yAxisId="distance"
+            orientation="right"
+            width={48}
+            tickLine={false}
+            axisLine={false}
+            fontSize={12}
+            tickFormatter={(value) => `${Number(value).toFixed(1)} km`}
+          />
+          <ChartTooltip
+            cursor={{ stroke: "#22d3ee", strokeOpacity: 0.35, strokeWidth: 1 }}
+            content={
+              <ChartTooltipContent
+                indicator="line"
+                labelFormatter={(_, payload) => {
+                  const date = payload[0]?.payload?.date
+                  return typeof date === "string" ? date : "Steps"
+                }}
+                formatter={(value, name) => formatWeeklyMetric(Number(value), name)}
+              />
+            }
+          />
+          <Area
+            dataKey="steps"
+            yAxisId="activity"
+            type="monotone"
+            stroke="var(--color-steps)"
+            strokeWidth={3}
+            fill="url(#homeWeeklyStepsFill)"
+            dot={{ r: 4, strokeWidth: 2, fill: "hsl(var(--card))", stroke: "#22d3ee" }}
+            activeDot={{ r: 6, strokeWidth: 2, fill: "#22d3ee", stroke: "hsl(var(--background))" }}
+          />
+          <Area
+            dataKey="calories"
+            yAxisId="activity"
+            type="monotone"
+            stroke="var(--color-calories)"
+            strokeWidth={2}
+            fill="url(#homeWeeklyCaloriesFill)"
+            dot={{ r: 3, strokeWidth: 2, fill: "hsl(var(--card))", stroke: "#fb923c" }}
+            activeDot={{ r: 5, strokeWidth: 2, fill: "#fb923c", stroke: "hsl(var(--background))" }}
+          />
+          <Area
+            dataKey="distance_km"
+            yAxisId="distance"
+            type="monotone"
+            stroke="var(--color-distance_km)"
+            strokeWidth={2}
+            fill="url(#homeWeeklyDistanceFill)"
+            dot={{ r: 3, strokeWidth: 2, fill: "hsl(var(--card))", stroke: "#c084fc" }}
+            activeDot={{ r: 5, strokeWidth: 2, fill: "#c084fc", stroke: "hsl(var(--background))" }}
+          />
+        </AreaChart>
+      </ChartContainer>
     </div>
   )
 }
@@ -202,6 +369,8 @@ export default function HomePage() {
   const [user, setUser] = useState<User | null>(null)
   const { stats, statsLoading, fetchStats: loadStats } = useDashboardStore()
   const [agentOpen, setAgentOpen] = useState(false)
+  const [healthSnapshots, setHealthSnapshots] = useState<HealthSnapshot[]>([])
+  const [syncingAll, setSyncingAll] = useState(false)
 
   const [messages, setMessages] = useState<MasterAgentMessage[]>([
     { role: "assistant", content: "I'm your Master Agent. I can manage Calendar, Tasks, Slack, Health, GitHub, LeetCode, and Journal for you. What would you like to do?" },
@@ -224,6 +393,19 @@ export default function HomePage() {
 
   useEffect(() => { loadStats() }, [loadStats])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages])
+
+  const loadHealthSnapshots = useCallback(async () => {
+    try {
+      const snapshots = await getHealthSnapshots({ days: 7 })
+      setHealthSnapshots(snapshots)
+    } catch {
+      setHealthSnapshots([])
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadHealthSnapshots()
+  }, [loadHealthSnapshots])
 
   async function handleSend() {
     const query = input.trim()
@@ -248,14 +430,21 @@ export default function HomePage() {
   }
 
   async function handleFetchLatest() {
+    if (syncingAll) return
+    setSyncingAll(true)
     try {
       await fetchLatestAgentData()
-      loadStats(true)
+      await loadStats(true)
+      await loadHealthSnapshots()
     } catch { /* silent */ }
+    finally {
+      setSyncingAll(false)
+    }
   }
 
   const h = stats?.health || {}
   const t = stats?.tasks || { total: 0, completed: 0, inprogress: 0, pending: 0, streak: 0, recent: [] }
+  const todayTasks = t.today || { total: 0, completed: 0, inprogress: 0, pending: 0 }
 
   const upcomingEvents = useMemo(() => {
     if (!stats?.calendar?.upcoming) return []
@@ -275,8 +464,19 @@ export default function HomePage() {
             <p className="text-xs text-muted-foreground sm:text-sm">Your NUMA overview for today</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={() => { handleFetchLatest() }}>
-              <RefreshCw className="h-3.5 w-3.5" /> Sync All
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className={cn(
+                "gap-1.5 transition-all",
+                syncingAll && "border-primary/50 bg-primary/10 text-primary"
+              )}
+              onClick={() => { void handleFetchLatest() }}
+              disabled={syncingAll}
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", syncingAll && "animate-spin")} />
+              {syncingAll ? "Syncing..." : "Sync All"}
             </Button>
             <Button
               type="button" size="sm"
@@ -308,7 +508,7 @@ export default function HomePage() {
             </div>
 
             {/* Task Distribution Chart */}
-            <TaskDistributionChart completed={t.completed} inprogress={t.inprogress ?? 0} pending={t.pending} />
+            <TaskDistributionChart completed={todayTasks.completed} inprogress={todayTasks.inprogress ?? 0} pending={todayTasks.pending} />
 
             {/* Calendar + Slack + Journal Row */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -338,7 +538,7 @@ export default function HomePage() {
             </div>
 
             {/* Weekly Activity Sparkline */}
-            <WeeklyActivitySparkline todaySteps={h.steps ?? 0} />
+            <WeeklyActivityChart snapshots={healthSnapshots} todayHealth={h} />
 
             {/* Two Column: Upcoming Events + Dev */}
             <div className="grid gap-3 sm:grid-cols-2">

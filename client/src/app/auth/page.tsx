@@ -2,10 +2,12 @@
 
 import React, { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Mail, Lock, User, Eye, EyeOff, Check, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
+import { markIntegrationBootstrapPending } from "@/lib/bootstrapIntegrations";
 
 type Mode = "signin" | "signup";
 
@@ -87,9 +89,10 @@ export default function AuthPage() {
   const handleOAuth = async (provider: "google" | "github") => {
     setError(null);
     if (provider === "google") {
-      localStorage.setItem("numa_connect_google_services_after_auth", "1");
+      markIntegrationBootstrapPending();
     } else {
-      localStorage.removeItem("numa_connect_google_services_after_auth");
+      localStorage.removeItem("numa_integration_bootstrap_pending");
+      localStorage.removeItem("numa_integration_bootstrap_visited");
     }
     // Supabase JS handles the OAuth dance; our /auth/callback page
     // will exchange the Supabase token for our backend JWT.
@@ -117,16 +120,16 @@ export default function AuthPage() {
 
         {/* Top bar - NUMA left (mobile only) + Back to home right */}
         <div className="relative z-20 flex items-center justify-between px-6 pt-5">
-          <a href="/" className="lg:hidden text-2xl font-extrabold tracking-tight">
+          <Link href="/" className="lg:hidden text-2xl font-extrabold tracking-tight">
             NUMA
-          </a>
-          <a
+          </Link>
+          <Link
             href="/"
             className="ml-auto inline-flex items-center gap-2 text-sm text-gray-500 hover:text-white transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to home
-          </a>
+          </Link>
         </div>
 
         {/* ── Mobile/tablet: single column ── */}
@@ -177,9 +180,9 @@ export default function AuthPage() {
             transition={{ duration: 0.7, ease: [0.23, 1, 0.32, 1] as [number, number, number, number] }}
             className="flex-1 max-w-md"
           >
-            <a href="/" className="block text-7xl xl:text-8xl font-extrabold tracking-tight leading-none mb-5">
+            <Link href="/" className="block text-7xl xl:text-8xl font-extrabold tracking-tight leading-none mb-5">
               NUMA
-            </a>
+            </Link>
             <p className="text-gray-400 text-lg xl:text-xl leading-relaxed max-w-xs">
               {mode === "signin"
                 ? "Welcome back. Sign in to continue."

@@ -74,6 +74,43 @@ def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
             "SELECT COUNT(*) FROM public.tasks WHERE user_id = %s AND status = 'inprogress'",
             (user_id,),
         )
+        today_completed_tasks = _safe_scalar(
+            conn,
+            """
+            SELECT COUNT(*) FROM public.tasks
+            WHERE user_id = %s
+              AND status = 'completed'
+              AND completed_at >= %s
+              AND completed_at < %s
+            """,
+            (user_id, today_start, today_start + timedelta(days=1)),
+        )
+        today_inprogress_tasks = _safe_scalar(
+            conn,
+            """
+            SELECT COUNT(*) FROM public.tasks
+            WHERE user_id = %s
+              AND status = 'inprogress'
+              AND (
+                (due_date >= %s AND due_date < %s)
+                OR (due_date IS NULL AND created_at >= %s AND created_at < %s)
+              )
+            """,
+            (user_id, today_start, today_start + timedelta(days=1), today_start, today_start + timedelta(days=1)),
+        )
+        today_pending_tasks = _safe_scalar(
+            conn,
+            """
+            SELECT COUNT(*) FROM public.tasks
+            WHERE user_id = %s
+              AND status IN ('planned', 'pending')
+              AND (
+                (due_date >= %s AND due_date < %s)
+                OR (due_date IS NULL AND created_at >= %s AND created_at < %s)
+              )
+            """,
+            (user_id, today_start, today_start + timedelta(days=1), today_start, today_start + timedelta(days=1)),
+        )
 
         task_streak = 0
         try:
@@ -222,6 +259,12 @@ def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
                     "completed": completed_tasks,
                     "inprogress": inprogress_tasks,
                     "pending": pending_tasks,
+                    "today": {
+                        "total": today_completed_tasks + today_inprogress_tasks + today_pending_tasks,
+                        "completed": today_completed_tasks,
+                        "inprogress": today_inprogress_tasks,
+                        "pending": today_pending_tasks,
+                    },
                     "streak": task_streak,
                     "recent": recent_tasks,
                 },

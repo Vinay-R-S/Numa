@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { AppShell } from "@/components/tasklist/AppShell"
 import { supabase } from "@/lib/supabase"
+import { hasIntegrationBootstrapPending, runIntegrationBootstrap } from "@/lib/bootstrapIntegrations"
 
 export default function ProtectedLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -12,10 +13,19 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     let cancelled = false
 
+    const maybeRunBootstrap = async (token: string) => {
+      if (!hasIntegrationBootstrapPending()) return
+      const result = await runIntegrationBootstrap(token)
+      if (result === "done" && !cancelled) {
+        router.replace("/home")
+      }
+    }
+
     const ensureSession = async () => {
       const token = localStorage.getItem("numa_token")
       if (token) {
         if (!cancelled) setCheckingAuth(false)
+        void maybeRunBootstrap(token)
         return
       }
 
@@ -40,6 +50,7 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
 
         localStorage.setItem("numa_token", json.access_token)
         if (!cancelled) setCheckingAuth(false)
+        void maybeRunBootstrap(json.access_token)
       } catch {
         router.replace("/auth")
       }

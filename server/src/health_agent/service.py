@@ -38,6 +38,188 @@ HEALTH_AGENT_SYSTEM_PROMPT = (
     "You can also recommend yoga poses from the Mental Peace section based on user health data."
 )
 
+DIET_DISCLAIMER = (
+    "DISCLAIMER: These are general suggestions based on your activity data and are NOT medical advice.\n"
+    "Consult a healthcare professional or registered dietitian before making dietary changes."
+)
+
+
+def _is_diet_query(query: str) -> bool:
+    q = (query or "").lower()
+    return any(
+        term in q
+        for term in (
+            "diet",
+            "meal",
+            "nutrition",
+            "food",
+            "eat",
+            "breakfast",
+            "lunch",
+            "dinner",
+            "protein",
+            "calorie intake",
+        )
+    )
+
+
+def _valid_number(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _fmt_metric(value: float, unit: str) -> str:
+    if unit == "km":
+        return f"{value:.1f} km"
+    if unit == "hours":
+        return f"{value:.1f} hours"
+    return f"{int(round(value)):,} {unit}"
+
+
+def _build_diet_recommendation(user_id: str) -> str:
+    from .router import get_health_snapshots
+
+    snapshots = get_health_snapshots(user_id, days=8)
+    today = date.today()
+    today_snaps = [s for s in snapshots if s.get("snapshot_date") == today]
+
+    def best_metric(key: str) -> Optional[float]:
+        values = [_valid_number(s.get(key)) for s in today_snaps]
+        values = [v for v in values if v is not None]
+        return max(values) if values else None
+
+    steps = best_metric("steps")
+    active = best_metric("active_minutes")
+    calories = best_metric("calories")
+    distance = best_metric("distance_km")
+    sleep = best_metric("sleep_hours")
+
+    available = {
+        "steps": steps,
+        "active_minutes": active,
+        "calories": calories,
+        "distance_km": distance,
+        "sleep_hours": sleep,
+    }
+    used_metrics = {k: v for k, v in available.items() if v is not None}
+
+    activity_signals = []
+    if steps is not None:
+        if steps >= 10000:
+            activity_signals.append("high")
+        elif steps >= 5000:
+            activity_signals.append("moderate")
+        else:
+            activity_signals.append("low")
+    if active is not None:
+        if active >= 60:
+            activity_signals.append("high")
+        elif active >= 30:
+            activity_signals.append("moderate")
+        else:
+            activity_signals.append("low")
+    if distance is not None:
+        if distance >= 8:
+            activity_signals.append("high")
+        elif distance >= 3:
+            activity_signals.append("moderate")
+        else:
+            activity_signals.append("low")
+
+    high_count = activity_signals.count("high")
+    moderate_count = activity_signals.count("moderate")
+    if high_count:
+        activity_level = "active"
+        plate_focus = "higher complex carbs with lean protein for recovery"
+        snack_focus = "a protein-rich snack plus fruit after activity"
+    elif moderate_count:
+        activity_level = "moderate"
+        plate_focus = "balanced carbs, protein, and vegetables"
+        snack_focus = "a light protein snack if meals are spaced far apart"
+    elif activity_signals:
+        activity_level = "light"
+        plate_focus = "vegetables, lean protein, and controlled portions of carbs"
+        snack_focus = "fruit, yogurt, nuts, or sprouts instead of sugary snacks"
+    else:
+        activity_level = "unknown"
+        plate_focus = "balanced meals with protein, fiber-rich carbs, and vegetables"
+        snack_focus = "simple whole-food snacks like fruit, yogurt, or nuts"
+
+    if calories is not None and calories >= 2400:
+        energy_note = "Your calorie burn looks high today, so include enough carbs and protein to support recovery."
+    elif calories is not None and calories >= 1800:
+        energy_note = "Your calorie burn looks moderate, so a balanced intake should fit well."
+    elif calories is not None:
+        energy_note = "Your logged calorie burn is on the lighter side, so keep meals nutrient-dense without oversized portions."
+    else:
+        energy_note = None
+
+    lines = [
+        DIET_DISCLAIMER,
+        "",
+        "Diet plan based on available health data:",
+    ]
+
+    if used_metrics:
+        lines.append("Data considered:")
+        if steps is not None:
+            lines.append(f"- Steps: {_fmt_metric(steps, 'steps')}")
+        if active is not None:
+            lines.append(f"- Active minutes: {_fmt_metric(active, 'min')}")
+        if calories is not None:
+            lines.append(f"- Calories burned: {_fmt_metric(calories, 'kcal')}")
+        if distance is not None:
+            lines.append(f"- Distance: {_fmt_metric(distance, 'km')}")
+        if sleep is not None:
+            lines.append(f"- Sleep: {_fmt_metric(sleep, 'hours')}")
+    else:
+        lines.append("No usable health metrics are available yet, so this is a general balanced plan.")
+
+    lines.extend(
+        [
+            "",
+            f"Activity read: {activity_level.capitalize()}",
+            f"Main focus: {plate_focus}.",
+        ]
+    )
+    if energy_note:
+        lines.append(energy_note)
+
+    lines.extend(
+        [
+            "",
+            "Suggested meals:",
+            "- Breakfast: Oats or whole-grain toast with eggs, paneer, tofu, or Greek yogurt, plus fruit.",
+            "- Lunch: Rice, roti, or quinoa with dal, chicken, fish, paneer, tofu, or beans, plus vegetables.",
+            "- Snack: " + snack_focus + ".",
+            "- Dinner: Lean protein with cooked vegetables and a smaller portion of rice, roti, or potatoes.",
+            "- Hydration: Water through the day; add electrolytes only if you had heavy sweating or a long workout.",
+        ]
+    )
+
+    if sleep is not None and sleep < 6:
+        lines.extend(
+            [
+                "",
+                "Sleep-aware adjustment: Since sleep is low, avoid late caffeine and keep dinner lighter. Add magnesium-rich foods like spinach, nuts, seeds, or dal.",
+            ]
+        )
+
+    if active is not None and active >= 60 or steps is not None and steps >= 10000:
+        lines.extend(
+            [
+                "",
+                "Recovery adjustment: Add 20-30g protein after your most active period and include carbs like rice, banana, oats, or potatoes.",
+            ]
+        )
+
+    return "\n".join(lines)
+
 
 class HealthAgentState(TypedDict):
     messages: Annotated[Sequence[object], operator.add]
@@ -196,57 +378,7 @@ def _health_toolset(tool_decorator, user_id: str):
         """Generate a personalized diet plan and food intake recommendation based on today's health data.
         Use this when the user asks about diet, nutrition, what to eat, meal plan, or food intake.
         ALWAYS start with the medical disclaimer."""
-        snapshots = get_health_snapshots(user_id, source="google_fit", days=1)
-        today_snap = next((s for s in snapshots if s.get("snapshot_date") == date.today()), None)
-
-        steps = (today_snap.get("steps") or 0) if today_snap else 0
-        active = (today_snap.get("active_minutes") or 0) if today_snap else 0
-        cal_burned = (today_snap.get("calories") or 0) if today_snap else 0
-        sleep = (today_snap.get("sleep_hours") or 0) if today_snap else 0
-
-        activity_level = "sedentary"
-        if active >= 60 or steps >= 10000:
-            activity_level = "active"
-        elif active >= 30 or steps >= 5000:
-            activity_level = "moderate"
-
-        cal_target = 2000
-        if activity_level == "active":
-            cal_target = 2500
-        elif activity_level == "moderate":
-            cal_target = 2200
-
-        protein_g = int(cal_target * 0.25 / 4)
-        carbs_g = int(cal_target * 0.50 / 4)
-        fat_g = int(cal_target * 0.25 / 9)
-
-        plan = [
-            "DISCLAIMER: These are general suggestions based on your activity data and are NOT medical advice.",
-            "Consult a healthcare professional or registered dietitian before making dietary changes.",
-            "",
-            f"Activity Level: {activity_level.capitalize()} ({steps:,} steps, {active} active min)",
-            f"Calories Burned Today: {cal_burned:,} kcal",
-            f"Recommended Daily Intake: ~{cal_target} kcal",
-            f"Macros: Protein {protein_g}g | Carbs {carbs_g}g | Fat {fat_g}g",
-            "",
-            "Suggested Meals:",
-            "  Breakfast: Oatmeal with nuts and fruits, or eggs with whole-grain toast",
-            "  Mid-morning: Greek yogurt with berries or a handful of almonds",
-            "  Lunch: Grilled chicken/tofu with brown rice and vegetables",
-            "  Afternoon: Fruit smoothie or hummus with veggies",
-            "  Dinner: Fish/lentils with quinoa and steamed vegetables",
-            "  Evening: Warm milk or chamomile tea (for better sleep)",
-        ]
-
-        if sleep < 6:
-            plan.append("")
-            plan.append("Sleep Tip: Your sleep was low. Consider magnesium-rich foods (spinach, almonds) and avoid caffeine after 2 PM.")
-
-        if steps < 3000 and active < 15:
-            plan.append("")
-            plan.append("Activity Tip: Low activity today. Consider light exercise to improve metabolism and appetite regulation.")
-
-        return "\n".join(plan)
+        return _build_diet_recommendation(user_id)
 
     @tool_decorator
     def get_yoga_recommendation() -> str:
@@ -367,6 +499,23 @@ def run_health_agent_chat(
     if not user_id:
         return {"response": "User session is missing. Please sign in again.", "success": False,
                 "delegated_to": "health-subagent", "refresh_health": False}
+
+    if _is_diet_query(query):
+        try:
+            content = _build_diet_recommendation(user_id)
+            try:
+                from ..memory.service import memory_service
+                memory_service.store_turn(user_id, query, content)
+            except Exception:
+                pass
+            return {
+                "response": content,
+                "success": True,
+                "delegated_to": "health-subagent",
+                "refresh_health": False,
+            }
+        except Exception as exc:
+            log.error("Diet recommendation failed: %s", exc, exc_info=True)
 
     from ..llm_factory import is_any_llm_configured
     if not is_any_llm_configured(user_id):

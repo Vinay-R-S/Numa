@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import {
   Activity,
   Bot,
@@ -19,6 +20,7 @@ import {
   Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import {
   HealthAgentMessage,
   HealthSnapshot,
@@ -46,6 +48,34 @@ function localDateString(date = new Date()): string {
   const month = String(date.getMonth() + 1).padStart(2, "0")
   const day = String(date.getDate()).padStart(2, "0")
   return `${year}-${month}-${day}`
+}
+
+type WeeklyActivityMetric = "steps" | "calories" | "distance_km"
+
+const WEEKLY_ACTIVITY_OPTIONS: Array<{
+  key: WeeklyActivityMetric
+  label: string
+  unit: string
+  color: string
+  icon: React.ElementType
+}> = [
+  { key: "steps", label: "Steps", unit: "steps", color: "#22d3ee", icon: Footprints },
+  { key: "calories", label: "Calories", unit: "kcal", color: "#fb923c", icon: Flame },
+  { key: "distance_km", label: "Distance", unit: "km", color: "#c084fc", icon: MapPin },
+]
+
+function formatCompactValue(value: number, unit: string): string {
+  if (unit === "km") return `${value.toFixed(1)} km`
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`
+  return `${Math.round(value).toLocaleString()}`
+}
+
+function lastSevenDays(): Date[] {
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date()
+    date.setDate(date.getDate() - (6 - index))
+    return date
+  })
 }
 
 // ── Metric Card ─────────────────────────────────────────────────────────────────
@@ -121,46 +151,128 @@ function MetricCard({
 // ── Weekly chart bar ────────────────────────────────────────────────────────────
 
 function WeeklyBar({ snapshots }: { snapshots: HealthSnapshot[] }) {
+  const [activeMetric, setActiveMetric] = useState<WeeklyActivityMetric>("steps")
+
   const gfitDays = snapshots
     .filter((s) => s.source === "google_fit")
     .sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date))
+  const snapshotsByDate = new Map(gfitDays.map((day) => [day.snapshot_date, day]))
 
-  if (gfitDays.length === 0) {
-    return (
-      <div className="flex h-48 items-center justify-center">
-        <p className="text-sm text-muted-foreground">No weekly data yet. Sync Google Fit to see trends.</p>
-      </div>
-    )
-  }
-
-  const maxSteps = Math.max(...gfitDays.map((d) => d.steps || 0), 1)
   const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-  const today = localDateString()
+  const activeOption = WEEKLY_ACTIVITY_OPTIONS.find((option) => option.key === activeMetric) ?? WEEKLY_ACTIVITY_OPTIONS[0]
+  const chartConfig = {
+    value: {
+      label: activeOption.label,
+      color: activeOption.color,
+    },
+  } satisfies ChartConfig
+
+  const chartData = lastSevenDays().map((date) => {
+    const dateKey = localDateString(date)
+    const snapshot = snapshotsByDate.get(dateKey)
+    const value = Number(snapshot?.[activeMetric] || 0)
+    return {
+      date: dateKey,
+      label: DAY_NAMES[date.getDay()],
+      value,
+      displayValue: formatCompactValue(value, activeOption.unit),
+    }
+  })
+
+  const total = chartData.reduce((sum, day) => sum + day.value, 0)
+  const bestDay = chartData.reduce((best, day) => (day.value > best.value ? day : best), chartData[0])
 
   return (
-    <div className="flex items-end gap-2 h-40 px-2">
-      {gfitDays.map((day) => {
-        const steps = day.steps || 0
-        const height = Math.max((steps / maxSteps) * 100, 4)
-        const d = new Date(day.snapshot_date)
-        const label = DAY_NAMES[d.getUTCDay()]
-        const isToday = day.snapshot_date === today
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
+          {WEEKLY_ACTIVITY_OPTIONS.map((option) => {
+            const Icon = option.icon
+            const selected = option.key === activeMetric
 
-        return (
-          <div key={day.snapshot_date} className="flex flex-1 flex-col items-center gap-1">
-            <span className="text-[10px] text-muted-foreground tabular-nums">
-              {steps >= 1000 ? `${(steps / 1000).toFixed(1)}k` : steps}
-            </span>
-            <div
-              className={`w-full rounded-t-lg transition-all ${isToday ? "bg-primary/80" : "bg-primary/30"}`}
-              style={{ height: `${height}%` }}
-            />
-            <span className={`text-[10px] font-medium ${isToday ? "text-foreground" : "text-muted-foreground/60"}`}>
-              {label}
-            </span>
+            return (
+              <button
+                key={option.key}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => setActiveMetric(option.key)}
+                className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors ${
+                  selected
+                    ? "border-primary/40 bg-primary/10 text-foreground"
+                    : "border-border/40 bg-background/30 text-muted-foreground hover:border-border/70 hover:text-foreground"
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {option.label}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:min-w-56">
+          <div className="rounded-lg border border-border/30 bg-background/30 px-3 py-2">
+            <p className="text-[10px] font-medium uppercase text-muted-foreground/70">Total</p>
+            <p className="text-sm font-bold text-foreground tabular-nums">
+              {formatCompactValue(total, activeOption.unit)}
+            </p>
           </div>
-        )
-      })}
+          <div className="rounded-lg border border-border/30 bg-background/30 px-3 py-2">
+            <p className="text-[10px] font-medium uppercase text-muted-foreground/70">Best</p>
+            <p className="text-sm font-bold text-foreground tabular-nums">
+              {bestDay.label} {bestDay.displayValue}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <ChartContainer config={chartConfig} className="h-64 w-full sm:h-72">
+        <AreaChart data={chartData} margin={{ left: 12, right: 8, top: 12, bottom: 0 }}>
+          <defs>
+            <linearGradient id="weeklyActivityFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="var(--color-value)" stopOpacity={0.32} />
+              <stop offset="95%" stopColor="var(--color-value)" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} strokeDasharray="4 4" />
+          <XAxis
+            dataKey="label"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={10}
+            interval={0}
+            fontSize={11}
+          />
+          <YAxis
+            width={58}
+            tickLine={false}
+            axisLine={false}
+            fontSize={12}
+            tickFormatter={(value) => formatCompactValue(Number(value), activeOption.unit)}
+          />
+          <ChartTooltip
+            cursor={{ stroke: activeOption.color, strokeOpacity: 0.35, strokeWidth: 1 }}
+            content={
+              <ChartTooltipContent
+                indicator="line"
+                labelFormatter={(_, payload) => {
+                  const date = payload[0]?.payload?.date
+                  return typeof date === "string" ? date : activeOption.label
+                }}
+                formatter={(value) => formatCompactValue(Number(value), activeOption.unit)}
+              />
+            }
+          />
+          <Area
+            dataKey="value"
+            type="monotone"
+            stroke="var(--color-value)"
+            strokeWidth={3}
+            fill="url(#weeklyActivityFill)"
+            dot={{ r: 4, strokeWidth: 2, fill: "hsl(var(--card))", stroke: activeOption.color }}
+            activeDot={{ r: 6, strokeWidth: 2, fill: activeOption.color, stroke: "hsl(var(--background))" }}
+          />
+        </AreaChart>
+      </ChartContainer>
     </div>
   )
 }
@@ -522,7 +634,7 @@ export default function HealthPage() {
           </div>
           <div>
             <h3 className="text-base font-bold text-foreground">Weekly Activity</h3>
-            <p className="text-xs text-muted-foreground">Last 7 days - steps per day</p>
+            <p className="text-xs text-muted-foreground">Last 7 days - steps, calories, and distance</p>
           </div>
         </div>
         <WeeklyBar snapshots={snapshots} />

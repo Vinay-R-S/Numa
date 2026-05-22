@@ -89,24 +89,30 @@ function GitHubSection() {
   const [status, setStatus] = useState<GitHubAuthStatus | null>(null)
   const [stats, setStats] = useState<GitHubStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [connectingToken, setConnectingToken] = useState(false)
   const [token, setToken] = useState("")
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (force = false) => {
+    if (force) {
+      setRefreshing(true)
+    } else {
+      setLoading(true)
+    }
     setError(null)
     try {
       const s = await getGitHubStatus()
       setStatus(s)
       if (s.connected) {
-        const st = await getGitHubStats()
+        const st = await getGitHubStats(force)
         setStats(st)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load GitHub data")
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }, [])
 
@@ -134,7 +140,7 @@ function GitHubSection() {
       const s = await connectGitHubToken(trimmed)
       setToken("")
       setStatus(s)
-      const st = await getGitHubStats()
+      const st = await getGitHubStats(true)
       setStats(st)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to connect GitHub token")
@@ -246,6 +252,16 @@ function GitHubSection() {
             </p>
           </div>
         </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void load(true)}
+          disabled={refreshing}
+          className="text-muted-foreground hover:text-foreground gap-1.5"
+        >
+          <Loader2 className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+          <span className="hidden sm:inline">{refreshing ? "Refreshing" : "Refresh"}</span>
+        </Button>
         <Button
           variant="ghost"
           size="sm"

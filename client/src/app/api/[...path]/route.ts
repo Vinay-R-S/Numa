@@ -27,6 +27,8 @@ async function handler(
   if (ct) headers.set("content-type", ct)
   const auth = req.headers.get("authorization")
   if (auth) headers.set("authorization", auth)
+  const range = req.headers.get("range")
+  if (range) headers.set("range", range)
 
   let upstream: Response
   try {
@@ -49,6 +51,10 @@ async function handler(
   const resHeaders = new Headers()
   const resCt = upstream.headers.get("content-type")
   if (resCt) resHeaders.set("content-type", resCt)
+  for (const headerName of ["accept-ranges", "content-range", "content-length", "cache-control"]) {
+    const headerValue = upstream.headers.get(headerName)
+    if (headerValue) resHeaders.set(headerName, headerValue)
+  }
 
   return new NextResponse(upstream.body, {
     status: upstream.status,
