@@ -1,7 +1,8 @@
 "use client"
 
 import React, { useState, useEffect, useRef } from "react"
-import { X, ChevronLeft, ChevronRight, Play, Pause } from "lucide-react"
+import Image from "next/image"
+import { ArrowLeft, ChevronLeft, ChevronRight, Play, Pause } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { MoodType, getPosesForMood, PoseWithMoodReason } from "../yogaData"
 import { BreathingGuide } from "./BreathingGuide"
@@ -25,9 +26,12 @@ function GuidedPoseImage({ pose }: { pose: PoseWithMoodReason }) {
   }
 
   return (
-    <img
+    <Image
       src={pose.imageUrl}
       alt={pose.englishName}
+      width={900}
+      height={520}
+      unoptimized
       className="h-full w-full rounded-2xl object-contain"
       style={{ backgroundColor: "rgba(0,0,0,0.2)" }}
       onError={() => setImageError(true)}
@@ -107,7 +111,7 @@ export function GuidedSession({ mood, onEnd }: GuidedSessionProps) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="flex h-dvh flex-col overflow-hidden bg-background">
       <audio
         ref={yogaAudioRef}
         src="/api/audio/yoga-flow.ogg"
@@ -130,14 +134,15 @@ export function GuidedSession({ mood, onEnd }: GuidedSessionProps) {
         </div>
         <button
           onClick={onEnd}
-          className="rounded-lg p-2 text-muted-foreground transition-colors hover:text-foreground"
+          className="inline-flex h-10 items-center gap-2 rounded-lg border border-border/40 bg-card/40 px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
         >
-          <X className="h-5 w-5" />
+          <ArrowLeft className="h-4 w-4" />
+          Back
         </button>
       </div>
 
       {/* Main content */}
-      <div className="flex flex-1 flex-col lg:flex-row">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
         {/* Left side - Pose Image and Breathing Guide */}
         <div className="flex flex-col items-center justify-center p-4 sm:p-6 lg:w-1/2 lg:p-10">
           <div className="mb-8 w-full max-w-md" style={{ maxHeight: "350px" }}>

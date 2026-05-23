@@ -12,6 +12,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { HeaderActionButton } from "@/components/ui/header-action-button"
+import { LiveDataPill } from "@/components/ui/live-data-pill"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { cn } from "@/lib/utils"
 import { useSessionMessages } from "@/lib/useSessionMessages"
@@ -489,6 +490,7 @@ export default function HomePage() {
             <p className="text-xs text-muted-foreground sm:text-sm">Your NUMA overview for today</p>
           </div>
           <div className="flex items-center gap-2">
+            <LiveDataPill live={Boolean(stats)} loading={statsLoading && !stats} />
             <HeaderActionButton
               icon={RefreshCw}
               label="Sync All"

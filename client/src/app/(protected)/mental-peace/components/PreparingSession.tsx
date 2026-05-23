@@ -36,7 +36,7 @@ export function PreparingSession({ mood, onComplete }: PreparingSessionProps) {
   }, [onComplete])
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+    <div className="flex h-full min-h-0 items-center justify-center bg-background px-4">
       <div className="max-w-md w-full rounded-2xl border border-border/40 bg-card/40 p-6 text-center sm:p-8">
         <Loader2 className="mx-auto mb-6 h-10 w-10 animate-spin text-primary" />
 

@@ -16,13 +16,12 @@ import {
   Sparkles,
   Square,
   TrendingUp,
-  Wifi,
-  WifiOff,
   X,
   Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { HeaderActionButton } from "@/components/ui/header-action-button"
+import { LiveDataPill } from "@/components/ui/live-data-pill"
 import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { useSessionMessages } from "@/lib/useSessionMessages"
@@ -709,8 +708,8 @@ export default function HealthPage() {
       {/* Header */}
       <header className="flex flex-col gap-3 rounded-2xl border border-border/40 bg-card/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20">
-            <Activity className="h-5 w-5 text-emerald-400" />
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted/30 ring-1 ring-border/50">
+            <Activity className="h-5 w-5 text-foreground" />
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">
@@ -735,14 +734,7 @@ export default function HealthPage() {
               ))}
             </SelectContent>
           </Select>
-          <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold ${
-            isLive
-              ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
-              : "border-border/30 bg-background/40 text-muted-foreground"
-          }`}>
-            {isLive ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-            {isLive ? "Live Data" : isConfigured ? "No Data" : "Not Configured"}
-          </div>
+          <LiveDataPill live={isLive} loading={loading} configured={isConfigured} />
           <HeaderActionButton
             icon={RefreshCw}
             label="Sync"

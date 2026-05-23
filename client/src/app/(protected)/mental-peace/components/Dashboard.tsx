@@ -17,10 +17,10 @@ export function Dashboard({ mood, onBeginSession }: DashboardProps) {
   const config = moodConfig[mood]
 
   return (
-    <div className="min-h-screen bg-background p-3 sm:p-6 lg:p-10">
-      <div className="w-full">
+    <div className="h-full overflow-hidden bg-background p-3 sm:p-4 lg:p-5">
+      <div className="flex h-full w-full flex-col">
         {/* Header */}
-        <div className="mb-8">
+        <div className="mb-4 shrink-0">
           <h1 className="text-xl font-bold text-foreground sm:text-2xl">
             Your Session
           </h1>
@@ -47,10 +47,10 @@ export function Dashboard({ mood, onBeginSession }: DashboardProps) {
           </div>
         </div>
 
-        <div className="mb-8 h-px w-full bg-border/40" />
+        <div className="mb-4 h-px w-full shrink-0 bg-border/40" />
 
         {/* Main layout */}
-        <div className="flex flex-col gap-4 sm:gap-6 lg:flex-row">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden sm:gap-5 lg:flex-row">
           <div className="lg:w-auto">
             <MusicPlayer />
           </div>

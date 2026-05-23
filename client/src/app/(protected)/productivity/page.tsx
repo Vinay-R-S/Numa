@@ -16,6 +16,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { HeaderActionButton } from "@/components/ui/header-action-button"
+import { LiveDataPill } from "@/components/ui/live-data-pill"
 import { cn } from "@/lib/utils"
 import {
   type GitHubAuthStatus,
@@ -254,24 +255,24 @@ function GitHubSection() {
             </p>
           </div>
         </div>
-        <HeaderActionButton
-          icon={RefreshCw}
-          label="Refresh"
-          loading={refreshing}
-          onClick={() => void load(true)}
-          disabled={refreshing}
-        >
-          {refreshing ? "Refreshing" : "Refresh"}
-        </HeaderActionButton>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void handleDisconnect()}
-          className="text-muted-foreground hover:text-destructive gap-1.5"
-        >
-          <Unlink className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Disconnect</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <LiveDataPill live={Boolean(stats)} loading={refreshing} configured={Boolean(status?.connected)} />
+          <HeaderActionButton
+            icon={RefreshCw}
+            label="Refresh"
+            loading={refreshing}
+            onClick={() => void load(true)}
+            disabled={refreshing}
+          >
+            {refreshing ? "Refreshing" : "Refresh"}
+          </HeaderActionButton>
+          <HeaderActionButton
+            icon={Unlink}
+            label="Disconnect"
+            onClick={() => void handleDisconnect()}
+            className="hover:border-destructive/50 hover:text-destructive"
+          />
+        </div>
       </div>
 
       {/* Stats grid */}
@@ -550,8 +551,8 @@ export default function ProductivityPage() {
       {/* Header */}
       <header className="flex flex-col gap-3 rounded-2xl border border-border/40 bg-card/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 ring-1 ring-violet-500/20">
-            <Code2 className="h-5 w-5 text-violet-400" />
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted/30 ring-1 ring-border/50">
+            <Code2 className="h-5 w-5 text-foreground" />
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">
@@ -569,8 +570,8 @@ export default function ProductivityPage() {
         {/* GitHub */}
         <section className="flex flex-col rounded-2xl border border-border/40 bg-card/40 overflow-hidden">
           <div className="flex items-center gap-2 border-b border-border/40 px-5 py-3.5 shrink-0">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
-              <GitBranch className="h-4 w-4 text-primary" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-muted/30 ring-1 ring-border/40">
+              <GitBranch className="h-4 w-4 text-foreground" />
             </div>
             <span className="text-sm font-semibold text-foreground">GitHub</span>
           </div>
@@ -582,8 +583,8 @@ export default function ProductivityPage() {
         {/* LeetCode */}
         <section className="flex flex-col rounded-2xl border border-border/40 bg-card/40 overflow-hidden">
           <div className="flex items-center gap-2 border-b border-border/40 px-5 py-3.5 shrink-0">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/10">
-              <Trophy className="h-4 w-4 text-amber-400" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-muted/30 ring-1 ring-border/40">
+              <Trophy className="h-4 w-4 text-foreground" />
             </div>
             <span className="text-sm font-semibold text-foreground">LeetCode</span>
           </div>

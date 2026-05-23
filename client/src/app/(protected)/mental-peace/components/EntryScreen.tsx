@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-import { Leaf, Headphones } from "lucide-react"
+import { Headphones } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 interface EntryScreenProps {
@@ -10,12 +10,8 @@ interface EntryScreenProps {
 
 export function EntryScreen({ onBegin }: EntryScreenProps) {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+    <div className="flex h-full min-h-0 items-center justify-center bg-background px-4">
       <div className="text-center max-w-md">
-        <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl border border-border/40 bg-card/40">
-          <Leaf className="h-8 w-8 text-primary" />
-        </div>
-
         <h1 className="text-3xl font-bold text-foreground sm:text-4xl">
           Mental Peace
         </h1>

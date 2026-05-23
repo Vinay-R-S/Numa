@@ -127,10 +127,10 @@ export default function TasklistPage() {
   return (
     <div className="min-h-full px-3 py-4 space-y-6 max-w-[1600px] mx-auto sm:px-6 sm:py-6 sm:space-y-10">
       {/* Page Header */}
-      <div className="flex items-center justify-between">
+      <header className="flex flex-col gap-3 rounded-2xl border border-border/40 bg-card/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20 sm:h-10 sm:w-10">
-            <CheckSquare className="h-4 w-4 text-primary sm:h-5 sm:w-5" />
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted/30 ring-1 ring-border/50">
+            <CheckSquare className="h-5 w-5 text-foreground" />
           </div>
           <div className="min-w-0">
             <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Task List</h1>
@@ -139,7 +139,7 @@ export default function TasklistPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <HeaderActionButton
             icon={RefreshCw}
             label="Sync"
@@ -169,7 +169,7 @@ export default function TasklistPage() {
             />
           )}
         </div>
-      </div>
+      </header>
 
       {/* ── Kanban Board ─────────────────────────────────────────────────────── */}
       {loadingTasks && tasks.length === 0 ? (

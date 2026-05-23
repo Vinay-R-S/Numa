@@ -9,6 +9,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { HeaderActionButton } from "@/components/ui/header-action-button"
+import { LiveDataPill } from "@/components/ui/live-data-pill"
 import { cn } from "@/lib/utils"
 import {
   type AiProvider,
@@ -30,6 +31,16 @@ import {
   getSlackStatus,
   type SlackStatus,
 } from "@/components/agents/slackAgentApi"
+
+function clampInteger(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function parseBoundedInput(value: string | number, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number.parseInt(value, 10)
+  return clampInteger(parsed, min, max, fallback)
+}
 
 const PROVIDER_ICONS: Record<string, React.ReactNode> = {
   groq: <span className="text-[10px] font-black tracking-tight text-orange-400">GROQ</span>,
@@ -82,9 +93,9 @@ export default function SettingsPage() {
   // Timeline settings state
   const [tlInterval, setTlInterval] = useState(300_000)
   const [tlWaterEnabled, setTlWaterEnabled] = useState(true)
-  const [tlWaterStart, setTlWaterStart] = useState(8)
-  const [tlWaterEnd, setTlWaterEnd] = useState(22)
-  const [tlWaterStep, setTlWaterStep] = useState(60)
+  const [tlWaterStart, setTlWaterStart] = useState("8")
+  const [tlWaterEnd, setTlWaterEnd] = useState("22")
+  const [tlWaterStep, setTlWaterStep] = useState("60")
   const [tlBreakfast, setTlBreakfast] = useState("08:00")
   const [tlLunch, setTlLunch] = useState("13:00")
   const [tlDinner, setTlDinner] = useState("20:00")
@@ -98,9 +109,9 @@ export default function SettingsPage() {
       if (s.updateIntervalMs) setTlInterval(s.updateIntervalMs)
       if (s.waterEnabled !== undefined) setTlWaterEnabled(s.waterEnabled)
       if (s.waterConfig) {
-        setTlWaterStart(s.waterConfig.startHour ?? 8)
-        setTlWaterEnd(s.waterConfig.endHour ?? 22)
-        setTlWaterStep(s.waterConfig.stepMinutes ?? 60)
+        setTlWaterStart(String(s.waterConfig.startHour ?? 8))
+        setTlWaterEnd(String(s.waterConfig.endHour ?? 22))
+        setTlWaterStep(String(s.waterConfig.stepMinutes ?? 60))
       }
       if (s.mealTimes) {
         setTlBreakfast(s.mealTimes.breakfast ?? "08:00")
@@ -111,10 +122,17 @@ export default function SettingsPage() {
   }, [])
 
   const handleSaveTimeline = () => {
+    const startHour = parseBoundedInput(tlWaterStart, 0, 24, 8)
+    const endHour = parseBoundedInput(tlWaterEnd, 0, 24, 22)
+    const stepMinutes = parseBoundedInput(tlWaterStep, 1, 60, 60)
+    setTlWaterStart(String(startHour))
+    setTlWaterEnd(String(endHour))
+    setTlWaterStep(String(stepMinutes))
+
     const settings = {
       updateIntervalMs: tlInterval,
       waterEnabled: tlWaterEnabled,
-      waterConfig: { startHour: tlWaterStart, endHour: tlWaterEnd, stepMinutes: tlWaterStep },
+      waterConfig: { startHour, endHour, stepMinutes },
       mealTimes: { breakfast: tlBreakfast, lunch: tlLunch, dinner: tlDinner },
     }
     localStorage.setItem("numa_timeline_settings", JSON.stringify(settings))
@@ -307,11 +325,14 @@ export default function SettingsPage() {
 
   return (
     <div className="flex min-h-full w-full flex-col gap-4 px-4 py-4 sm:gap-6 sm:px-6 sm:py-6">
-      <header className="rounded-xl border border-border/40 bg-card/40 p-4 sm:rounded-2xl sm:p-5">
-        <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Settings</h1>
-        <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
-          Configure AI providers, model selection, and integrations.
-        </p>
+      <header className="flex flex-col gap-3 rounded-xl border border-border/40 bg-card/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:rounded-2xl sm:p-5">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Settings</h1>
+          <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
+            Configure AI providers, model selection, and integrations.
+          </p>
+        </div>
+        <LiveDataPill live={!aiLoading} loading={aiLoading} />
       </header>
 
       {/* ── AI Provider Configuration ──────────────────────────────────── */}
@@ -556,17 +577,16 @@ export default function SettingsPage() {
                 onClick={checkToken}
                 disabled={tokenChecking}
               />
-              <Button
-                type="button"
-                size="sm"
-                className="gap-1.5"
+              <HeaderActionButton
+                icon={tokenConnecting ? Loader2 : Calendar}
+                label={tokenHealth?.valid ? "Reconnect" : "Connect Google Calendar"}
+                loading={tokenConnecting}
                 onClick={handleReconnect}
                 disabled={tokenConnecting || tokenChecking}
-                variant={needsReconnect ? "default" : "outline"}
+                active={needsReconnect}
               >
-                {tokenConnecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Calendar className="h-3.5 w-3.5" />}
                 {tokenHealth?.valid ? "Reconnect" : "Connect Google Calendar"}
-              </Button>
+              </HeaderActionButton>
             </div>
           </div>
 
@@ -634,17 +654,16 @@ export default function SettingsPage() {
                 onClick={checkSlack}
                 disabled={slackChecking || slackConnecting}
               />
-              <Button
-                type="button"
-                size="sm"
-                className="gap-1.5"
+              <HeaderActionButton
+                icon={slackConnecting ? Loader2 : Slack}
+                label={slackStatus?.connected ? "Reconnect Slack" : "Connect Slack"}
+                loading={slackConnecting}
                 onClick={handleSlackReconnect}
                 disabled={slackConnecting || slackChecking}
-                variant={needsSlackReconnect ? "default" : "outline"}
+                active={needsSlackReconnect}
               >
-                {slackConnecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Slack className="h-3.5 w-3.5" />}
                 {slackStatus?.connected ? "Reconnect Slack" : "Connect Slack"}
-              </Button>
+              </HeaderActionButton>
             </div>
           </div>
 
@@ -687,15 +706,15 @@ export default function SettingsPage() {
               {aiEnabled ? "Enabled" : "Disabled"}
             </span>
           </div>
-          <Button
-            type="button"
-            variant={aiEnabled ? "outline" : "default"}
-            size="sm"
-            className="w-full sm:w-auto"
+          <HeaderActionButton
+            icon={Bot}
+            label={aiEnabled ? "Disable Agents" : "Enable Agents"}
+            active={!aiEnabled}
             onClick={handleToggleAi}
+            className="w-full justify-center sm:w-auto"
           >
             {aiEnabled ? "Disable Agents" : "Enable Agents"}
-          </Button>
+          </HeaderActionButton>
         </div>
 
         {/* Current active config summary */}
@@ -731,17 +750,20 @@ export default function SettingsPage() {
           {/* Update interval */}
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Update Interval</label>
-            <select
-              value={tlInterval}
-              onChange={(e) => setTlInterval(Number(e.target.value))}
-              className="w-full rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-            >
-              <option value={60000}>1 minute</option>
-              <option value={120000}>2 minutes</option>
-              <option value={300000}>5 minutes (default)</option>
-              <option value={600000}>10 minutes</option>
-              <option value={900000}>15 minutes</option>
-            </select>
+            <div className="relative">
+              <select
+                value={tlInterval}
+                onChange={(e) => setTlInterval(Number(e.target.value))}
+                className="h-11 w-full appearance-none rounded-lg border border-border/60 bg-background/60 px-3 pr-10 text-sm text-foreground [color-scheme:dark] focus:outline-none focus:ring-1 focus:ring-primary/50"
+              >
+                <option className="bg-popover text-popover-foreground" value={60000}>1 minute</option>
+                <option className="bg-popover text-popover-foreground" value={120000}>2 minutes</option>
+                <option className="bg-popover text-popover-foreground" value={300000}>5 minutes (default)</option>
+                <option className="bg-popover text-popover-foreground" value={600000}>10 minutes</option>
+                <option className="bg-popover text-popover-foreground" value={900000}>15 minutes</option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            </div>
           </div>
 
           {/* Water reminders */}
@@ -752,13 +774,13 @@ export default function SettingsPage() {
                 type="button"
                 onClick={() => setTlWaterEnabled(!tlWaterEnabled)}
                 className={cn(
-                  "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
-                  tlWaterEnabled ? "bg-primary" : "bg-muted"
+                  "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-border/70 bg-background/70 transition-colors"
                 )}
               >
                 <span
                   className={cn(
-                    "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
+                    "inline-block h-3.5 w-3.5 rounded-full transition-transform",
+                    tlWaterEnabled ? "bg-emerald-400" : "bg-white",
                     tlWaterEnabled ? "translate-x-[18px]" : "translate-x-[3px]"
                   )}
                 />
@@ -769,35 +791,34 @@ export default function SettingsPage() {
                 <div>
                   <label className="mb-1 block text-[10px] text-muted-foreground">Start Hour</label>
                   <input
-                    type="number"
-                    min={0}
-                    max={23}
+                    type="text"
+                    inputMode="numeric"
                     value={tlWaterStart}
-                    onChange={(e) => setTlWaterStart(Number(e.target.value))}
-                    className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    onChange={(e) => setTlWaterStart(e.target.value)}
+                    onBlur={() => setTlWaterStart(String(parseBoundedInput(tlWaterStart, 0, 24, 8)))}
+                    className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground [appearance:textfield] [color-scheme:dark] focus:outline-none focus:ring-1 focus:ring-primary/50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                 </div>
                 <div>
                   <label className="mb-1 block text-[10px] text-muted-foreground">End Hour</label>
                   <input
-                    type="number"
-                    min={0}
-                    max={23}
+                    type="text"
+                    inputMode="numeric"
                     value={tlWaterEnd}
-                    onChange={(e) => setTlWaterEnd(Number(e.target.value))}
-                    className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    onChange={(e) => setTlWaterEnd(e.target.value)}
+                    onBlur={() => setTlWaterEnd(String(parseBoundedInput(tlWaterEnd, 0, 24, 22)))}
+                    className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground [appearance:textfield] [color-scheme:dark] focus:outline-none focus:ring-1 focus:ring-primary/50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                 </div>
                 <div>
                   <label className="mb-1 block text-[10px] text-muted-foreground">Step (min)</label>
                   <input
-                    type="number"
-                    min={15}
-                    max={180}
-                    step={15}
+                    type="text"
+                    inputMode="numeric"
                     value={tlWaterStep}
-                    onChange={(e) => setTlWaterStep(Number(e.target.value))}
-                    className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    onChange={(e) => setTlWaterStep(e.target.value)}
+                    onBlur={() => setTlWaterStep(String(parseBoundedInput(tlWaterStep, 1, 60, 60)))}
+                    className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground [appearance:textfield] [color-scheme:dark] focus:outline-none focus:ring-1 focus:ring-primary/50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                 </div>
               </div>
@@ -814,7 +835,7 @@ export default function SettingsPage() {
                   type="time"
                   value={tlBreakfast}
                   onChange={(e) => setTlBreakfast(e.target.value)}
-                  className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground [color-scheme:dark] focus:outline-none focus:ring-1 focus:ring-primary/50 [&::-webkit-calendar-picker-indicator]:invert"
                 />
               </div>
               <div>
@@ -823,7 +844,7 @@ export default function SettingsPage() {
                   type="time"
                   value={tlLunch}
                   onChange={(e) => setTlLunch(e.target.value)}
-                  className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground [color-scheme:dark] focus:outline-none focus:ring-1 focus:ring-primary/50 [&::-webkit-calendar-picker-indicator]:invert"
                 />
               </div>
               <div>
@@ -832,7 +853,7 @@ export default function SettingsPage() {
                   type="time"
                   value={tlDinner}
                   onChange={(e) => setTlDinner(e.target.value)}
-                  className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-sm text-foreground [color-scheme:dark] focus:outline-none focus:ring-1 focus:ring-primary/50 [&::-webkit-calendar-picker-indicator]:invert"
                 />
               </div>
             </div>

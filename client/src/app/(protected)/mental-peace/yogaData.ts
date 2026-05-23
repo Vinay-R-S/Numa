@@ -432,7 +432,7 @@ export const moodConfig: Record<MoodType, MoodConfig> = {
     ]
   },
   numb: {
-    label: "Numb / Disconnected",
+    label: "Disconnected",
     color: "#ec4899",
     gradient: "from-[#ec4899] to-[#be185d]",
     sequenceName: "Awakening Flow",

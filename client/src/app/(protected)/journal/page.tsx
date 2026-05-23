@@ -366,8 +366,8 @@ export default function JournalPage() {
       {/* Header */}
       <header className="flex items-center justify-between rounded-2xl border border-border/40 bg-card/40 p-4 sm:p-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 ring-1 ring-amber-500/20">
-            <BookOpen className="h-5 w-5 text-amber-400" />
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted/30 ring-1 ring-border/50">
+            <BookOpen className="h-5 w-5 text-foreground" />
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">

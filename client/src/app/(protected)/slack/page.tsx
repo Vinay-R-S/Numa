@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { AlertTriangle, AtSign, Bot, Hash, Lock, Megaphone, MessageSquare, RefreshCw, Send, Slack, Sparkles, Square, User, Wifi, WifiOff, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { HeaderActionButton } from "@/components/ui/header-action-button"
+import { LiveDataPill } from "@/components/ui/live-data-pill"
 import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 import { useSessionMessages } from "@/lib/useSessionMessages"
 import {
@@ -481,8 +482,8 @@ export default function SlackPage() {
       {/* ── Header ─────────────────────────────────────────────────────────────── */}
       <header className="flex flex-col gap-3 rounded-2xl border border-border/40 bg-card/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#E01E5A]/10 ring-1 ring-[#E01E5A]/20">
-            <Slack className="h-5 w-5 text-[#E01E5A]" />
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted/30 ring-1 ring-border/50">
+            <Slack className="h-5 w-5 text-foreground" />
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">
@@ -495,6 +496,7 @@ export default function SlackPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <LiveDataPill live={Boolean(status?.connected)} loading={!status} configured={Boolean(status?.connected)} />
           <HeaderActionButton
             id="slack-sync-btn"
             icon={RefreshCw}

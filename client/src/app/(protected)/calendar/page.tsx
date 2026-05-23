@@ -10,6 +10,7 @@ import { AgentSuggestions } from "@/components/calendar/AgentSuggestions"
 import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 import { Button } from "@/components/ui/button"
 import { HeaderActionButton } from "@/components/ui/header-action-button"
+import { LiveDataPill } from "@/components/ui/live-data-pill"
 import { useCalendarStore } from "@/lib/stores"
 import {
   AgentChatMessage,
@@ -239,10 +240,10 @@ export default function CalendarPage() {
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-3rem)] w-full flex-col gap-3 overflow-hidden px-3 py-3 sm:h-dvh sm:gap-4 sm:px-6 sm:py-4">
-      <header className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <header className="flex shrink-0 flex-col gap-3 rounded-2xl border border-border/40 bg-card/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20 sm:h-10 sm:w-10">
-            <CalendarDays className="h-4 w-4 text-primary sm:h-5 sm:w-5" />
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted/30 ring-1 ring-border/50">
+            <CalendarDays className="h-5 w-5 text-foreground" />
           </div>
           <div className="min-w-0">
             <h1 className="truncate text-xl font-bold tracking-tight text-foreground sm:text-2xl">Calendar</h1>
@@ -252,7 +253,8 @@ export default function CalendarPage() {
           </div>
         </div>
 
-        <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-xl sm:justify-end">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:max-w-3xl sm:justify-end">
+          <LiveDataPill live={calendarConnected && events.length > 0} loading={loading} configured={calendarConnected} />
           <div className="relative flex-1 sm:w-full sm:max-w-md">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
             <input
