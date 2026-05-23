@@ -15,6 +15,7 @@ import {
   Unlink,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { HeaderActionButton } from "@/components/ui/header-action-button"
 import { cn } from "@/lib/utils"
 import {
   type GitHubAuthStatus,
@@ -253,16 +254,15 @@ function GitHubSection() {
             </p>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
+        <HeaderActionButton
+          icon={RefreshCw}
+          label="Refresh"
+          loading={refreshing}
           onClick={() => void load(true)}
           disabled={refreshing}
-          className="text-muted-foreground hover:text-foreground gap-1.5"
         >
-          <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
-          <span className="hidden sm:inline">{refreshing ? "Refreshing" : "Refresh"}</span>
-        </Button>
+          {refreshing ? "Refreshing" : "Refresh"}
+        </HeaderActionButton>
         <Button
           variant="ghost"
           size="sm"

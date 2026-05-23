@@ -2,8 +2,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
-import { AlertTriangle, AtSign, Bot, Hash, LoaderCircle, Lock, Megaphone, MessageSquare, RefreshCw, Send, Slack, Sparkles, User, Wifi, WifiOff, X, Zap } from "lucide-react"
+import { AlertTriangle, AtSign, Bot, Hash, Lock, Megaphone, MessageSquare, RefreshCw, Send, Slack, Sparkles, Square, User, Wifi, WifiOff, X, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { HeaderActionButton } from "@/components/ui/header-action-button"
 import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 import { useSessionMessages } from "@/lib/useSessionMessages"
 import {
@@ -62,6 +63,10 @@ function channelIcon(ch: SlackChannel) {
 
 function channelDisplayName(ch: SlackChannel) {
   return ch.name || ch.slack_id
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
 }
 
 // ── Connection Banner ────────────────────────────────────────────────────────────
@@ -184,7 +189,7 @@ function ChatBubble({ msg }: { msg: SlackAgentMessage }) {
         </div>
       )}
       <div
-        className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+        className={`min-w-0 max-w-[85%] overflow-hidden rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
           isUser
             ? "bg-primary/15 text-foreground rounded-br-sm"
             : "bg-muted/50 text-foreground rounded-bl-sm"
@@ -235,6 +240,7 @@ export default function SlackPage() {
   const [chatError, setChatError] = useState<string | null>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const chatAbortRef = useRef<AbortController | null>(null)
   const initialSyncAttemptedRef = useRef(false)
   const syncingRef = useRef(false)
 
@@ -362,6 +368,19 @@ export default function SlackPage() {
     void syncMessages()
   }, [channels.length, status?.connected, syncing, syncMessages])
 
+  useEffect(() => {
+    if (!agentOpen) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAgentOpen(false)
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [agentOpen])
+
   // ── Select channel ───────────────────────────────────────────────────────────
 
   const selectChannel = useCallback((slackId: string) => {
@@ -397,6 +416,8 @@ export default function SlackPage() {
     const q = chatInput.trim()
     if (!q || sending) return
 
+    const controller = new AbortController()
+    chatAbortRef.current = controller
     const next: SlackAgentMessage[] = [...chatMessages, { role: "user", content: q }]
     setChatMessages(next)
     setChatInput("")
@@ -404,21 +425,32 @@ export default function SlackPage() {
     setChatError(null)
 
     try {
-      const result = await sendSlackAgentCommand(q, next)
+      const result = await sendSlackAgentCommand(q, next, controller.signal)
       setChatMessages((prev) => [...prev, { role: "assistant", content: result.response }])
       if (result.refresh_slack) {
         void loadMessages()
       }
     } catch (err) {
+      if (isAbortError(err)) {
+        setChatMessages((prev) => [...prev, { role: "assistant", content: "Generation stopped." }])
+        return
+      }
       const msg = err instanceof Error ? err.message : "Request failed"
       setChatError(msg)
       setChatMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `⚠️ ${msg}` },
+        { role: "assistant", content: `Error: ${msg}` },
       ])
     } finally {
+      if (chatAbortRef.current === controller) {
+        chatAbortRef.current = null
+      }
       setSending(false)
     }
+  }
+
+  const handleStop = () => {
+    chatAbortRef.current?.abort()
   }
 
   const canSend = useMemo(() => chatInput.trim().length > 0 && !sending, [chatInput, sending])
@@ -463,36 +495,29 @@ export default function SlackPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button
+          <HeaderActionButton
             id="slack-sync-btn"
-            variant="ghost"
-            size="sm"
+            icon={RefreshCw}
+            label="Sync"
+            loading={syncing}
             onClick={() => { void syncMessages() }}
-            className="gap-2 text-muted-foreground hover:text-foreground"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">Sync</span>
-          </Button>
-          <Button
+            {syncing ? "Syncing..." : "Sync"}
+          </HeaderActionButton>
+          <HeaderActionButton
             id="slack-refresh-btn"
-            variant="ghost"
-            size="sm"
+            icon={RefreshCw}
+            label="Refresh"
+            loading={loadingMsgs}
             onClick={() => { void checkStatus(); void loadChannels(); void loadMessages() }}
-            className="gap-2 text-muted-foreground hover:text-foreground"
-          >
-            <LoaderCircle className={`h-3.5 w-3.5 ${loadingMsgs ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-          <Button
+          />
+          <HeaderActionButton
             id="slack-agent-toggle"
-            variant={agentOpen ? "default" : "ghost"}
-            size="sm"
+            icon={Sparkles}
+            label="Agent"
+            active={agentOpen}
             onClick={() => setAgentOpen((v) => !v)}
-            className="gap-2"
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Agent</span>
-          </Button>
+          />
         </div>
       </header>
 
@@ -753,10 +778,13 @@ export default function SlackPage() {
                   <Bot className="h-3.5 w-3.5 text-primary" />
                 </div>
                 <div className="rounded-2xl rounded-bl-sm bg-muted/50 px-4 py-3">
-                  <div className="flex gap-1">
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:0ms]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:150ms]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:300ms]" />
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:0ms]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:150ms]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:300ms]" />
+                    </div>
+                    <span className="text-xs text-muted-foreground">Thinking and generating output...</span>
                   </div>
                 </div>
               </div>
@@ -791,12 +819,13 @@ export default function SlackPage() {
                 id="slack-send-btn"
                 type="button"
                 size="sm"
-                onClick={() => void handleSend()}
-                disabled={!canSend}
+                variant={sending ? "destructive" : "default"}
+                onClick={() => sending ? handleStop() : void handleSend()}
+                disabled={!canSend && !sending}
                 className="shrink-0"
               >
-                <Send className="h-4 w-4 sm:mr-1" />
-                <span className="hidden sm:inline">{sending ? "…" : "Send"}</span>
+                {sending ? <Square className="h-4 w-4 sm:mr-1" /> : <Send className="h-4 w-4 sm:mr-1" />}
+                <span className="hidden sm:inline">{sending ? "Stop" : "Send"}</span>
               </Button>
             </div>
           </div>

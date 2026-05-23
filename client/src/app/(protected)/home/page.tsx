@@ -1,21 +1,21 @@
 "use client"
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts"
 import {
   Bot, BrainCircuit, Send, RefreshCw, CalendarDays, CheckSquare,
   Slack, Activity, GitBranch, Code2, BookOpen, Loader2,
   ArrowRight, TrendingUp, Footprints, Flame, Moon, Clock, Sparkles, X,
-  ListTodo, AlertCircle, Zap, MapPin, Heart,
+  ListTodo, AlertCircle, Zap, MapPin, Heart, HeartPulse, Square,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { HeaderActionButton } from "@/components/ui/header-action-button"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { cn } from "@/lib/utils"
 import { useSessionMessages } from "@/lib/useSessionMessages"
 import { useDashboardStore } from "@/lib/stores"
-import { getHealthSnapshots, type HealthSnapshot } from "@/components/health/healthApi"
 import {
   MasterAgentMessage,
   fetchLatestAgentData,
@@ -41,21 +41,12 @@ const ICON_COLORS = {
   distance: "text-violet-400",
   github: "text-violet-400",
   active: "text-emerald-400",
+  heartRate: "text-rose-400",
+  heartPoints: "text-pink-400",
 } as const
 
-function localDateString(date = new Date()): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, "0")
-  const day = String(date.getDate()).padStart(2, "0")
-  return `${year}-${month}-${day}`
-}
-
-function lastSevenDays(): Date[] {
-  return Array.from({ length: 7 }, (_, index) => {
-    const date = new Date()
-    date.setDate(date.getDate() - (6 - index))
-    return date
-  })
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
 }
 
 function formatCompactValue(value: number): string {
@@ -89,16 +80,28 @@ const StatCard = React.memo(function StatCard({ icon: Icon, label, value, sub, h
   return inner
 })
 
-function HealthRingCard({ icon: Icon, label, value, unit, goal, iconColor, ringColor }: {
-  icon: React.ElementType; label: string; value: number; unit: string; goal: number; iconColor: string; ringColor: string
+function HealthRingCard({ icon: Icon, label, value, unit, goal, iconColor, ringColor, className, featured = false }: {
+  icon: React.ElementType
+  label: string
+  value: number
+  unit: string
+  goal: number
+  iconColor: string
+  ringColor: string
+  className?: string
+  featured?: boolean
 }) {
   const pct = Math.min(value / goal, 1)
   const r = 28
   const circ = 2 * Math.PI * r
   const offset = circ * (1 - pct)
   return (
-    <div className="flex flex-col items-center gap-1.5 rounded-xl border border-border/40 bg-card/40 p-3">
-      <div className="relative h-16 w-16">
+    <div className={cn(
+      "flex flex-col items-center justify-center gap-2 rounded-xl border border-border/40 bg-card/40 p-4",
+      featured ? "min-h-[220px] sm:min-h-[248px]" : "min-h-[118px]",
+      className
+    )}>
+      <div className={cn("relative", featured ? "h-24 w-24" : "h-20 w-20")}>
         <svg viewBox="0 0 64 64" className="h-full w-full -rotate-90">
           <circle cx="32" cy="32" r={r} fill="none" strokeWidth="5" className="stroke-muted/30" />
           <circle
@@ -111,16 +114,20 @@ function HealthRingCard({ icon: Icon, label, value, unit, goal, iconColor, ringC
           />
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">
-          <Icon className={cn("h-4 w-4", iconColor)} />
+          <Icon className={cn(featured ? "h-6 w-6" : "h-5 w-5", iconColor)} />
         </div>
       </div>
       <div className="text-center">
-        <div className="flex items-baseline justify-center gap-0.5">
-          <span className="text-sm font-bold text-foreground tabular-nums">{typeof value === "number" && value % 1 !== 0 ? value.toFixed(1) : value.toLocaleString()}</span>
-          <span className="text-[10px] text-muted-foreground">{unit}</span>
+        <div className="flex items-baseline justify-center gap-1">
+          <span className={cn("font-bold text-foreground tabular-nums", featured ? "text-2xl" : "text-lg")}>
+            {typeof value === "number" && value % 1 !== 0 ? value.toFixed(1) : value.toLocaleString()}
+          </span>
+          <span className={cn("text-muted-foreground", featured ? "text-sm" : "text-xs")}>{unit}</span>
         </div>
-        <p className="text-[10px] text-muted-foreground">{label}</p>
-        <p className="text-[9px] text-muted-foreground/60">{Math.round(pct * 100)}% of {goal.toLocaleString()}</p>
+        <p className={cn("font-medium text-muted-foreground", featured ? "text-sm" : "text-xs")}>{label}</p>
+        <p className={cn("text-muted-foreground/60", featured ? "text-xs" : "text-[11px]")}>
+          {Math.round(pct * 100)}% of {goal.toLocaleString()}
+        </p>
       </div>
     </div>
   )
@@ -198,31 +205,17 @@ function TaskDistributionChart({ completed, inprogress, pending }: { completed: 
 }
 
 function WeeklyActivityChart({
-  snapshots,
-  todayHealth,
+  data,
 }: {
-  snapshots: HealthSnapshot[]
-  todayHealth: { steps?: number; calories?: number; distance_km?: number }
+  data: Array<{
+    date: string
+    label: string
+    steps: number
+    calories: number
+    distance_km: number
+  }>
 }) {
-  const snapshotByDate = new Map(
-    snapshots
-      .filter((snapshot) => snapshot.source === "google_fit")
-      .map((snapshot) => [snapshot.snapshot_date, snapshot])
-  )
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-  const todayKey = localDateString()
-  const chartData = lastSevenDays().map((date) => {
-    const dateKey = localDateString(date)
-    const snapshot = snapshotByDate.get(dateKey)
-
-    return {
-      date: dateKey,
-      label: dayNames[date.getDay()],
-      steps: dateKey === todayKey ? (snapshot?.steps ?? todayHealth.steps ?? 0) : (snapshot?.steps ?? 0),
-      calories: dateKey === todayKey ? (snapshot?.calories ?? todayHealth.calories ?? 0) : (snapshot?.calories ?? 0),
-      distance_km: dateKey === todayKey ? (snapshot?.distance_km ?? todayHealth.distance_km ?? 0) : (snapshot?.distance_km ?? 0),
-    }
-  })
+  const chartData = data
   const totalSteps = chartData.reduce((sum, item) => sum + item.steps, 0)
   const totalCalories = chartData.reduce((sum, item) => sum + item.calories, 0)
   const totalDistance = chartData.reduce((sum, item) => sum + item.distance_km, 0)
@@ -371,7 +364,6 @@ export default function HomePage() {
   const [user, setUser] = useState<User | null>(null)
   const { stats, statsLoading, fetchStats: loadStats } = useDashboardStore()
   const [agentOpen, setAgentOpen] = useState(false)
-  const [healthSnapshots, setHealthSnapshots] = useState<HealthSnapshot[]>([])
   const [syncingAll, setSyncingAll] = useState(false)
 
   const [messages, setMessages] = useSessionMessages<MasterAgentMessage>("numa:session:master-agent-chat", [
@@ -382,6 +374,8 @@ export default function HomePage() {
   const [chatError, setChatError] = useState<string | null>(null)
   const [lastDelegation, setLastDelegation] = useState<string | null>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const chatAbortRef = useRef<AbortController | null>(null)
+  const syncRefreshTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
 
   const canSend = useMemo(() => input.trim().length > 0 && !sending, [input, sending])
 
@@ -396,48 +390,77 @@ export default function HomePage() {
   useEffect(() => { loadStats() }, [loadStats])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages])
 
-  const loadHealthSnapshots = useCallback(async () => {
-    try {
-      const snapshots = await getHealthSnapshots({ days: 7 })
-      setHealthSnapshots(snapshots)
-    } catch {
-      setHealthSnapshots([])
+  useEffect(() => {
+    return () => {
+      syncRefreshTimersRef.current.forEach((timer) => clearTimeout(timer))
+      syncRefreshTimersRef.current = []
     }
   }, [])
 
   useEffect(() => {
-    void loadHealthSnapshots()
-  }, [loadHealthSnapshots])
+    if (!agentOpen) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAgentOpen(false)
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [agentOpen])
 
   async function handleSend() {
     const query = input.trim()
     if (!query || sending) return
+    const controller = new AbortController()
+    chatAbortRef.current = controller
     const nextHistory: MasterAgentMessage[] = [...messages, { role: "user", content: query }]
     setMessages(nextHistory)
     setInput("")
     setSending(true)
     setChatError(null)
     try {
-      const result = await sendMasterAgentCommand(query, nextHistory)
+      const result = await sendMasterAgentCommand(query, nextHistory, controller.signal)
       setMessages((prev) => [...prev, { role: "assistant", content: result.response }])
       if (result.delegated_to) setLastDelegation(result.delegated_to)
       if (result.refreshCalendar || result.refreshTasks || result.refreshHealth || result.refreshGithub || result.refreshJournal) {
         loadStats(true)
       }
     } catch (err) {
+      if (isAbortError(err)) {
+        setMessages((prev) => [...prev, { role: "assistant", content: "Generation stopped." }])
+        return
+      }
       const msg = err instanceof Error ? err.message : "Request failed"
       setChatError(msg)
       setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${msg}` }])
-    } finally { setSending(false) }
+    } finally {
+      if (chatAbortRef.current === controller) {
+        chatAbortRef.current = null
+      }
+      setSending(false)
+    }
+  }
+
+  function handleStop() {
+    chatAbortRef.current?.abort()
   }
 
   async function handleFetchLatest() {
     if (syncingAll) return
     setSyncingAll(true)
+    syncRefreshTimersRef.current.forEach((timer) => clearTimeout(timer))
+    syncRefreshTimersRef.current = []
+
     try {
-      await fetchLatestAgentData()
+      await fetchLatestAgentData({ background: true })
       await loadStats(true)
-      await loadHealthSnapshots()
+      syncRefreshTimersRef.current = [5000, 15000, 30000].map((delay) =>
+        setTimeout(() => {
+          void loadStats(true)
+        }, delay)
+      )
     } catch { /* silent */ }
     finally {
       setSyncingAll(false)
@@ -466,29 +489,29 @@ export default function HomePage() {
             <p className="text-xs text-muted-foreground sm:text-sm">Your NUMA overview for today</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className={cn(
-                "gap-1.5 transition-all",
-                syncingAll && "border-primary/50 bg-primary/10 text-primary"
-              )}
+            <HeaderActionButton
+              icon={RefreshCw}
+              label="Sync All"
+              loading={syncingAll}
+              active={syncingAll}
               onClick={() => { void handleFetchLatest() }}
               disabled={syncingAll}
             >
-              <RefreshCw className={cn("h-3.5 w-3.5", syncingAll && "animate-spin")} />
               {syncingAll ? "Syncing..." : "Sync All"}
-            </Button>
-            <Button
-              type="button" size="sm"
-              variant={agentOpen ? "default" : "outline"}
-              className="gap-1.5"
+            </HeaderActionButton>
+            <HeaderActionButton
+              icon={RefreshCw}
+              label="Refresh"
+              loading={statsLoading}
+              onClick={() => { void loadStats(true) }}
+              disabled={statsLoading}
+            />
+            <HeaderActionButton
+              icon={Sparkles}
+              label="Agent"
+              active={agentOpen}
               onClick={() => setAgentOpen((o) => !o)}
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Agent</span>
-            </Button>
+            />
           </div>
         </div>
 
@@ -530,17 +553,29 @@ export default function HomePage() {
                   Details <ArrowRight className="h-3 w-3" />
                 </a>
               </div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-[repeat(3,minmax(0,1fr))_minmax(180px,0.9fr)] lg:grid-rows-2">
                 <HealthRingCard icon={Footprints} label="Steps" value={h.steps ?? 0} unit="steps" goal={10000} iconColor={ICON_COLORS.steps} ringColor="stroke-cyan-400" />
                 <HealthRingCard icon={Activity} label="Active Minutes" value={h.active_minutes ?? 0} unit="min" goal={60} iconColor={ICON_COLORS.active} ringColor="stroke-emerald-400" />
                 <HealthRingCard icon={Flame} label="Calories" value={h.calories ?? 0} unit="kcal" goal={2000} iconColor={ICON_COLORS.calories} ringColor="stroke-orange-400" />
                 <HealthRingCard icon={Moon} label="Sleep" value={h.sleep_hours ?? 0} unit="hrs" goal={8} iconColor={ICON_COLORS.sleep} ringColor="stroke-indigo-400" />
                 <HealthRingCard icon={MapPin} label="Distance" value={h.distance_km ?? 0} unit="km" goal={5} iconColor={ICON_COLORS.distance} ringColor="stroke-violet-400" />
+                <HealthRingCard icon={HeartPulse} label="Heart Rate" value={h.heart_rate_bpm ?? 0} unit="bpm" goal={120} iconColor={ICON_COLORS.heartRate} ringColor="stroke-rose-400" />
+                <HealthRingCard
+                  icon={Heart}
+                  label="Heart Points"
+                  value={h.heart_points ?? 0}
+                  unit="pts"
+                  goal={30}
+                  iconColor={ICON_COLORS.heartPoints}
+                  ringColor="stroke-pink-400"
+                  className="sm:col-span-3 lg:col-span-1 lg:col-start-4 lg:row-span-2 lg:row-start-1"
+                  featured
+                />
               </div>
             </div>
 
             {/* Weekly Activity Sparkline */}
-            <WeeklyActivityChart snapshots={healthSnapshots} todayHealth={h} />
+            <WeeklyActivityChart data={stats.health_weekly ?? []} />
 
             {/* Two Column: Upcoming Events + Dev */}
             <div className="grid gap-3 sm:grid-cols-2">
@@ -666,7 +701,7 @@ export default function HomePage() {
               <div
                 key={`${msg.role}-${i}`}
                 className={cn(
-                  "max-w-[90%] rounded-xl px-3 py-2 text-[13px] leading-relaxed",
+                  "min-w-0 max-w-[90%] overflow-hidden rounded-xl px-3 py-2 text-[13px] leading-relaxed",
                   msg.role === "user"
                     ? "ml-auto bg-primary/15 text-foreground"
                     : "mr-auto bg-muted/50 text-foreground"
@@ -679,7 +714,7 @@ export default function HomePage() {
             {sending && (
               <div className="mr-auto flex items-center gap-1.5 rounded-xl bg-muted/50 px-3 py-2">
                 <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                <span className="text-[11px] text-muted-foreground">Thinking...</span>
+                <span className="text-[11px] text-muted-foreground">Thinking and generating output...</span>
               </div>
             )}
             <div ref={chatEndRef} />
@@ -700,8 +735,16 @@ export default function HomePage() {
               className="flex-1 rounded-lg border border-border/40 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
               disabled={sending}
             />
-            <Button type="button" size="sm" className="shrink-0" onClick={() => handleSend()} disabled={!canSend}>
-              <Send className="h-4 w-4" />
+            <Button
+              type="button"
+              size="sm"
+              variant={sending ? "destructive" : "default"}
+              className="shrink-0"
+              onClick={() => sending ? handleStop() : handleSend()}
+              disabled={!canSend && !sending}
+            >
+              {sending ? <Square className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+              <span className="sr-only">{sending ? "Stop" : "Send"}</span>
             </Button>
           </div>
         </section>

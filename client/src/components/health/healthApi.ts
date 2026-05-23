@@ -133,12 +133,14 @@ export async function syncAllHealth(): Promise<HealthSyncAllResult> {
 
 export async function sendHealthAgentCommand(
   query: string,
-  history: HealthAgentMessage[] = []
+  history: HealthAgentMessage[] = [],
+  signal?: AbortSignal
 ): Promise<HealthChatResponse> {
   const res = await fetch("/api/health-agent/chat", {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({ query, history }),
+    signal,
   })
   const data = await parseJson<HealthChatResponse>(res, "Health agent request failed")
   if (data.success === false) {

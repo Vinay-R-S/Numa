@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useCallback, useEffect } from "react"
+import React, { useState, useCallback, useEffect, useRef } from "react"
 import {
   DndContext,
   DragOverlay,
@@ -13,7 +13,7 @@ import {
   type DragEndEvent,
   type DragOverEvent,
 } from "@dnd-kit/core"
-import { LoaderCircle, Plus } from "lucide-react"
+import { Plus } from "lucide-react"
 import type { Task, TaskStatus } from "./types"
 import { KanbanColumn } from "./KanbanColumn"
 import { TaskCard } from "./TaskCard"
@@ -62,19 +62,18 @@ function prioritySortValue(task: Task): number {
 interface KanbanBoardProps {
   tasks: Task[]
   onTasksChange: (tasks: Task[]) => void
-  onRefresh: () => void
-  refreshing?: boolean
 }
 
-export function KanbanBoard({ tasks, onTasksChange, onRefresh, refreshing = false }: KanbanBoardProps) {
+export function KanbanBoard({ tasks, onTasksChange }: KanbanBoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
   // Local copy for optimistic drag/edit updates - parent is notified only after confirmed API responses
   const [localTasks, setLocalTasks] = useState(tasks)
+  const deletedTaskIdsRef = useRef<Set<string>>(new Set())
   const [sortMode, setSortMode] = useState<TaskSortMode>("position")
 
   // Keep local state in sync whenever the parent pushes a confirmed update or refreshes
   useEffect(() => {
-    setLocalTasks(tasks)
+    setLocalTasks(tasks.filter((task) => !deletedTaskIdsRef.current.has(task.id)))
   }, [tasks])
 
   useEffect(() => {
@@ -216,14 +215,24 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh, refreshing = fals
 
   async function handleDeleteTask(id: string) {
     if (!confirm("Delete this task?")) return
+    const previous = localTasks
+    const deletedTask = localTasks.find((task) => task.id === id)
     cancelReminder(id)
+    deletedTaskIdsRef.current.add(id)
     const optimistic = localTasks.filter((t) => t.id !== id)
     setLocalTasks(optimistic)
+    onTasksChange(optimistic)
     try {
       await deleteTask(id)
-      onTasksChange(optimistic)
     } catch {
-      setLocalTasks(tasks) // revert local UI
+      deletedTaskIdsRef.current.delete(id)
+      if (deletedTask) {
+        const restored = previous.some((task) => task.id === deletedTask.id)
+          ? previous
+          : [...previous, deletedTask]
+        setLocalTasks(restored)
+        onTasksChange(restored)
+      }
       toast.error("Failed to delete task")
     }
   }
@@ -274,16 +283,6 @@ export function KanbanBoard({ tasks, onTasksChange, onRefresh, refreshing = fals
               </SelectContent>
             </Select>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onRefresh}
-            disabled={refreshing}
-            className="text-muted-foreground"
-            title={refreshing ? "Syncing tasks" : "Refresh tasks"}
-          >
-            <LoaderCircle className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-          </Button>
           <Button
             size="sm"
             onClick={() => handleAddTask("planned")}

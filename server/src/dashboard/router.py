@@ -44,6 +44,10 @@ def _safe_scalar(conn, sql: str, params: tuple = (), default=0):
         return default
 
 
+def _local_date_key(value: date) -> str:
+    return value.isoformat()
+
+
 @router.get("/stats")
 def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     user_id = current_user.get("sub")
@@ -217,6 +221,40 @@ def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
             if h.get("heart_points"):
                 health_summary["heart_points"] = (health_summary.get("heart_points") or 0) + h["heart_points"]
 
+        health_weekly_rows = _safe_query(
+            conn,
+            """
+            SELECT snapshot_date, steps, calories, distance_km
+            FROM public.health_snapshots
+            WHERE user_id = %s
+              AND source = 'google_fit'
+              AND snapshot_date >= %s
+              AND snapshot_date <= %s
+            ORDER BY snapshot_date
+            """,
+            (user_id, today - timedelta(days=6), today),
+        )
+        health_by_date = {
+            _local_date_key(row["snapshot_date"]): row
+            for row in health_weekly_rows
+            if row.get("snapshot_date")
+        }
+        day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        health_weekly = []
+        for offset in range(6, -1, -1):
+            day = today - timedelta(days=offset)
+            key = _local_date_key(day)
+            row = health_by_date.get(key, {})
+            health_weekly.append(
+                {
+                    "date": key,
+                    "label": day_names[day.weekday()],
+                    "steps": row.get("steps") or 0,
+                    "calories": row.get("calories") or 0,
+                    "distance_km": row.get("distance_km") or 0,
+                }
+            )
+
         # ── GitHub ─────────────────────────────────────────────────────────
         github_row = _safe_query(
             conn,
@@ -282,6 +320,7 @@ def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
                     "active_channels": slack_channels,
                 },
                 "health": health_summary,
+                "health_weekly": health_weekly,
                 "github": {
                     "connected": github_connected,
                     "username": github_username,

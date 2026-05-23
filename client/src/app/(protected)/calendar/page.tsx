@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { CalendarDays, Search, Sparkles, X } from "lucide-react"
+import { CalendarDays, RefreshCw, Search, Sparkles, Square, X } from "lucide-react"
 
 import CalendarView from "@/components/calendar/CalendarView"
 import DayTimeline from "@/components/calendar/DayTimeline"
@@ -9,6 +9,7 @@ import { EventEditDialog } from "@/components/calendar/EventEditDialog"
 import { AgentSuggestions } from "@/components/calendar/AgentSuggestions"
 import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 import { Button } from "@/components/ui/button"
+import { HeaderActionButton } from "@/components/ui/header-action-button"
 import { useCalendarStore } from "@/lib/stores"
 import {
   AgentChatMessage,
@@ -25,6 +26,10 @@ type TimelineSettings = {
   waterEnabled?: boolean
   waterConfig?: { startHour: number; endHour: number; stepMinutes: number }
   mealTimes?: { breakfast: string; lunch: string; dinner: string }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
 }
 
 export default function CalendarPage() {
@@ -50,10 +55,12 @@ export default function CalendarPage() {
   const [agentSending, setAgentSending] = useState(false)
   const [agentError, setAgentError] = useState<string | null>(null)
   const [agentOpen, setAgentOpen] = useState(false)
+  const [refreshingEvents, setRefreshingEvents] = useState(false)
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null)
   const [timelineSettings, setTimelineSettings] = useState<TimelineSettings>({})
   const watchInitAttempted = useRef(false)
   const sseReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const agentAbortRef = useRef<AbortController | null>(null)
 
   // Reconcile with Google on mount so external/agent edits are reflected.
   useEffect(() => {
@@ -68,6 +75,19 @@ export default function CalendarPage() {
       setTimelineSettings({})
     }
   }, [])
+
+  useEffect(() => {
+    if (!agentOpen) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAgentOpen(false)
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [agentOpen])
 
   // Subscribe to SSE updates
   useEffect(() => {
@@ -134,11 +154,24 @@ export default function CalendarPage() {
     }
   }, [clearError])
 
+  const handleRefreshEvents = useCallback(async () => {
+    if (refreshingEvents) return
+
+    setRefreshingEvents(true)
+    try {
+      await fetchEvents(true)
+    } finally {
+      setRefreshingEvents(false)
+    }
+  }, [fetchEvents, refreshingEvents])
+
 
   const handleSendAgentMessage = useCallback(async () => {
     const query = agentInput.trim()
     if (!query || agentSending) return
 
+    const controller = new AbortController()
+    agentAbortRef.current = controller
     const nextHistory: AgentChatMessage[] = [...agentMessages, { role: "user", content: query }]
     setAgentMessages(nextHistory)
     setAgentInput("")
@@ -146,20 +179,31 @@ export default function CalendarPage() {
     setAgentError(null)
 
     try {
-      const result = await sendAgentCommand(query, nextHistory)
+      const result = await sendAgentCommand(query, nextHistory, controller.signal)
       addAgentMessage({ role: "assistant", content: result.response })
 
       if (result.refreshCalendar) {
         await fetchEvents(true) // Force fresh fetch
       }
     } catch (err) {
+      if (isAbortError(err)) {
+        addAgentMessage({ role: "assistant", content: "Generation stopped." })
+        return
+      }
       const message = err instanceof Error ? err.message : "Calendar sub-agent request failed"
       setAgentError(message)
       addAgentMessage({ role: "assistant", content: `I hit an error: ${message}` })
     } finally {
+      if (agentAbortRef.current === controller) {
+        agentAbortRef.current = null
+      }
       setAgentSending(false)
     }
   }, [agentInput, agentSending, agentMessages, setAgentMessages, addAgentMessage, fetchEvents])
+
+  const handleStopAgentMessage = useCallback(() => {
+    agentAbortRef.current?.abort()
+  }, [])
 
   const handleSelectSuggestion = useCallback(
     (query: string) => {
@@ -220,14 +264,21 @@ export default function CalendarPage() {
             />
           </div>
 
-          <button
-            type="button"
+          <HeaderActionButton
+            icon={RefreshCw}
+            label="Refresh"
+            loading={refreshingEvents || loading}
+            onClick={() => { void handleRefreshEvents() }}
+            disabled={refreshingEvents || loading}
+            title={refreshingEvents || loading ? "Refreshing calendar" : "Refresh calendar"}
+          />
+
+          <HeaderActionButton
+            icon={Sparkles}
+            label="Agent"
+            active={agentOpen}
             onClick={() => setAgentOpen((open) => !open)}
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-primary/35 bg-card/95 px-3 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-card sm:h-10 sm:gap-2 sm:px-4"
-          >
-            <Sparkles className="h-4 w-4 text-primary" />
-            <span className="hidden sm:inline">Agent</span>
-          </button>
+          />
         </div>
       </header>
 
@@ -322,13 +373,18 @@ export default function CalendarPage() {
                 key={`${message.role}-${index}`}
                 className={
                   message.role === "user"
-                    ? "ml-auto w-fit max-w-[90%] rounded-lg bg-primary/15 px-3 py-2 text-sm text-foreground"
-                    : "mr-auto w-fit max-w-[90%] rounded-lg bg-muted/60 px-3 py-2 text-sm text-foreground"
+                    ? "ml-auto min-w-0 max-w-[90%] overflow-hidden rounded-lg bg-primary/15 px-3 py-2 text-sm text-foreground"
+                    : "mr-auto min-w-0 max-w-[90%] overflow-hidden rounded-lg bg-muted/60 px-3 py-2 text-sm text-foreground"
                 }
               >
                 <AgentMessageContent content={message.content} />
               </div>
             ))}
+            {agentSending && (
+              <div className="mr-auto w-fit max-w-[90%] rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+                Thinking and generating output...
+              </div>
+            )}
           </div>
 
           {agentMessages.length <= 2 && (
@@ -351,8 +407,15 @@ export default function CalendarPage() {
               className="flex-1 rounded-lg border border-border/40 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
               disabled={agentSending}
             />
-            <Button type="button" size="sm" className="shrink-0 sm:size-default" onClick={() => void handleSendAgentMessage()} disabled={agentSending}>
-              {agentSending ? "..." : "Send"}
+            <Button
+              type="button"
+              size="sm"
+              variant={agentSending ? "destructive" : "default"}
+              className="shrink-0 sm:size-default"
+              onClick={() => agentSending ? handleStopAgentMessage() : void handleSendAgentMessage()}
+              disabled={!agentInput.trim() && !agentSending}
+            >
+              {agentSending ? <Square className="h-4 w-4" /> : "Send"}
             </Button>
           </div>
         </section>

@@ -35,6 +35,7 @@ _DOMAIN_KEYWORDS: Dict[str, List[str]] = {
         "health", "steps", "calories", "sleep", "active",
         "fitness", "workout", "exercise", "strava", "google fit",
         "diet", "yoga", "weight", "distance", "walk", "run",
+        "heart", "heart rate", "heart points", "bpm",
     ],
     "github": [
         "github", "commit", "pull request", "pr ", "repo",

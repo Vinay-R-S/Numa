@@ -5,6 +5,7 @@ import { CheckSquare, Bell, ChevronDown, ChevronRight, History, RefreshCw } from
 import { KanbanBoard } from "@/components/tasklist/KanbanBoard"
 import { AnalyticsDashboard } from "@/components/tasklist/AnalyticsDashboard"
 import { TaskDetailSheet } from "@/components/tasklist/TaskDetailSheet"
+import { HeaderActionButton } from "@/components/ui/header-action-button"
 import { useTasksStore } from "@/lib/stores"
 import { fetchLatestAgentData } from "@/components/agents/masterAgentApi"
 import type { Task } from "@/components/tasklist/types"
@@ -139,26 +140,33 @@ export default function TasklistPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <HeaderActionButton
+            icon={RefreshCw}
+            label="Sync"
+            loading={syncingAll}
             title={syncingAll ? "Syncing all task sources" : "Sync all task sources"}
             onClick={() => void handleSyncAll()}
             disabled={syncingAll}
-            className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-70"
           >
-            <RefreshCw className={`h-4 w-4 ${syncingAll ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">{syncingAll ? "Syncing..." : "Sync All"}</span>
-          </button>
+            {syncingAll ? "Syncing..." : "Sync"}
+          </HeaderActionButton>
+          <HeaderActionButton
+            icon={RefreshCw}
+            label="Refresh"
+            loading={loadingTasks}
+            title={loadingTasks ? "Refreshing tasks" : "Refresh tasks"}
+            onClick={() => void handleRefresh()}
+            disabled={loadingTasks}
+          />
           {notificationPermission !== null && notificationPermission !== "granted" && (
-            <button
+            <HeaderActionButton
+              icon={Bell}
+              label="Enable Notifications"
               title="Enable notifications for task reminders"
               onClick={() => {
                 void Notification.requestPermission().then(setNotificationPermission)
               }}
-              className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-            >
-              <Bell className="h-4 w-4" />
-              <span className="hidden sm:inline">Enable Notifications</span>
-            </button>
+            />
           )}
         </div>
       </div>
@@ -181,8 +189,6 @@ export default function TasklistPage() {
           <KanbanBoard
             tasks={tasks}
             onTasksChange={handleTasksChange}
-            onRefresh={handleRefresh}
-            refreshing={loadingTasks || syncingAll}
           />
         </div>
       )}

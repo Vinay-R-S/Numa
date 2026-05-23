@@ -8,6 +8,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { HeaderActionButton } from "@/components/ui/header-action-button"
 import { cn } from "@/lib/utils"
 import {
   type AiProvider,
@@ -548,10 +549,13 @@ export default function SettingsPage() {
               </span>
             </div>
             <div className="flex gap-2">
-              <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={checkToken} disabled={tokenChecking}>
-                <RefreshCw className={cn("h-3.5 w-3.5", tokenChecking && "animate-spin")} />
-                Re-check
-              </Button>
+              <HeaderActionButton
+                icon={RefreshCw}
+                label="Re-check"
+                loading={tokenChecking}
+                onClick={checkToken}
+                disabled={tokenChecking}
+              />
               <Button
                 type="button"
                 size="sm"
@@ -623,17 +627,13 @@ export default function SettingsPage() {
               )}
             </div>
             <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
+              <HeaderActionButton
+                icon={RefreshCw}
+                label="Re-check"
+                loading={slackChecking}
                 onClick={checkSlack}
                 disabled={slackChecking || slackConnecting}
-              >
-                <RefreshCw className={cn("h-3.5 w-3.5", slackChecking && "animate-spin")} />
-                Re-check
-              </Button>
+              />
               <Button
                 type="button"
                 size="sm"

@@ -34,6 +34,13 @@ interface DashboardStats {
     heart_rate_bpm?: number
     heart_points?: number
   }
+  health_weekly: Array<{
+    date: string
+    label: string
+    steps: number
+    calories: number
+    distance_km: number
+  }>
   github: { connected: boolean; username?: string | null }
   journal: { has_today: boolean; today_mood?: string | null; streak: number }
 }

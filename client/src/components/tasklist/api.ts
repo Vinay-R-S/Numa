@@ -86,6 +86,7 @@ export async function deleteTask(id: string): Promise<void> {
     method: "DELETE",
     headers: authHeaders(),
   })
+  if (res.status === 404) return
   if (!res.ok) throw await parseError(res, "Failed to delete task")
 }
 

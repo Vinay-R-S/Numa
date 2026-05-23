@@ -182,6 +182,10 @@ def _format_health_results(results: List[dict]) -> str:
             parts.append(f"distance={r.get('distance_km')}km")
         if r.get("sleep_hours") is not None:
             parts.append(f"sleep={r.get('sleep_hours')}h")
+        if r.get("heart_rate_bpm") is not None:
+            parts.append(f"heart_rate={r.get('heart_rate_bpm')}bpm")
+        if r.get("heart_points") is not None:
+            parts.append(f"heart_points={r.get('heart_points')}")
         fallback = (r.get("text") or "")[:160]
         lines.append(f"  â€¢ {source} {day}: {', '.join(parts) if parts else fallback}")
     return "\n".join(lines)

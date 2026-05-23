@@ -232,7 +232,8 @@ export function subscribeToCalendarUpdates(onUpdate: () => void): () => void {
 
 export async function sendAgentCommand(
   query: string,
-  history: AgentChatMessage[] = []
+  history: AgentChatMessage[] = [],
+  signal?: AbortSignal
 ): Promise<AgentApiResponse> {
   if (!getLocalAiEnabled()) {
     throw new Error("AI agents are disabled in Settings.")
@@ -242,6 +243,7 @@ export async function sendAgentCommand(
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({ query, history }),
+    signal,
   })
 
   const data = await parseJsonResponse<AgentApiResponse>(response, "Agent request failed")

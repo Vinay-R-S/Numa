@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  Square,
   TrendingUp,
   Wifi,
   WifiOff,
@@ -21,9 +22,17 @@ import {
   Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { HeaderActionButton } from "@/components/ui/header-action-button"
 import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { useSessionMessages } from "@/lib/useSessionMessages"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   HealthAgentMessage,
   HealthSnapshot,
@@ -79,6 +88,23 @@ function lastSevenDays(): Date[] {
     date.setDate(date.getDate() - (6 - index))
     return date
   })
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
+}
+
+function formatDateLabel(dateKey: string): string {
+  const today = localDateString()
+  const yesterdayDate = new Date()
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1)
+  const yesterday = localDateString(yesterdayDate)
+
+  if (dateKey === today) return "Today"
+  if (dateKey === yesterday) return "Yesterday"
+
+  const parsed = new Date(`${dateKey}T00:00:00`)
+  return parsed.toLocaleDateString([], { month: "short", day: "numeric" })
 }
 
 // ── Metric Card ─────────────────────────────────────────────────────────────────
@@ -534,7 +560,7 @@ function ChatBubble({ msg }: { msg: HealthAgentMessage }) {
           <Bot className="h-3.5 w-3.5 text-primary" />
         </div>
       )}
-      <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-line ${
+      <div className={`min-w-0 max-w-[85%] overflow-hidden rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
         isUser ? "bg-primary/15 text-foreground rounded-br-sm" : "bg-muted/50 text-foreground rounded-bl-sm"
       }`}>
         <AgentMessageContent content={msg.content} />
@@ -551,6 +577,7 @@ export default function HealthPage() {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [selectedDate, setSelectedDate] = useState(localDateString())
 
   // Agent panel
   const [agentOpen, setAgentOpen] = useState(false)
@@ -561,6 +588,7 @@ export default function HealthPage() {
   const [sending, setSending] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const chatAbortRef = useRef<AbortController | null>(null)
 
   // ── Load data ───────────────────────────────────────────────────────────────
 
@@ -603,27 +631,53 @@ export default function HealthPage() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [chatMessages])
 
+  useEffect(() => {
+    if (!agentOpen) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAgentOpen(false)
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [agentOpen])
+
   // ── Chat ──────────────────────────────────────────────────────────────────────
 
   const handleSend = async () => {
     const q = chatInput.trim()
     if (!q || sending) return
+    const controller = new AbortController()
+    chatAbortRef.current = controller
     const next: HealthAgentMessage[] = [...chatMessages, { role: "user", content: q }]
     setChatMessages(next)
     setChatInput("")
     setSending(true)
     setChatError(null)
     try {
-      const result = await sendHealthAgentCommand(q, next)
+      const result = await sendHealthAgentCommand(q, next, controller.signal)
       setChatMessages((prev) => [...prev, { role: "assistant", content: result.response }])
       if (result.refresh_health) void loadData()
     } catch (err) {
+      if (isAbortError(err)) {
+        setChatMessages((prev) => [...prev, { role: "assistant", content: "Generation stopped." }])
+        return
+      }
       const msg = err instanceof Error ? err.message : "Request failed"
       setChatError(msg)
       setChatMessages((prev) => [...prev, { role: "assistant", content: `Error: ${msg}` }])
     } finally {
+      if (chatAbortRef.current === controller) {
+        chatAbortRef.current = null
+      }
       setSending(false)
     }
+  }
+
+  const handleStop = () => {
+    chatAbortRef.current?.abort()
   }
 
   const canSend = useMemo(() => chatInput.trim().length > 0 && !sending, [chatInput, sending])
@@ -631,9 +685,21 @@ export default function HealthPage() {
   // ── Derived data ──────────────────────────────────────────────────────────────
 
   const todayStr = localDateString()
-  const todayGfit = snapshots.find((s) => s.source === "google_fit" && s.snapshot_date === todayStr) || null
+  const availableDates = useMemo(() => {
+    const dates = Array.from(new Set(snapshots.map((snapshot) => snapshot.snapshot_date)))
+      .sort((a, b) => b.localeCompare(a))
+
+    return dates.length > 0 ? dates : [todayStr]
+  }, [snapshots, todayStr])
+  const selectedGfit = snapshots.find((s) => s.source === "google_fit" && s.snapshot_date === selectedDate) || null
   const isLive = snapshots.length > 0
   const isConfigured = Boolean(status?.google_fit_configured || status?.strava_configured)
+
+  useEffect(() => {
+    if (!availableDates.includes(selectedDate)) {
+      setSelectedDate(availableDates[0] ?? todayStr)
+    }
+  }, [availableDates, selectedDate, todayStr])
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -657,6 +723,18 @@ export default function HealthPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Select value={selectedDate} onValueChange={setSelectedDate}>
+            <SelectTrigger className="h-9 w-[142px] border-border/40 bg-background/40 text-xs">
+              <SelectValue placeholder="Select day" />
+            </SelectTrigger>
+            <SelectContent>
+              {availableDates.map((dateKey) => (
+                <SelectItem key={dateKey} value={dateKey}>
+                  {formatDateLabel(dateKey)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold ${
             isLive
               ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
@@ -665,23 +743,26 @@ export default function HealthPage() {
             {isLive ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
             {isLive ? "Live Data" : isConfigured ? "No Data" : "Not Configured"}
           </div>
-          <Button variant="ghost" size="sm" onClick={() => void handleSync()} className="gap-2 text-muted-foreground hover:text-foreground">
-            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">{syncing ? "Syncing..." : "Sync"}</span>
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => void loadData()} className="gap-2 text-muted-foreground hover:text-foreground">
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-          <Button
-            variant={agentOpen ? "default" : "outline"}
-            size="sm"
-            onClick={() => setAgentOpen((v) => !v)}
-            className="gap-2"
+          <HeaderActionButton
+            icon={RefreshCw}
+            label="Sync"
+            loading={syncing}
+            onClick={() => void handleSync()}
           >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Agent</span>
-          </Button>
+            {syncing ? "Syncing..." : "Sync"}
+          </HeaderActionButton>
+          <HeaderActionButton
+            icon={RefreshCw}
+            label="Refresh"
+            loading={loading}
+            onClick={() => void loadData()}
+          />
+          <HeaderActionButton
+            icon={Sparkles}
+            label="Agent"
+            active={agentOpen}
+            onClick={() => setAgentOpen((v) => !v)}
+          />
         </div>
       </header>
 
@@ -692,14 +773,14 @@ export default function HealthPage() {
       )}
 
       {/* Health Score */}
-      <HealthScore snapshot={todayGfit} />
+      <HealthScore snapshot={selectedGfit} />
 
       {/* Heart Metrics */}
       <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <HeartMetricCard
           icon={HeartPulse}
           label="Heart Rate"
-          value={todayGfit?.heart_rate_bpm ?? null}
+          value={selectedGfit?.heart_rate_bpm ?? null}
           unit="bpm"
           goal={120}
           helper="Daily average from Google Fit"
@@ -713,7 +794,7 @@ export default function HealthPage() {
         <HeartMetricCard
           icon={Heart}
           label="Heart Points"
-          value={todayGfit?.heart_points ?? null}
+          value={selectedGfit?.heart_points ?? null}
           unit="pts"
           goal={30}
           helper="Move minutes with higher intensity"
@@ -728,15 +809,15 @@ export default function HealthPage() {
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <MetricCard icon={Footprints} label="Steps" value={todayGfit?.steps ?? null}
+        <MetricCard icon={Footprints} label="Steps" value={selectedGfit?.steps ?? null}
           unit="steps" goal={10000} color="bg-cyan-500/80" />
-        <MetricCard icon={Activity} label="Active Minutes" value={todayGfit?.active_minutes ?? null}
+        <MetricCard icon={Activity} label="Active Minutes" value={selectedGfit?.active_minutes ?? null}
           unit="min" goal={60} color="bg-emerald-500/80" />
-        <MetricCard icon={Flame} label="Calories" value={todayGfit?.calories ?? null}
+        <MetricCard icon={Flame} label="Calories" value={selectedGfit?.calories ?? null}
           unit="kcal" goal={2500} color="bg-orange-500/80" />
-        <MetricCard icon={MapPin} label="Distance" value={todayGfit?.distance_km ?? null}
+        <MetricCard icon={MapPin} label="Distance" value={selectedGfit?.distance_km ?? null}
           unit="km" goal={8} color="bg-purple-500/80" />
-        <MetricCard icon={Moon} label="Sleep" value={todayGfit?.sleep_hours ?? null}
+        <MetricCard icon={Moon} label="Sleep" value={selectedGfit?.sleep_hours ?? null}
           unit="hrs" goal={8} color="bg-indigo-500/80" />
       </div>
 
@@ -755,7 +836,7 @@ export default function HealthPage() {
       </section>
 
       {/* Sleep Analysis */}
-      <SleepCard snapshot={todayGfit} />
+      <SleepCard snapshot={selectedGfit} />
 
       {/* Floating Agent Panel */}
       {agentOpen && (
@@ -801,10 +882,13 @@ export default function HealthPage() {
                   <Bot className="h-3.5 w-3.5 text-primary" />
                 </div>
                 <div className="rounded-2xl rounded-bl-sm bg-muted/50 px-4 py-3">
-                  <div className="flex gap-1">
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:0ms]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:150ms]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:300ms]" />
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:0ms]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:150ms]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:300ms]" />
+                    </div>
+                    <span className="text-xs text-muted-foreground">Thinking and generating output...</span>
                   </div>
                 </div>
               </div>
@@ -826,9 +910,16 @@ export default function HealthPage() {
                 disabled={sending}
                 className="flex-1 rounded-xl border border-border/40 bg-background px-3.5 py-2 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:opacity-50"
               />
-              <Button type="button" size="sm" onClick={() => void handleSend()} disabled={!canSend} className="shrink-0">
-                <Send className="h-4 w-4 sm:mr-1" />
-                <span className="hidden sm:inline">{sending ? "..." : "Send"}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant={sending ? "destructive" : "default"}
+                onClick={() => sending ? handleStop() : void handleSend()}
+                disabled={!canSend && !sending}
+                className="shrink-0"
+              >
+                {sending ? <Square className="h-4 w-4 sm:mr-1" /> : <Send className="h-4 w-4 sm:mr-1" />}
+                <span className="hidden sm:inline">{sending ? "Stop" : "Send"}</span>
               </Button>
             </div>
           </div>

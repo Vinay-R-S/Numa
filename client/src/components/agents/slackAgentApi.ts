@@ -68,12 +68,20 @@ function authHeaders(): HeadersInit {
 
 const SLACK_AGENT_TIMEOUT_MS = 45_000
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  externalSignal?: AbortSignal
+): Promise<Response> {
   const controller = new AbortController()
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  const abortFromExternal = () => controller.abort()
+  externalSignal?.addEventListener("abort", abortFromExternal, { once: true })
   try {
     return await fetch(url, { ...init, signal: controller.signal })
   } finally {
+    externalSignal?.removeEventListener("abort", abortFromExternal)
     window.clearTimeout(timeoutId)
   }
 }
@@ -96,7 +104,8 @@ async function parseJson<T>(res: Response, fallback: string): Promise<T> {
 
 export async function sendSlackAgentCommand(
   query: string,
-  history: SlackAgentMessage[] = []
+  history: SlackAgentMessage[] = [],
+  signal?: AbortSignal
 ): Promise<SlackChatResponse> {
   let res: Response
   try {
@@ -107,9 +116,13 @@ export async function sendSlackAgentCommand(
         headers: authHeaders(),
         body: JSON.stringify({ query, history }),
       },
-      SLACK_AGENT_TIMEOUT_MS
+      SLACK_AGENT_TIMEOUT_MS,
+      signal
     )
   } catch (err) {
+    if (signal?.aborted) {
+      throw err
+    }
     if (err instanceof DOMException && err.name === "AbortError") {
       throw new Error("Slack agent request timed out. The action may still have completed in Slack.")
     }

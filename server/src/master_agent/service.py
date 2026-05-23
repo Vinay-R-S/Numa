@@ -267,7 +267,8 @@ def _fetch_day_planning_context(user_id: str) -> Dict:
 
         cur.execute(
             """
-            SELECT steps, active_minutes, calories, distance_km, sleep_hours
+            SELECT steps, active_minutes, calories, distance_km, sleep_hours,
+                   heart_rate_bpm, heart_points
             FROM public.health_snapshots
             WHERE user_id = %s AND snapshot_date = %s
             """,
@@ -281,6 +282,8 @@ def _fetch_day_planning_context(user_id: str) -> Dict:
                 "calories": max((row[2] or 0) for row in health_rows),
                 "distance_km": max((row[3] or 0) for row in health_rows),
                 "sleep_hours": max((row[4] or 0) for row in health_rows),
+                "heart_rate_bpm": max((row[5] or 0) for row in health_rows),
+                "heart_points": sum((row[6] or 0) for row in health_rows),
             }
 
         cur.execute(
@@ -455,6 +458,8 @@ def _run_day_planner(user_id: str, query: str) -> Dict:
     steps = health.get("steps") or 0
     active = health.get("active_minutes") or 0
     sleep = health.get("sleep_hours") or 0
+    heart_rate = health.get("heart_rate_bpm") or 0
+    heart_points = health.get("heart_points") or 0
     if health and (steps < 7000 or active < 45):
         plan_items.append(
             {
@@ -547,7 +552,8 @@ def _run_day_planner(user_id: str, query: str) -> Dict:
         f"- Slack messages considered: {len(slack)}",
         f"- GitHub items considered: {len(github)}",
         "- Health data: " + (
-            f"{steps:,} steps, {active} active min, {sleep or 0}h sleep"
+            f"{steps:,} steps, {active} active min, {sleep or 0}h sleep, "
+            f"{heart_rate or 0} bpm, {heart_points or 0} heart points"
             if health else "not available"
         ),
         "",
@@ -1026,17 +1032,18 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
                 lines.append(f"Today's Calendar Events: {event_count}")
 
                 cur.execute(
-                    "SELECT steps, calories, active_minutes, sleep_hours "
+                    "SELECT steps, calories, active_minutes, sleep_hours, heart_rate_bpm, heart_points "
                     "FROM public.health_snapshots "
                     "WHERE user_id = %s AND snapshot_date = %s LIMIT 1",
                     (user_id, today),
                 )
                 health_row = cur.fetchone()
                 if health_row:
-                    steps, cal, active, sleep = health_row
+                    steps, cal, active, sleep, heart_rate, heart_points = health_row
                     lines.append(
                         f"Health: {steps or 0:,} steps, {cal or 0:,} kcal, "
-                        f"{active or 0} min active, {sleep or 0}h sleep"
+                        f"{active or 0} min active, {sleep or 0}h sleep, "
+                        f"{heart_rate or 0} bpm, {heart_points or 0} heart points"
                     )
                 else:
                     lines.append("Health: no data for today")

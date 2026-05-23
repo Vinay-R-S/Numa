@@ -29,6 +29,10 @@ export interface MasterAgentFetchLatestResponse {
   retention: Record<string, unknown>
 }
 
+interface FetchLatestOptions {
+  background?: boolean
+}
+
 function authHeaders() {
   const token = typeof window !== "undefined" ? localStorage.getItem("numa_token") : null
   return {
@@ -56,7 +60,8 @@ async function parseJsonResponse<T>(response: Response, fallbackMessage: string)
 
 export async function sendMasterAgentCommand(
   query: string,
-  history: MasterAgentMessage[] = []
+  history: MasterAgentMessage[] = [],
+  signal?: AbortSignal
 ): Promise<MasterAgentResponse> {
   if (!getLocalAiEnabled()) {
     throw new Error("AI agents are disabled in Settings.")
@@ -66,6 +71,7 @@ export async function sendMasterAgentCommand(
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({ query, history }),
+    signal,
   })
 
   const data = await parseJsonResponse<MasterAgentResponse>(response, "Master agent request failed")
@@ -76,8 +82,13 @@ export async function sendMasterAgentCommand(
   return data
 }
 
-export async function fetchLatestAgentData(): Promise<MasterAgentFetchLatestResponse> {
-  const response = await fetch(`/api/master-agent/fetch-latest`, {
+export async function fetchLatestAgentData(
+  options: FetchLatestOptions = {}
+): Promise<MasterAgentFetchLatestResponse> {
+  const qs = new URLSearchParams()
+  if (options.background) qs.set("background", "true")
+
+  const response = await fetch(`/api/master-agent/fetch-latest${qs.size ? `?${qs.toString()}` : ""}`, {
     method: "POST",
     headers: authHeaders(),
   })

@@ -40,6 +40,7 @@ interface TasksStore {
 const CACHE_DURATION = 5 * 60 * 1000
 // Stats cache: 30 seconds (changes more frequently)
 const STATS_CACHE_DURATION = 30 * 1000
+let tasksFetchRequestId = 0
 
 export const useTasksStore = create<TasksStore>((set, get) => ({
   tasks: [],
@@ -63,14 +64,17 @@ export const useTasksStore = create<TasksStore>((set, get) => ({
       return
     }
 
-    if (!lastFetchedTasks) {
+    if (!lastFetchedTasks || forceFresh) {
       set({ loadingTasks: true })
     }
 
     try {
       set({ tasksError: null })
+      const requestId = ++tasksFetchRequestId
       const data = await fetchTasks()
-      set({ tasks: data, lastFetchedTasks: now })
+      if (requestId === tasksFetchRequestId) {
+        set({ tasks: data, lastFetchedTasks: now })
+      }
     } catch (err) {
       set({ tasksError: err instanceof Error ? err.message : "Failed to load tasks" })
     } finally {
