@@ -29,8 +29,37 @@ export interface HealthSnapshot {
   sleep_hours: number | null
   heart_rate_bpm: number | null
   heart_points: number | null
+  sleep_start_at?: string | null
+  sleep_end_at?: string | null
   sleep_stages: { deep?: number; light?: number; rem?: number; generic?: number } | null
+  sleep_segments?: Array<Record<string, unknown>> | null
   activities: Record<string, number> | Array<Record<string, unknown>> | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface HealthIntradayBucket {
+  bucket_start_at?: string | null
+  bucket_end_at?: string | null
+  label: string
+  range_label: string
+  steps: number
+  calories: number
+  distance_km: number
+}
+
+export interface HealthIntraday {
+  id?: string | null
+  user_id: string
+  source: string
+  snapshot_date: string
+  window_start_at: string
+  window_end_at: string
+  bucket_minutes: number
+  steps: number
+  calories: number
+  distance_km: number
+  buckets: HealthIntradayBucket[]
   created_at?: string | null
   updated_at?: string | null
 }
@@ -101,6 +130,20 @@ export async function getHealthSnapshots(params?: {
     headers: authHeaders(),
   })
   return parseJson<HealthSnapshot[]>(res, "Failed to fetch health snapshots")
+}
+
+export async function getHealthIntraday(params: {
+  snapshotDate: string
+  source?: string
+}): Promise<HealthIntraday> {
+  const qs = new URLSearchParams()
+  qs.set("snapshot_date", params.snapshotDate)
+  qs.set("source", params.source || "google_fit")
+
+  const res = await fetch(`/api/health-agent/intraday?${qs.toString()}`, {
+    headers: authHeaders(),
+  })
+  return parseJson<HealthIntraday>(res, "Failed to fetch daily health data")
 }
 
 // ── Sync ───────────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ── Chat ──────────────────────────────────────────────────────────────────────
@@ -41,8 +41,37 @@ class HealthSnapshotOut(BaseModel):
     sleep_hours: Optional[float] = None
     heart_rate_bpm: Optional[float] = None
     heart_points: Optional[float] = None
+    sleep_start_at: Optional[datetime] = None
+    sleep_end_at: Optional[datetime] = None
     sleep_stages: Optional[Dict[str, Any]] = None
+    sleep_segments: Optional[List[Dict[str, Any]]] = None
     activities: Optional[Any] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class HealthIntradayBucketOut(BaseModel):
+    bucket_start_at: Optional[datetime] = None
+    bucket_end_at: Optional[datetime] = None
+    label: str = ""
+    range_label: str = ""
+    steps: int = 0
+    calories: int = 0
+    distance_km: float = 0
+
+
+class HealthIntradayOut(BaseModel):
+    id: Optional[str] = None
+    user_id: str
+    source: str
+    snapshot_date: date
+    window_start_at: datetime
+    window_end_at: datetime
+    bucket_minutes: int = 60
+    steps: int = 0
+    calories: int = 0
+    distance_km: float = 0
+    buckets: List[HealthIntradayBucketOut] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

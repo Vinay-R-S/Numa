@@ -640,7 +640,10 @@ TABLES: list[str] = [
         sleep_hours     REAL,
         heart_rate_bpm  REAL,
         heart_points    REAL,
+        sleep_start_at  TIMESTAMPTZ,
+        sleep_end_at    TIMESTAMPTZ,
         sleep_stages    JSONB,
+        sleep_segments  JSONB,
         activities      JSONB,
         raw_data        JSONB,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -651,6 +654,9 @@ TABLES: list[str] = [
 
     "ALTER TABLE public.health_snapshots ADD COLUMN IF NOT EXISTS heart_rate_bpm REAL",
     "ALTER TABLE public.health_snapshots ADD COLUMN IF NOT EXISTS heart_points REAL",
+    "ALTER TABLE public.health_snapshots ADD COLUMN IF NOT EXISTS sleep_start_at TIMESTAMPTZ",
+    "ALTER TABLE public.health_snapshots ADD COLUMN IF NOT EXISTS sleep_end_at TIMESTAMPTZ",
+    "ALTER TABLE public.health_snapshots ADD COLUMN IF NOT EXISTS sleep_segments JSONB",
 
     """
     DO $$ BEGIN
@@ -667,6 +673,40 @@ TABLES: list[str] = [
 
     "CREATE INDEX IF NOT EXISTS idx_health_snapshots_user_date   ON public.health_snapshots(user_id, snapshot_date DESC)",
     "CREATE INDEX IF NOT EXISTS idx_health_snapshots_user_source ON public.health_snapshots(user_id, source, snapshot_date DESC)",
+
+    """
+    CREATE TABLE IF NOT EXISTS public.health_intraday_snapshots (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id         UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        source          TEXT        NOT NULL CHECK (source IN ('google_fit', 'strava')),
+        snapshot_date   DATE        NOT NULL,
+        window_start_at TIMESTAMPTZ NOT NULL,
+        window_end_at   TIMESTAMPTZ NOT NULL,
+        bucket_minutes  INTEGER     NOT NULL DEFAULT 60,
+        steps           INTEGER     NOT NULL DEFAULT 0,
+        calories        INTEGER     NOT NULL DEFAULT 0,
+        distance_km     REAL        NOT NULL DEFAULT 0,
+        buckets         JSONB       NOT NULL DEFAULT '[]'::JSONB,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, source, snapshot_date, bucket_minutes)
+    )
+    """,
+
+    """
+    DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'trg_health_intraday_snapshots_updated_at'
+        ) THEN
+            CREATE TRIGGER trg_health_intraday_snapshots_updated_at
+            BEFORE UPDATE ON public.health_intraday_snapshots
+            FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+        END IF;
+    END $$
+    """,
+
+    "CREATE INDEX IF NOT EXISTS idx_health_intraday_user_date ON public.health_intraday_snapshots(user_id, snapshot_date DESC)",
 
     # ═══════════════════════════════════════════════════════════════════════════
     # USER AI SETTINGS - per-user LLM provider, model, encrypted API key
@@ -910,7 +950,7 @@ TABLES: list[str] = [
 ]
 
 
-SCHEMA_VERSION = "2026_05_19_001"
+SCHEMA_VERSION = "2026_05_24_001"
 
 REQUIRED_TABLES = (
     "profiles",
@@ -925,6 +965,8 @@ REQUIRED_TABLES = (
     "github_repositories",
     "github_commits",
     "github_resource_snapshots",
+    "health_snapshots",
+    "health_intraday_snapshots",
 )
 
 SCHEMA_MIGRATIONS_DDL = """

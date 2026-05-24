@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 DEFAULT_HUGGINGFACE_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_EMBEDDING_DIMENSION = 384
 
 
 def embedding_model_name() -> str:
@@ -64,11 +65,55 @@ class _CachedEmbedder:
     def __init__(self) -> None:
         self._model = None
         self._failed = False
+        self._failure_reason = ""
+        self._using_hash_fallback = False
         self._cache: OrderedDict[str, List[float]] = OrderedDict()
         self._cache_lock = threading.Lock()
         self._cache_max = int(os.getenv("EMBEDDING_CACHE_SIZE", "256"))
         self._cache_hits = 0
         self._cache_misses = 0
+
+    @staticmethod
+    def _hash_fallback_enabled() -> bool:
+        return os.getenv("EMBEDDING_HASH_FALLBACK", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        }
+
+    @staticmethod
+    def _hash_embed(text: str, dimension: int = DEFAULT_EMBEDDING_DIMENSION) -> List[float]:
+        values: List[float] = []
+        counter = 0
+        seed = text.encode("utf-8", errors="replace")
+        while len(values) < dimension:
+            digest = hashlib.sha256(seed + counter.to_bytes(4, "big")).digest()
+            for byte in digest:
+                values.append((byte - 127.5) / 127.5)
+                if len(values) >= dimension:
+                    break
+            counter += 1
+
+        norm = sum(value * value for value in values) ** 0.5 or 1.0
+        return [value / norm for value in values]
+
+    @staticmethod
+    def _build_sentence_transformer(SentenceTransformer, model_name: str, cache_dir: str):
+        try:
+            return SentenceTransformer(
+                model_name,
+                cache_folder=cache_dir,
+                device="cpu",
+                model_kwargs={"low_cpu_mem_usage": False},
+            )
+        except TypeError:
+            return SentenceTransformer(
+                model_name,
+                cache_folder=cache_dir,
+                device="cpu",
+            )
 
     # ------------------------------------------------------------------
     def _load(self):
@@ -86,14 +131,24 @@ class _CachedEmbedder:
                 model_name,
                 cache_dir,
             )
-            self._model = SentenceTransformer(
+            self._model = self._build_sentence_transformer(
+                SentenceTransformer,
                 model_name,
-                cache_folder=cache_dir,
+                cache_dir,
             )
             dim = self._model.get_sentence_embedding_dimension()
             log.info("Embedding model ready - dim=%d", dim)
         except Exception as exc:
-            log.warning("Failed to load embedding model '%s': %s", embedding_model_name(), exc)
+            self._failure_reason = str(exc)
+            self._using_hash_fallback = self._hash_fallback_enabled()
+            if self._using_hash_fallback:
+                log.warning(
+                    "Failed to load embedding model '%s': %s. Using deterministic hash fallback.",
+                    embedding_model_name(),
+                    exc,
+                )
+            else:
+                log.warning("Failed to load embedding model '%s': %s", embedding_model_name(), exc)
             self._failed = True
 
     # ------------------------------------------------------------------
@@ -101,7 +156,7 @@ class _CachedEmbedder:
     def dimension(self) -> int:
         self._load()
         if self._model is None:
-            return 384  # MiniLM-L6 default
+            return DEFAULT_EMBEDDING_DIMENSION
         return int(self._model.get_sentence_embedding_dimension())
 
     # ------------------------------------------------------------------
@@ -128,15 +183,18 @@ class _CachedEmbedder:
 
         # Cache miss — compute embedding
         self._load()
-        if self._model is None:
-            return None
         try:
-            vec = self._model.encode(stripped, normalize_embeddings=True)
-            if hasattr(vec, "tolist"):
-                vec = vec.tolist()
-            if isinstance(vec, list) and vec and isinstance(vec[0], list):
-                vec = vec[0]
-            result = [float(v) for v in vec]
+            if self._model is None:
+                if not self._using_hash_fallback:
+                    return None
+                result = self._hash_embed(stripped, self.dimension)
+            else:
+                vec = self._model.encode(stripped, normalize_embeddings=True)
+                if hasattr(vec, "tolist"):
+                    vec = vec.tolist()
+                if isinstance(vec, list) and vec and isinstance(vec[0], list):
+                    vec = vec[0]
+                result = [float(v) for v in vec]
 
             # Store in cache
             with self._cache_lock:
@@ -149,6 +207,8 @@ class _CachedEmbedder:
             return result
         except Exception as exc:
             log.warning("embed() failed: %s", exc)
+            if self._hash_fallback_enabled():
+                return self._hash_embed(stripped, self.dimension)
             return None
 
     @property
@@ -159,6 +219,9 @@ class _CachedEmbedder:
             "misses": self._cache_misses,
             "size": len(self._cache),
             "max_size": self._cache_max,
+            "model_loaded": self._model is not None,
+            "using_hash_fallback": self._using_hash_fallback,
+            "failure_reason": self._failure_reason,
         }
 
     # ------------------------------------------------------------------
@@ -166,7 +229,12 @@ class _CachedEmbedder:
         """Embed multiple texts in one pass - more efficient than looping."""
         self._load()
         if self._model is None:
-            return [None] * len(texts)
+            if not self._using_hash_fallback:
+                return [None] * len(texts)
+            return [
+                self._hash_embed(text.strip(), self.dimension) if text.strip() else None
+                for text in texts
+            ]
         try:
             vecs = self._model.encode(
                 [t.strip() for t in texts],
@@ -176,6 +244,11 @@ class _CachedEmbedder:
             return [[float(v) for v in row.tolist()] for row in vecs]
         except Exception as exc:
             log.warning("embed_batch() failed: %s", exc)
+            if self._hash_fallback_enabled():
+                return [
+                    self._hash_embed(text.strip(), self.dimension) if text.strip() else None
+                    for text in texts
+                ]
             return [None] * len(texts)
 
 

@@ -20,9 +20,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import traceback
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -32,6 +34,8 @@ from ..memory import memory_service
 from .schemas import (
     HealthChatRequest,
     HealthChatResponse,
+    HealthIntradayOut,
+    HealthIntradayBucketOut,
     HealthSnapshotOut,
     HealthStatusOut,
     HealthSyncOut,
@@ -45,13 +49,107 @@ router = APIRouter(prefix="/health-agent", tags=["health-agent"])
 # ── Google Fit API (lazy singleton) ──────────────────────────────────────────
 
 _google_fit_instances: Dict[str, object] = {}
+_google_fit_instances_lock = threading.Lock()
+
+
+def _resolve_timezone_name(name: Optional[str]) -> ZoneInfo:
+    fallback = os.getenv("TIMEZONE", "Asia/Kolkata")
+    for candidate in (name, fallback, "UTC"):
+        if not candidate:
+            continue
+        try:
+            return ZoneInfo(candidate)
+        except ZoneInfoNotFoundError:
+            continue
+    return ZoneInfo("UTC")
+
+
+def _get_user_timezone(user_id: str) -> ZoneInfo:
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT timezone FROM public.profiles WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        cur.close()
+        return _resolve_timezone_name(row[0] if row else None)
+    except Exception as exc:
+        log.debug("Falling back to default timezone for health sync: %s", exc)
+        return _resolve_timezone_name(None)
+    finally:
+        conn.close()
+
+
+def _millis(dt: datetime) -> int:
+    return int(dt.timestamp() * 1000)
+
+
+def _dt_from_millis(value: Optional[int]) -> Optional[datetime]:
+    if not value:
+        return None
+    return datetime.fromtimestamp(value / 1000, timezone.utc)
+
+
+def _activity_day_bounds(target: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    start = datetime.combine(target, time.min, tzinfo=tz)
+    return start, start + timedelta(days=1)
+
+
+def _sleep_night_bounds(target: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    start = datetime.combine(target - timedelta(days=1), time(18, 0), tzinfo=tz)
+    end = datetime.combine(target, time(12, 0), tzinfo=tz)
+    return start, end
+
+
+def _intraday_bounds(target: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    start = datetime.combine(target, time(6, 0), tzinfo=tz)
+    end = datetime.combine(target, time(22, 0), tzinfo=tz)
+    return start, end
+
+
+def _bucket_for_api(bucket: Dict, tz: ZoneInfo) -> Dict:
+    start_ms = bucket.get("start_ms")
+    end_ms = bucket.get("end_ms")
+    start_dt = _dt_from_millis(start_ms)
+    end_dt = _dt_from_millis(end_ms)
+    local_start = start_dt.astimezone(tz) if start_dt else None
+    local_end = end_dt.astimezone(tz) if end_dt else None
+    return {
+        "bucket_start_at": start_dt,
+        "bucket_end_at": end_dt,
+        "label": local_start.strftime("%H:%M") if local_start else "",
+        "range_label": (
+            f"{local_start.strftime('%H:%M')}-{local_end.strftime('%H:%M')}"
+            if local_start and local_end else ""
+        ),
+        "steps": bucket.get("steps") or 0,
+        "calories": bucket.get("calories") or 0,
+        "distance_km": bucket.get("distance_km") or 0,
+    }
+
+
+def _empty_intraday_buckets(window_start_at: datetime, window_end_at: datetime, bucket_minutes: int = 60) -> List[Dict]:
+    buckets = []
+    current = window_start_at
+    while current < window_end_at:
+        bucket_end = min(current + timedelta(minutes=bucket_minutes), window_end_at)
+        buckets.append({
+            "start_ms": _millis(current),
+            "end_ms": _millis(bucket_end),
+            "steps": 0,
+            "calories": 0,
+            "distance_km": 0,
+        })
+        current = bucket_end
+    return buckets
 
 
 def _get_google_fit(user_id: str):
     """Lazy-init Google Fit API client."""
     if user_id not in _google_fit_instances:
-        from .google_fit_client import GoogleFitClient
-        _google_fit_instances[user_id] = GoogleFitClient(user_id=user_id)
+        with _google_fit_instances_lock:
+            if user_id not in _google_fit_instances:
+                from .google_fit_client import GoogleFitClient
+                _google_fit_instances[user_id] = GoogleFitClient(user_id=user_id)
     return _google_fit_instances[user_id]
 
 
@@ -97,6 +195,14 @@ _TRANSIENT_SYNC_ERROR_MARKERS = (
     "connection unexpectedly",
     "connection reset",
     "connection refused",
+    "wrong_version_number",
+    "[ssl] internal error",
+    "ssl: internal error",
+    "internal error (_ssl",
+    "decryption_failed_or_bad_record_mac",
+    "bad record mac",
+    "eof occurred in violation of protocol",
+    "transient google fit api",
     "timed out",
     "timeout",
 )
@@ -192,8 +298,9 @@ def upsert_health_snapshot(
             INSERT INTO public.health_snapshots
                 (user_id, source, snapshot_date, steps, active_minutes, calories,
                  distance_km, sleep_hours, heart_rate_bpm, heart_points,
-                 sleep_stages, activities)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 sleep_start_at, sleep_end_at, sleep_stages, sleep_segments,
+                 activities)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, source, snapshot_date)
             DO UPDATE SET
                 steps          = EXCLUDED.steps,
@@ -203,7 +310,10 @@ def upsert_health_snapshot(
                 sleep_hours    = EXCLUDED.sleep_hours,
                 heart_rate_bpm = EXCLUDED.heart_rate_bpm,
                 heart_points   = EXCLUDED.heart_points,
+                sleep_start_at = EXCLUDED.sleep_start_at,
+                sleep_end_at   = EXCLUDED.sleep_end_at,
                 sleep_stages   = EXCLUDED.sleep_stages,
+                sleep_segments = EXCLUDED.sleep_segments,
                 activities     = EXCLUDED.activities,
                 updated_at     = NOW()
             """,
@@ -218,7 +328,10 @@ def upsert_health_snapshot(
                 data.get("sleep_hours"),
                 data.get("heart_rate_bpm"),
                 data.get("heart_points"),
+                _dt_from_millis(data.get("sleep_start_ms")),
+                _dt_from_millis(data.get("sleep_end_ms")),
                 json.dumps(data.get("sleep_stages")) if data.get("sleep_stages") else None,
+                json.dumps(data.get("sleep_segments")) if data.get("sleep_segments") else None,
                 json.dumps(data.get("activities")) if data.get("activities") else None,
             ),
         )
@@ -250,6 +363,95 @@ def delete_health_snapshot(user_id: str, source: str, snapshot_date: date) -> No
     except Exception as exc:
         log.warning("delete_health_snapshot failed: %s", exc)
         conn.rollback()
+    finally:
+        conn.close()
+
+
+def upsert_health_intraday_snapshot(
+    user_id: str,
+    source: str,
+    snapshot_date: date,
+    window_start_at: datetime,
+    window_end_at: datetime,
+    buckets: List[Dict],
+    bucket_minutes: int = 60,
+) -> bool:
+    steps = sum(int(bucket.get("steps") or 0) for bucket in buckets)
+    calories = sum(int(bucket.get("calories") or 0) for bucket in buckets)
+    distance_km = round(sum(float(bucket.get("distance_km") or 0) for bucket in buckets), 2)
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.health_intraday_snapshots
+                (user_id, source, snapshot_date, window_start_at, window_end_at,
+                 bucket_minutes, steps, calories, distance_km, buckets)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, source, snapshot_date, bucket_minutes)
+            DO UPDATE SET
+                window_start_at = EXCLUDED.window_start_at,
+                window_end_at   = EXCLUDED.window_end_at,
+                steps           = EXCLUDED.steps,
+                calories        = EXCLUDED.calories,
+                distance_km     = EXCLUDED.distance_km,
+                buckets         = EXCLUDED.buckets,
+                updated_at      = NOW()
+            """,
+            (
+                user_id,
+                source,
+                snapshot_date,
+                window_start_at,
+                window_end_at,
+                bucket_minutes,
+                steps,
+                calories,
+                distance_km,
+                json.dumps(buckets),
+            ),
+        )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as exc:
+        log.warning("upsert_health_intraday_snapshot failed: %s", exc)
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def get_health_intraday_snapshot(
+    user_id: str,
+    snapshot_date: date,
+    source: str = "google_fit",
+    bucket_minutes: int = 60,
+) -> Optional[Dict]:
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, user_id, source, snapshot_date, window_start_at, window_end_at,
+                   bucket_minutes, steps, calories, distance_km, buckets,
+                   created_at, updated_at
+            FROM public.health_intraday_snapshots
+            WHERE user_id = %s
+              AND source = %s
+              AND snapshot_date = %s
+              AND bucket_minutes = %s
+            LIMIT 1
+            """,
+            (user_id, source, snapshot_date, bucket_minutes),
+        )
+        row = cur.fetchone()
+        result = _row_to_dict(row, cur.description) if row else None
+        cur.close()
+        return result
+    except Exception as exc:
+        log.warning("get_health_intraday_snapshot failed: %s", exc)
+        return None
     finally:
         conn.close()
 
@@ -292,7 +494,8 @@ def get_health_snapshots(
                 """
                 SELECT id, user_id, source, snapshot_date, steps, active_minutes,
                        calories, distance_km, sleep_hours, heart_rate_bpm,
-                       heart_points, sleep_stages, activities,
+                       heart_points, sleep_start_at, sleep_end_at,
+                       sleep_stages, sleep_segments, activities,
                        created_at, updated_at
                 FROM public.health_snapshots
                 WHERE user_id = %s AND source = %s AND snapshot_date >= %s
@@ -305,7 +508,8 @@ def get_health_snapshots(
                 """
                 SELECT id, user_id, source, snapshot_date, steps, active_minutes,
                        calories, distance_km, sleep_hours, heart_rate_bpm,
-                       heart_points, sleep_stages, activities,
+                       heart_points, sleep_start_at, sleep_end_at,
+                       sleep_stages, sleep_segments, activities,
                        created_at, updated_at
                 FROM public.health_snapshots
                 WHERE user_id = %s AND snapshot_date >= %s
@@ -325,7 +529,7 @@ def get_health_snapshots(
 
 
 def purge_old_health_snapshots() -> int:
-    """Delete health_snapshots older than 8 days. Returns count of deleted rows."""
+    """Delete health rows older than 8 days. Returns count of deleted rows."""
     conn = _get_conn()
     try:
         cur = conn.cursor()
@@ -335,6 +539,11 @@ def purge_old_health_snapshots() -> int:
             (cutoff,),
         )
         deleted = cur.rowcount
+        cur.execute(
+            "DELETE FROM public.health_intraday_snapshots WHERE snapshot_date < %s",
+            (cutoff,),
+        )
+        deleted += cur.rowcount
         conn.commit()
         cur.close()
         log.info("Purged %d health snapshots older than %s", deleted, cutoff)
@@ -354,12 +563,27 @@ def sync_google_fit_for_user(user_id: str, target_date: Optional[date] = None) -
     target = target_date or date.today()
     try:
         gfit = _get_google_fit(user_id)
-        start_dt = datetime.combine(target, datetime.min.time())
-        end_dt = datetime.combine(target, datetime.max.time())
-        start_ms = int(start_dt.timestamp() * 1000)
-        end_ms = int(end_dt.timestamp() * 1000)
+        tz = _get_user_timezone(user_id)
+        start_dt, end_dt = _activity_day_bounds(target, tz)
+        start_ms = _millis(start_dt)
+        end_ms = _millis(end_dt)
 
-        raw = gfit.fetch_all_data(start_ms, end_ms)
+        raw = gfit.fetch_all_data(start_ms, end_ms, include_sleep=False)
+        sleep_start_dt, sleep_end_dt = _sleep_night_bounds(target, tz)
+        sleep_result = None
+        sleep_error = None
+        try:
+            sleep_result = gfit.fetch_sleep(_millis(sleep_start_dt), _millis(sleep_end_dt))
+        except Exception as exc:
+            sleep_error = str(exc)
+            log.warning("Google Fit sleep fetch failed for %s: %s", target.isoformat(), exc)
+        if sleep_result:
+            raw["sleep_hours"] = sleep_result.get("hours")
+            raw["sleep_start_ms"] = sleep_result.get("start_ms")
+            raw["sleep_end_ms"] = sleep_result.get("end_ms")
+            raw["sleep_stages"] = sleep_result.get("stages")
+            raw["sleep_segments"] = sleep_result.get("segments")
+
         if not _has_health_values(raw):
             delete_health_snapshot(user_id, "google_fit", target)
             return {
@@ -375,11 +599,38 @@ def sync_google_fit_for_user(user_id: str, target_date: Optional[date] = None) -
             snapshot_date=target,
             data=raw,
         )
+        intraday_saved = False
+        try:
+            intraday_start_dt, intraday_end_dt = _intraday_bounds(target, tz)
+            intraday_buckets = gfit.fetch_intraday_activity(
+                _millis(intraday_start_dt),
+                _millis(intraday_end_dt),
+                bucket_minutes=60,
+            )
+            if intraday_buckets:
+                intraday_saved = upsert_health_intraday_snapshot(
+                    user_id=user_id,
+                    source="google_fit",
+                    snapshot_date=target,
+                    window_start_at=intraday_start_dt,
+                    window_end_at=intraday_end_dt,
+                    buckets=intraday_buckets,
+                    bucket_minutes=60,
+                )
+        except Exception as exc:
+            log.warning("Google Fit intraday fetch failed for %s: %s", target.isoformat(), exc)
+        detail_parts = ["Google Fit synced" if ok else "DB upsert failed"]
+        detail_parts.append(f"sleep={'yes' if sleep_result else 'no'}")
+        detail_parts.append(f"hourly={'yes' if intraday_saved else 'no'}")
+        if sleep_error:
+            detail_parts.append(f"sleep_error={sleep_error[:120]}")
         return {
             "ok": ok,
             "source": "google_fit",
             "snapshot_date": target.isoformat(),
-            "detail": "Google Fit synced" if ok else "DB upsert failed",
+            "detail": " | ".join(detail_parts),
+            "sleep_synced": bool(sleep_result),
+            "hourly_synced": bool(intraday_saved),
         }
     except FileNotFoundError as exc:
         return {"ok": False, "source": "google_fit", "detail": str(exc)}
@@ -470,10 +721,15 @@ def sync_health_for_user(user_id: str) -> Dict:
             strava_results.append(sync_strava_for_user(user_id, target_date=target))
 
     gfit_ok = sum(1 for result in gfit_results if result.get("ok"))
+    gfit_sleep_ok = sum(1 for result in gfit_results if result.get("sleep_synced"))
+    gfit_hourly_ok = sum(1 for result in gfit_results if result.get("hourly_synced"))
     strava_ok = sum(1 for result in strava_results if result.get("ok"))
     details = []
     if gfit_ok:
-        details.append(f"Google Fit synced {gfit_ok}/{days} days")
+        details.append(
+            f"Google Fit synced {gfit_ok}/{days} days"
+            f" (sleep {gfit_sleep_ok}/{days}, hourly {gfit_hourly_ok}/{days})"
+        )
     else:
         details.append(gfit_results[0].get("detail") or "Google Fit returned no recent data")
     if sync_strava:
@@ -530,13 +786,65 @@ def get_snapshots(
             sleep_hours=r.get("sleep_hours"),
             heart_rate_bpm=r.get("heart_rate_bpm"),
             heart_points=r.get("heart_points"),
+            sleep_start_at=r.get("sleep_start_at"),
+            sleep_end_at=r.get("sleep_end_at"),
             sleep_stages=r.get("sleep_stages"),
+            sleep_segments=r.get("sleep_segments"),
             activities=r.get("activities"),
             created_at=r.get("created_at"),
             updated_at=r.get("updated_at"),
         )
         for r in rows
     ]
+
+
+@router.get("/intraday", response_model=HealthIntradayOut)
+def get_intraday(
+    snapshot_date: date = Query(..., description="Date to load in YYYY-MM-DD format"),
+    source: str = Query("google_fit", description="google_fit"),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    if source != "google_fit":
+        raise HTTPException(status_code=400, detail="Intraday health data is currently available for Google Fit only")
+
+    tz = _get_user_timezone(user_id)
+    row = get_health_intraday_snapshot(user_id, snapshot_date=snapshot_date, source=source)
+    if not row:
+        window_start_at, window_end_at = _intraday_bounds(snapshot_date, tz)
+        buckets = _empty_intraday_buckets(window_start_at, window_end_at)
+        return HealthIntradayOut(
+            id=None,
+            user_id=user_id,
+            source=source,
+            snapshot_date=snapshot_date,
+            window_start_at=window_start_at,
+            window_end_at=window_end_at,
+            bucket_minutes=60,
+            steps=0,
+            calories=0,
+            distance_km=0,
+            buckets=[HealthIntradayBucketOut(**_bucket_for_api(bucket, tz)) for bucket in buckets],
+        )
+
+    buckets = row.get("buckets") or []
+    return HealthIntradayOut(
+        id=str(row["id"]),
+        user_id=str(row["user_id"]),
+        source=row["source"],
+        snapshot_date=row["snapshot_date"],
+        window_start_at=row["window_start_at"],
+        window_end_at=row["window_end_at"],
+        bucket_minutes=row["bucket_minutes"],
+        steps=row.get("steps") or 0,
+        calories=row.get("calories") or 0,
+        distance_km=row.get("distance_km") or 0,
+        buckets=[HealthIntradayBucketOut(**_bucket_for_api(bucket, tz)) for bucket in buckets],
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
 
 
 @router.post("/sync/google-fit", response_model=HealthSyncOut)

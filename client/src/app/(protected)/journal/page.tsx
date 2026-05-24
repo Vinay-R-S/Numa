@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { HeaderActionButton } from "@/components/ui/header-action-button"
 import { cn } from "@/lib/utils"
 import {
   type JournalEntry,
@@ -379,25 +380,21 @@ export default function JournalPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            size="sm"
+          <HeaderActionButton
+            icon={autoGenerating ? Loader2 : Sparkles}
+            label="Auto Generate"
+            loading={autoGenerating}
+            active={autoGenerating}
             onClick={() => void handleAutoGenerate()}
             disabled={autoGenerating}
-            className="gap-2 bg-amber-500 text-black shadow-sm hover:bg-amber-400"
           >
-            {autoGenerating ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="h-4 w-4" />
-            )}
-            <span className="hidden sm:inline">
-              {autoGenerating ? "Generating..." : "Auto Generate"}
-            </span>
-          </Button>
-          <Button size="sm" onClick={handleNew} className="gap-2">
-            <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline">New Entry</span>
-          </Button>
+            {autoGenerating ? "Generating..." : "Auto Generate"}
+          </HeaderActionButton>
+          <HeaderActionButton
+            icon={Plus}
+            label="New Entry"
+            onClick={handleNew}
+          />
         </div>
       </header>
 
@@ -549,7 +546,7 @@ export default function JournalPage() {
               <div className="rounded-xl border border-border/40 bg-card/40 px-5 py-4">
                 <div className="flex items-center gap-2 mb-2">
                   <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-amber-400" />
+                    <Sparkles className="h-4 w-4 text-primary" />
                     <p className="text-xs font-semibold text-muted-foreground">AI Summary</p>
                   </div>
                 </div>
@@ -607,7 +604,7 @@ export default function JournalPage() {
                 )}
 
                 {isNew && (
-                  <span className="ml-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-amber-400">
+                  <span className="ml-2 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-0.5 text-[10px] font-semibold text-primary">
                     New
                   </span>
                 )}

@@ -366,6 +366,7 @@ export default function HomePage() {
   const { stats, statsLoading, fetchStats: loadStats } = useDashboardStore()
   const [agentOpen, setAgentOpen] = useState(false)
   const [syncingAll, setSyncingAll] = useState(false)
+  const [refreshingStats, setRefreshingStats] = useState(false)
 
   const [messages, setMessages] = useSessionMessages<MasterAgentMessage>("numa:session:master-agent-chat", [
     { role: "assistant", content: "I'm your Master Agent. I can manage Calendar, Tasks, Slack, Health, GitHub, LeetCode, and Journal for you. What would you like to do?" },
@@ -448,6 +449,22 @@ export default function HomePage() {
     chatAbortRef.current?.abort()
   }
 
+  async function handleRefreshStats() {
+    if (refreshingStats) return
+    const startedAt = Date.now()
+    setRefreshingStats(true)
+    try {
+      await loadStats(true)
+    } finally {
+      const elapsed = Date.now() - startedAt
+      const remaining = Math.max(0, 500 - elapsed)
+      if (remaining > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remaining))
+      }
+      setRefreshingStats(false)
+    }
+  }
+
   async function handleFetchLatest() {
     if (syncingAll) return
     setSyncingAll(true)
@@ -504,9 +521,10 @@ export default function HomePage() {
             <HeaderActionButton
               icon={RefreshCw}
               label="Refresh"
-              loading={statsLoading}
-              onClick={() => { void loadStats(true) }}
-              disabled={statsLoading}
+              loading={refreshingStats || (statsLoading && !stats)}
+              active={refreshingStats}
+              onClick={() => { void handleRefreshStats() }}
+              disabled={refreshingStats || (statsLoading && !stats)}
             />
             <HeaderActionButton
               icon={Sparkles}

@@ -42,12 +42,14 @@ function parseBoundedInput(value: string | number, min: number, max: number, fal
   return clampInteger(parsed, min, max, fallback)
 }
 
-const PROVIDER_ICONS: Record<string, React.ReactNode> = {
-  groq: <span className="text-[10px] font-black tracking-tight text-orange-400">GROQ</span>,
-  openai: <span className="text-[10px] font-black tracking-tight text-green-400">GPT</span>,
-  anthropic: <span className="text-[10px] font-black tracking-tight text-amber-400">CL</span>,
-  gemini: <span className="text-[10px] font-black tracking-tight text-blue-400">GEM</span>,
-  ollama: <span className="text-[10px] font-black tracking-tight text-violet-400">OLL</span>,
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+const PROVIDER_LOGOS: Record<string, string> = {
+  groq: "groq.webp",
+  openai: "openai.webp",
+  anthropic: "anthropic.webp",
+  gemini: "gemini.webp",
+  ollama: "ollama.webp",
 }
 
 const PROVIDER_DESCRIPTIONS: Record<string, string> = {
@@ -56,6 +58,27 @@ const PROVIDER_DESCRIPTIONS: Record<string, string> = {
   anthropic: "Claude Sonnet, Haiku, and Opus models",
   gemini: "Google Gemini 2.0 Flash and Gemini 1.5 models",
   ollama: "Run local models on your machine - no API key needed",
+}
+
+function ProviderLogo({ providerId, name }: { providerId: string; name: string }) {
+  const fileName = PROVIDER_LOGOS[providerId]
+  if (!fileName) {
+    return (
+      <div className="flex h-8 w-8 items-center justify-center rounded-full border border-border/50 bg-muted/40 text-[10px] font-bold text-muted-foreground">
+        AI
+      </div>
+    )
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`${API_BASE}/assets/images/${fileName}`}
+      alt={`${name} logo`}
+      className="h-8 w-8 rounded-full border border-border/50 bg-background object-cover shadow-sm"
+      loading="lazy"
+    />
+  )
 }
 
 export default function SettingsPage() {
@@ -369,8 +392,8 @@ export default function SettingsPage() {
                       : "border-border/40 bg-background/40 hover:bg-accent/40"
                   )}
                 >
-                  <div className="mb-1 flex items-center gap-1.5">
-                    <div className="flex h-5 w-5 items-center justify-center">{PROVIDER_ICONS[p.id] || <span className="text-[10px] font-bold text-muted-foreground">AI</span>}</div>
+                  <div className="mb-2 flex items-center gap-2">
+                    <ProviderLogo providerId={p.id} name={p.name} />
                     <span className="text-sm font-semibold text-foreground">{p.name}</span>
                   </div>
                   <p className="text-[10px] leading-tight text-muted-foreground line-clamp-2">

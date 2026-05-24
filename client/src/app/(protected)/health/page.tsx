@@ -34,8 +34,10 @@ import {
 } from "@/components/ui/select"
 import {
   HealthAgentMessage,
+  HealthIntraday,
   HealthSnapshot,
   HealthStatus,
+  getHealthIntraday,
   getHealthSnapshots,
   getHealthStatus,
   sendHealthAgentCommand,
@@ -62,6 +64,7 @@ function localDateString(date = new Date()): string {
 }
 
 type WeeklyActivityMetric = "steps" | "calories" | "distance_km"
+type ActivityChartMode = "day" | "week"
 
 const WEEKLY_ACTIVITY_OPTIONS: Array<{
   key: WeeklyActivityMetric
@@ -104,6 +107,99 @@ function formatDateLabel(dateKey: string): string {
 
   const parsed = new Date(`${dateKey}T00:00:00`)
   return parsed.toLocaleDateString([], { month: "short", day: "numeric" })
+}
+
+type SleepStage = "generic" | "light" | "deep" | "rem"
+
+type SleepTimelineSegment = {
+  startMs: number
+  endMs: number
+  stage: SleepStage
+  hours: number
+}
+
+const SLEEP_STAGE_META: Record<SleepStage, { label: string; fill: string; dot: string; priority: number }> = {
+  deep: { label: "Deep", fill: "bg-indigo-500", dot: "bg-indigo-500", priority: 4 },
+  rem: { label: "REM", fill: "bg-purple-500", dot: "bg-purple-500", priority: 3 },
+  light: { label: "Light", fill: "bg-blue-500", dot: "bg-blue-500", priority: 2 },
+  generic: { label: "Asleep", fill: "bg-slate-500", dot: "bg-slate-500", priority: 1 },
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function normalizeSleepStage(value: unknown): SleepStage {
+  const stage = typeof value === "string" ? value.toLowerCase() : "generic"
+  return stage === "light" || stage === "deep" || stage === "rem" ? stage : "generic"
+}
+
+function formatSleepDuration(hours: number): string {
+  const safeHours = Math.max(0, hours)
+  const wholeHours = Math.floor(safeHours)
+  const minutes = Math.round((safeHours - wholeHours) * 60)
+  if (minutes === 60) return `${wholeHours + 1}h 0m`
+  return `${wholeHours}h ${minutes}m`
+}
+
+function formatSleepTime(ms: number | null): string {
+  if (!ms) return "-"
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+}
+
+function parseSleepTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null
+  const parsed = new Date(value).getTime()
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function normalizeSleepSegments(rawSegments: Array<Record<string, unknown>> | null | undefined): SleepTimelineSegment[] {
+  const segments = (rawSegments || [])
+    .map((segment) => {
+      const startMs = readNumber(segment.start_ms)
+      const endMs = readNumber(segment.end_ms)
+      if (startMs == null || endMs == null || endMs <= startMs) return null
+      return {
+        startMs,
+        endMs,
+        stage: normalizeSleepStage(segment.stage),
+      }
+    })
+    .filter((segment): segment is { startMs: number; endMs: number; stage: SleepStage } => Boolean(segment))
+
+  if (segments.length === 0) return []
+
+  const boundaries = Array.from(new Set(segments.flatMap((segment) => [segment.startMs, segment.endMs]))).sort((a, b) => a - b)
+  const normalized: SleepTimelineSegment[] = []
+
+  for (let index = 0; index < boundaries.length - 1; index += 1) {
+    const startMs = boundaries[index]
+    const endMs = boundaries[index + 1]
+    const covering = segments.filter((segment) => segment.startMs < endMs && segment.endMs > startMs)
+    if (covering.length === 0) continue
+    const chosen = covering.reduce((best, segment) =>
+      SLEEP_STAGE_META[segment.stage].priority > SLEEP_STAGE_META[best.stage].priority ? segment : best
+    )
+    const previous = normalized[normalized.length - 1]
+    if (previous && previous.stage === chosen.stage && previous.endMs === startMs) {
+      previous.endMs = endMs
+      previous.hours = (previous.endMs - previous.startMs) / (1000 * 60 * 60)
+    } else {
+      normalized.push({
+        startMs,
+        endMs,
+        stage: chosen.stage,
+        hours: (endMs - startMs) / (1000 * 60 * 60),
+      })
+    }
+  }
+
+  return normalized
 }
 
 // ── Metric Card ─────────────────────────────────────────────────────────────────
@@ -178,8 +274,19 @@ function MetricCard({
 
 // ── Weekly chart bar ────────────────────────────────────────────────────────────
 
-function WeeklyBar({ snapshots }: { snapshots: HealthSnapshot[] }) {
+function ActivityChart({
+  snapshots,
+  intraday,
+  selectedDate,
+  loading,
+}: {
+  snapshots: HealthSnapshot[]
+  intraday: HealthIntraday | null
+  selectedDate: string
+  loading: boolean
+}) {
   const [activeMetric, setActiveMetric] = useState<WeeklyActivityMetric>("steps")
+  const [chartMode, setChartMode] = useState<ActivityChartMode>("day")
 
   const gfitDays = snapshots
     .filter((s) => s.source === "google_fit")
@@ -195,7 +302,7 @@ function WeeklyBar({ snapshots }: { snapshots: HealthSnapshot[] }) {
     },
   } satisfies ChartConfig
 
-  const chartData = lastSevenDays().map((date) => {
+  const weeklyChartData = lastSevenDays().map((date) => {
     const dateKey = localDateString(date)
     const snapshot = snapshotsByDate.get(dateKey)
     const value = Number(snapshot?.[activeMetric] || 0)
@@ -207,34 +314,74 @@ function WeeklyBar({ snapshots }: { snapshots: HealthSnapshot[] }) {
     }
   })
 
+  const dailyChartData = (intraday?.buckets || []).map((bucket) => {
+    const value = Number(bucket[activeMetric] || 0)
+    return {
+      date: selectedDate,
+      label: bucket.label,
+      range: bucket.range_label,
+      value,
+      displayValue: formatCompactValue(value, activeOption.unit),
+    }
+  })
+
+  const chartData = chartMode === "day" ? dailyChartData : weeklyChartData
+
   const total = chartData.reduce((sum, day) => sum + day.value, 0)
-  const bestDay = chartData.reduce((best, day) => (day.value > best.value ? day : best), chartData[0])
+  const bestDay = chartData.reduce((best, day) => (day.value > best.value ? day : best), chartData[0] || {
+    label: "-",
+    value: 0,
+    displayValue: formatCompactValue(0, activeOption.unit),
+  })
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
-          {WEEKLY_ACTIVITY_OPTIONS.map((option) => {
-            const Icon = option.icon
-            const selected = option.key === activeMetric
-
-            return (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="inline-flex h-9 w-fit rounded-lg border border-border/40 bg-background/30 p-1">
+            {[
+              { key: "day" as const, label: "Day" },
+              { key: "week" as const, label: "Week" },
+            ].map((option) => (
               <button
                 key={option.key}
                 type="button"
-                aria-pressed={selected}
-                onClick={() => setActiveMetric(option.key)}
-                className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors ${
-                  selected
-                    ? "border-primary/40 bg-primary/10 text-foreground"
-                    : "border-border/40 bg-background/30 text-muted-foreground hover:border-border/70 hover:text-foreground"
+                aria-pressed={chartMode === option.key}
+                onClick={() => setChartMode(option.key)}
+                className={`h-7 rounded-md px-3 text-xs font-semibold transition-colors ${
+                  chartMode === option.key
+                    ? "bg-primary/15 text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                <Icon className="h-3.5 w-3.5" />
                 {option.label}
               </button>
-            )
-          })}
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
+            {WEEKLY_ACTIVITY_OPTIONS.map((option) => {
+              const Icon = option.icon
+              const selected = option.key === activeMetric
+
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setActiveMetric(option.key)}
+                  className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors ${
+                    selected
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : "border-border/40 bg-background/30 text-muted-foreground hover:border-border/70 hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {option.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2 sm:min-w-56">
@@ -267,7 +414,7 @@ function WeeklyBar({ snapshots }: { snapshots: HealthSnapshot[] }) {
             tickLine={false}
             axisLine={false}
             tickMargin={10}
-            interval={0}
+            interval={chartMode === "day" ? 1 : 0}
             fontSize={11}
           />
           <YAxis
@@ -283,7 +430,11 @@ function WeeklyBar({ snapshots }: { snapshots: HealthSnapshot[] }) {
               <ChartTooltipContent
                 indicator="line"
                 labelFormatter={(_, payload) => {
-                  const date = payload[0]?.payload?.date
+                  const payloadData = payload[0]?.payload
+                  if (chartMode === "day" && typeof payloadData?.range === "string") {
+                    return payloadData.range
+                  }
+                  const date = payloadData?.date
                   return typeof date === "string" ? date : activeOption.label
                 }}
                 formatter={(value) => formatCompactValue(Number(value), activeOption.unit)}
@@ -301,6 +452,11 @@ function WeeklyBar({ snapshots }: { snapshots: HealthSnapshot[] }) {
           />
         </AreaChart>
       </ChartContainer>
+      {chartMode === "day" && !loading && total === 0 && (
+        <div className="rounded-lg border border-border/30 bg-background/30 px-3 py-2 text-xs text-muted-foreground">
+          No cached hourly data for {formatDateLabel(selectedDate)} yet. Run Sync after Google Fit is connected.
+        </div>
+      )}
     </div>
   )
 }
@@ -388,7 +544,6 @@ function HeartMetricCard({
 
 function SleepCard({ snapshot }: { snapshot: HealthSnapshot | null }) {
   const sleep = snapshot?.sleep_hours
-  const stages = snapshot?.sleep_stages
 
   if (!sleep || sleep <= 0) {
     return (
@@ -405,18 +560,32 @@ function SleepCard({ snapshot }: { snapshot: HealthSnapshot | null }) {
   }
 
   const goal = 8
-  const quality = Math.min(100, Math.round((sleep / goal) * 100))
-  const stageList = stages
-    ? [
-        { name: "Deep", hours: stages.deep || 0, cls: "bg-indigo-500" },
-        { name: "Light", hours: stages.light || 0, cls: "bg-blue-500" },
-        { name: "REM", hours: stages.rem || 0, cls: "bg-purple-500" },
-      ].filter((s) => s.hours > 0)
-    : []
+  const normalizedSegments = normalizeSleepSegments(snapshot?.sleep_segments)
+  const segmentHours = normalizedSegments.reduce((sum, segment) => sum + segment.hours, 0)
+  const displaySleep = segmentHours > 0 ? segmentHours : sleep
+  const rawSleepDiffers = segmentHours > 0 && Math.abs(sleep - segmentHours) >= 0.25
+  const quality = Math.min(100, Math.round((displaySleep / goal) * 100))
+  const sleepStart = normalizedSegments[0]?.startMs ?? parseSleepTimestamp(snapshot?.sleep_start_at)
+  const sleepEnd = normalizedSegments[normalizedSegments.length - 1]?.endMs ?? parseSleepTimestamp(snapshot?.sleep_end_at)
+  const timelineStart = sleepStart ?? 0
+  const timelineEnd = sleepEnd ?? (timelineStart + displaySleep * 60 * 60 * 1000)
+  const timelineSpan = Math.max(timelineEnd - timelineStart, displaySleep * 60 * 60 * 1000, 1)
+  const timelineSegments = normalizedSegments.length > 0
+    ? normalizedSegments
+    : [{ startMs: timelineStart, endMs: timelineEnd, stage: "generic" as SleepStage, hours: displaySleep }]
+  const longWindow = displaySleep > 12
+  const stageTotals = timelineSegments.reduce<Record<SleepStage, number>>((acc, segment) => {
+    acc[segment.stage] += segment.hours
+    return acc
+  }, { generic: 0, light: 0, deep: 0, rem: 0 })
+  const stageList = (["deep", "rem", "light", "generic"] as SleepStage[])
+    .map((stage) => ({ stage, hours: stageTotals[stage], ...SLEEP_STAGE_META[stage] }))
+    .filter((stage) => stage.hours > 0)
+  const sleepStatus = longWindow ? "Review" : quality >= 85 ? "On target" : quality >= 65 ? "Close" : "Low"
 
   return (
-    <div className="rounded-2xl border border-border/40 bg-card/40 p-6">
-      <div className="flex items-center justify-between mb-4">
+    <div className="rounded-2xl border border-border/40 bg-card/40 p-5 sm:p-6">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/10 ring-1 ring-indigo-500/20">
             <Moon className="h-5 w-5 text-indigo-400" />
@@ -427,50 +596,83 @@ function SleepCard({ snapshot }: { snapshot: HealthSnapshot | null }) {
           </div>
         </div>
         <span className={`rounded-full border px-2.5 py-0.5 text-xs font-bold ${
-          quality >= 80 ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
-          : quality >= 60 ? "border-yellow-500/20 bg-yellow-500/10 text-yellow-400"
+          longWindow ? "border-amber-500/20 bg-amber-500/10 text-amber-300"
+          : quality >= 85 ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+          : quality >= 65 ? "border-yellow-500/20 bg-yellow-500/10 text-yellow-400"
           : "border-orange-500/20 bg-orange-500/10 text-orange-400"
         }`}>
-          {quality}%
+          {sleepStatus}
         </span>
       </div>
 
-      <div className="flex items-baseline gap-1 mb-3">
-        <span className="text-4xl font-black text-indigo-400 tabular-nums">{Math.floor(sleep)}</span>
-        <span className="text-lg text-muted-foreground">h</span>
-        <span className="text-3xl font-black text-indigo-400 tabular-nums">{Math.round((sleep % 1) * 60)}</span>
-        <span className="text-base text-muted-foreground">m</span>
+      <div className="mb-5 grid gap-2 sm:grid-cols-3">
+        <div className="rounded-xl border border-border/30 bg-background/30 px-3 py-2.5">
+          <p className="text-[10px] font-medium uppercase text-muted-foreground/70">Duration</p>
+          <p className="text-2xl font-black text-indigo-300 tabular-nums">{formatSleepDuration(displaySleep)}</p>
+          {rawSleepDiffers && (
+            <p className="mt-1 text-[10px] text-amber-300">Adjusted from {formatSleepDuration(sleep)}</p>
+          )}
+        </div>
+        <div className="rounded-xl border border-border/30 bg-background/30 px-3 py-2.5">
+          <p className="text-[10px] font-medium uppercase text-muted-foreground/70">Window</p>
+          <p className="text-lg font-bold text-foreground tabular-nums">
+            {formatSleepTime(sleepStart)} to {formatSleepTime(sleepEnd)}
+          </p>
+          <p className="mt-1 text-[10px] text-muted-foreground">{formatSleepDuration(goal)} goal</p>
+        </div>
+        <div className="rounded-xl border border-border/30 bg-background/30 px-3 py-2.5">
+          <p className="text-[10px] font-medium uppercase text-muted-foreground/70">Goal</p>
+          <p className="text-2xl font-black text-foreground tabular-nums">{quality}%</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">{formatSleepDuration(Math.max(goal - displaySleep, 0))} remaining</p>
+        </div>
       </div>
 
-      <div className="flex items-center gap-2 mb-3">
-        <div className="flex-1 h-2 rounded-full bg-border/20 overflow-hidden">
-          <div
-            className="h-full bg-linear-to-r from-indigo-500 to-purple-500 rounded-full transition-all"
-            style={{ width: `${Math.min(100, (sleep / goal) * 100)}%` }}
-          />
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-[10px] font-medium uppercase text-muted-foreground/70">
+          <span>Sleep timeline</span>
+          <span>{formatSleepDuration(displaySleep)}</span>
         </div>
-        <span className="text-xs text-muted-foreground whitespace-nowrap">{goal}h goal</span>
+        <div className="relative h-12 overflow-hidden rounded-xl border border-border/30 bg-background/40">
+          <div className="absolute inset-x-0 bottom-0 h-px bg-border/40" />
+          {timelineSegments.map((segment, index) => {
+            const left = ((segment.startMs - timelineStart) / timelineSpan) * 100
+            const width = ((segment.endMs - segment.startMs) / timelineSpan) * 100
+            return (
+              <div
+                key={`${segment.stage}-${segment.startMs}-${index}`}
+                className={`absolute top-2 h-8 min-w-[3px] rounded-md ${SLEEP_STAGE_META[segment.stage].fill}`}
+                style={{ left: `${Math.max(0, left)}%`, width: `${Math.max(1, width)}%` }}
+                title={`${SLEEP_STAGE_META[segment.stage].label}: ${formatSleepDuration(segment.hours)}`}
+              />
+            )
+          })}
+        </div>
+        <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+          <span>{formatSleepTime(sleepStart)}</span>
+          <span>{formatSleepTime(sleepEnd)}</span>
+        </div>
       </div>
 
       {stageList.length > 0 && (
-        <>
-          <div className="h-5 rounded-lg overflow-hidden flex mb-3">
-            {stageList.map((s) => (
-              <div key={s.name} className={`h-full ${s.cls}`} style={{ width: `${(s.hours / sleep) * 100}%` }} title={`${s.name}: ${s.hours}h`} />
-            ))}
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            {stageList.map((s) => (
-              <div key={s.name} className="rounded-lg border border-border/30 bg-background/40 p-2">
-                <div className="flex items-center gap-1.5 mb-1">
-                  <div className={`h-2 w-2 rounded-full ${s.cls}`} />
-                  <span className="text-[10px] text-muted-foreground">{s.name}</span>
-                </div>
-                <p className="text-sm font-bold text-foreground">{s.hours.toFixed(1)}h</p>
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {stageList.map((stage) => (
+            <div key={stage.stage} className="rounded-lg border border-border/30 bg-background/30 p-2.5">
+              <div className="mb-1 flex items-center gap-1.5">
+                <div className={`h-2 w-2 rounded-full ${stage.dot}`} />
+                <span className="text-[10px] text-muted-foreground">{stage.label}</span>
               </div>
-            ))}
-          </div>
-        </>
+              <p className="text-sm font-bold text-foreground tabular-nums">{formatSleepDuration(stage.hours)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(longWindow || rawSleepDiffers) && (
+        <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          {longWindow
+            ? "Google Fit returned a long sleep window. Re-sync after the watch app finishes uploading if this looks wrong."
+            : "Overlapping synced sleep segments were collapsed into a single timeline."}
+        </div>
       )}
     </div>
   )
@@ -521,7 +723,7 @@ function HealthScore({ snapshot }: { snapshot: HealthSnapshot | null }) {
             </div>
             <div>
               <h2 className="text-lg font-extrabold text-foreground leading-none">Your Daily Health</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">Based on today&apos;s activity</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Based on selected day activity</p>
             </div>
           </div>
           <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-bold ${
@@ -573,6 +775,8 @@ function ChatBubble({ msg }: { msg: HealthAgentMessage }) {
 export default function HealthPage() {
   const [status, setStatus] = useState<HealthStatus | null>(null)
   const [snapshots, setSnapshots] = useState<HealthSnapshot[]>([])
+  const [intraday, setIntraday] = useState<HealthIntraday | null>(null)
+  const [intradayLoading, setIntradayLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -625,6 +829,25 @@ export default function HealthPage() {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  useEffect(() => {
+    let cancelled = false
+    setIntradayLoading(true)
+    getHealthIntraday({ snapshotDate: selectedDate })
+      .then((data) => {
+        if (!cancelled) setIntraday(data)
+      })
+      .catch(() => {
+        if (!cancelled) setIntraday(null)
+      })
+      .finally(() => {
+        if (!cancelled) setIntradayLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedDate, snapshots])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -815,16 +1038,21 @@ export default function HealthPage() {
 
       {/* Weekly Chart */}
       <section className="rounded-2xl border border-border/40 bg-card/40 p-5">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/10 ring-1 ring-cyan-500/20">
-            <TrendingUp className="h-5 w-5 text-cyan-400" />
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/10 ring-1 ring-cyan-500/20">
+              <TrendingUp className="h-5 w-5 text-cyan-400" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-foreground">Activity Trends</h3>
+              <p className="text-xs text-muted-foreground">Selected day 6 AM to 10 PM or last 7 days</p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-base font-bold text-foreground">Weekly Activity</h3>
-            <p className="text-xs text-muted-foreground">Last 7 days - steps, calories, and distance</p>
+          <div className="min-h-5 text-xs text-muted-foreground">
+            {intradayLoading ? "Loading day data..." : ""}
           </div>
         </div>
-        <WeeklyBar snapshots={snapshots} />
+        <ActivityChart snapshots={snapshots} intraday={intraday} selectedDate={selectedDate} loading={intradayLoading} />
       </section>
 
       {/* Sleep Analysis */}

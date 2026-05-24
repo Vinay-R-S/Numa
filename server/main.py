@@ -38,6 +38,7 @@ IS_DEV = not FRONTEND_URL
 app = FastAPI(title="Numa API", version="1.0.0")
 AUDIO_ROOT = SERVER_ROOT / "audio"
 AUDIO_ROOT.mkdir(parents=True, exist_ok=True)
+IMAGE_ASSETS_ROOT = SERVER_ROOT / "assets" / "images"
 
 app.add_middleware(
     CORSMiddleware,
@@ -144,6 +145,7 @@ app.include_router(dashboard_router)
 app.include_router(audio_library_router)
 
 app.mount("/audio", StaticFiles(directory=str(AUDIO_ROOT)), name="audio")
+app.mount("/assets/images", StaticFiles(directory=str(IMAGE_ASSETS_ROOT)), name="image_assets")
 
 
 # ── Public ────────────────────────────────────────────────────────────────────
