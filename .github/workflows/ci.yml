@@ -11,9 +11,27 @@ on:
       - master
 
 jobs:
-  tests:
-    name: Run isolated test suite
+  test-suites:
+    name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: Suite 1 - Core Logic
+            paths: tests/test_unit.py tests/test_data_validation.py
+          - suite: Suite 2 - User Workflows
+            paths: tests/test_functional.py tests/test_uat.py tests/test_complex_workflows.py
+          - suite: Suite 3 - Integration and API Contracts
+            paths: tests/test_integration.py tests/test_api_contract.py
+          - suite: Suite 4 - Security Controls
+            paths: tests/test_security.py
+          - suite: Suite 5 - Smoke Sanity Regression
+            paths: tests/test_smoke.py tests/test_sanity.py tests/test_regression.py
+          - suite: Suite 6 - Performance and Edge Cases
+            paths: tests/test_performance.py tests/test_edge_cases.py
+          - suite: Suite 7 - System and Error Handling
+            paths: tests/test_system.py tests/test_error_handling.py
 
     steps:
       - name: Checkout repository
@@ -27,5 +45,5 @@ jobs:
       - name: Install test dependency
         run: python -m pip install --upgrade pip pytest
 
-      - name: Run tests
-        run: python -m pytest
+      - name: Run ${{ matrix.suite }}
+        run: python -m pytest ${{ matrix.paths }}
