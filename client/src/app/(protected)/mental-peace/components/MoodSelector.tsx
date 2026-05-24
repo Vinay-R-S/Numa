@@ -8,23 +8,26 @@ interface MoodSelectorProps {
   onSelect: (mood: MoodType | "meditation") => void
 }
 
-const moods: { type: MoodType | "meditation"; label: string; description: string; icon: React.ReactNode }[] = [
+const yogaMoods: { type: MoodType; description: string; icon: React.ReactNode }[] = [
   { type: "overwhelmed", description: "Mind racing, too much happening", icon: <Angry className="h-7 w-7" /> },
   { type: "low", description: "Lacking energy or motivation", icon: <Frown className="h-7 w-7" /> },
   { type: "restless", description: "Can't settle, fidgety energy", icon: <Annoyed className="h-7 w-7" /> },
   { type: "numb", description: "Feeling disconnected or flat", icon: <Meh className="h-7 w-7" /> },
   { type: "exhausted", description: "Deeply tired, need restoration", icon: <Bed className="h-7 w-7" /> },
-].map((mood) => ({
-  ...mood,
-  label: moodConfig[mood.type as MoodType].label,
-}))
+]
 
-moods.push({
-  type: "meditation",
-  label: "Meditation",
-  description: "Music, timer, and seated posture",
-  icon: <PersonStanding className="h-7 w-7" />,
-})
+const moods: { type: MoodType | "meditation"; label: string; description: string; icon: React.ReactNode }[] = [
+  ...yogaMoods.map((mood) => ({
+    ...mood,
+    label: moodConfig[mood.type].label,
+  })),
+  {
+    type: "meditation",
+    label: "Meditation",
+    description: "Music, timer, and seated posture",
+    icon: <PersonStanding className="h-7 w-7" />,
+  },
+]
 
 export function MoodSelector({ onSelect }: MoodSelectorProps) {
   return (

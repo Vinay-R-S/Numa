@@ -71,6 +71,7 @@ export function TaskDetailSheet({
           {(task.source_name || task.source_logo) && (
             <div className="flex items-center gap-1.5 mb-1">
               {task.source_logo && (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={task.source_logo}
                   alt={task.source_name ?? ""}

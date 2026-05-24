@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { X, Clock, Calendar, FileText } from "lucide-react"
+import { useState } from "react"
+import { X, Calendar } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { CalendarEvent, CalendarEventPayload } from "@/components/calendar/api"
+import { CalendarEvent } from "@/components/calendar/api"
 
 interface EventEditDialogProps {
   event: CalendarEvent

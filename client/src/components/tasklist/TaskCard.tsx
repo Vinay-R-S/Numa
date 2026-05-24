@@ -102,6 +102,7 @@ export function TaskCard({ task, onEdit, onDelete, onView, overlay }: TaskCardPr
         {(task.source_name || task.source_logo) && (
           <div className="mb-2 flex items-center gap-1.5">
             {task.source_logo && (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={task.source_logo}
                 alt={task.source_name ?? ""}

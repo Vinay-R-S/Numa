@@ -22,7 +22,14 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-const NAV_ITEMS = [
+type NavItem = {
+  href: string
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  disabled?: boolean
+}
+
+const NAV_ITEMS: NavItem[] = [
   { href: "/home", icon: Home, label: "Home" },
   { href: "/tasklist", icon: CheckSquare, label: "Task List" },
   { href: "/calendar", icon: CalendarDays, label: "Calendar" },

@@ -1,19 +1,15 @@
 "use client"
 
-import React, { useState, useEffect, useCallback } from "react"
+import React, { useState, useCallback } from "react"
 import { Menu, Zap } from "lucide-react"
 import { TasklistSidebar } from "@/components/tasklist/TasklistSidebar"
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   // locked = sidebar is pinned open on desktop; false = hover-to-expand only
-  const [locked, setLocked] = useState(false)
-
-  // Persist pin state across page navigations
-  useEffect(() => {
-    const saved = localStorage.getItem("numa_sidebar_locked")
-    if (saved === "true") setLocked(true)
-  }, [])
+  const [locked, setLocked] = useState(() =>
+    typeof window !== "undefined" && localStorage.getItem("numa_sidebar_locked") === "true"
+  )
 
   const handleToggleLock = useCallback(() => {
     setLocked((l) => {

@@ -42,8 +42,6 @@ function parseBoundedInput(value: string | number, min: number, max: number, fal
   return clampInteger(parsed, min, max, fallback)
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-
 const PROVIDER_LOGOS: Record<string, string> = {
   groq: "groq.webp",
   openai: "openai.webp",
@@ -73,7 +71,7 @@ function ProviderLogo({ providerId, name }: { providerId: string; name: string }
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={`${API_BASE}/assets/images/${fileName}`}
+      src={`/llm-providers/${fileName}`}
       alt={`${name} logo`}
       className="h-8 w-8 rounded-full border border-border/50 bg-background object-cover shadow-sm"
       loading="lazy"

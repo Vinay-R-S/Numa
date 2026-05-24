@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Menu, X } from "lucide-react";
@@ -38,9 +39,9 @@ export default function Navbar() {
           }`}
         >
           <div className="px-4 xl:px-6 h-14 flex items-center justify-between">
-            <a href="/" className="text-lg font-bold text-white tracking-tight">
+            <Link href="/" className="text-lg font-bold text-white tracking-tight">
               NUMA
-            </a>
+            </Link>
 
             {/* Desktop links */}
             <div className="hidden xl:flex items-center gap-1">
@@ -54,14 +55,14 @@ export default function Navbar() {
                 </a>
               ))}
               <div className="ml-3">
-                <a href="/auth">
+                <Link href="/auth">
                   <Button
                     size="sm"
                     className="bg-white text-black hover:bg-gray-100 font-semibold rounded-lg text-[13px] h-8 px-4 shadow-[0_0_16px_rgba(255,255,255,0.1)]"
                   >
                     Sign In
                   </Button>
-                </a>
+                </Link>
               </div>
             </div>
 
@@ -127,14 +128,14 @@ export default function Navbar() {
                 transition={{ delay: 0.35 }}
                 className="mt-6"
               >
-                <a href="/auth" className="w-full">
+                <Link href="/auth" className="w-full">
                   <Button
                     className="bg-white text-black hover:bg-gray-100 font-semibold rounded-xl w-full py-5 text-base"
                     onClick={() => setMobileOpen(false)}
                   >
                     Sign In
                   </Button>
-                </a>
+                </Link>
               </motion.div>
             </motion.div>
           </motion.div>

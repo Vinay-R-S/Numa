@@ -441,7 +441,9 @@ export default function CalendarView({
   onDeleteEvent,
   onEditEvent,
 }: CalendarViewProps) {
-  const [view, setView] = useState<ViewMode>("month")
+  const [view, setView] = useState<ViewMode>(() =>
+    typeof window !== "undefined" && window.innerWidth < 640 ? "day" : "month"
+  )
   const [currentDate, setCurrentDate] = useState(new Date())
   const [detailPopup, setDetailPopup] = useState<{
     event: CalendarEvent
@@ -468,20 +470,20 @@ export default function CalendarView({
   }, [])
 
   // Responsive: detect mobile for layout adjustments
-  const [isMobile, setIsMobile] = useState(false)
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth < 640 : false
+  )
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 640)
-    check()
+    const check = () => {
+      const mobile = window.innerWidth < 640
+      setIsMobile(mobile)
+      if (mobile) {
+        setView((current) => (current === "month" ? "day" : current))
+      }
+    }
     window.addEventListener("resize", check)
     return () => window.removeEventListener("resize", check)
   }, [])
-
-  // Default to day view on mobile for better UX
-  useEffect(() => {
-    if (isMobile && view === "month") {
-      setView("day")
-    }
-  }, [isMobile, view])
 
   const today = now
 

@@ -39,6 +39,7 @@ function PoseCardImage({ pose }: { pose: PoseWithMoodReason }) {
   }
 
   return (
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={pose.imageUrl}
       alt={pose.englishName}
@@ -92,6 +93,7 @@ function ModalPoseImage({ pose }: { pose: PoseWithMoodReason }) {
   }
 
   return (
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={pose.imageUrl}
       alt={pose.englishName}

@@ -213,6 +213,24 @@ def _is_transient_sync_error(exc: Exception) -> bool:
     return any(marker in text for marker in _TRANSIENT_SYNC_ERROR_MARKERS)
 
 
+def _is_google_fit_not_connected_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "google fit is not connected",
+            "google calendar is not connected",
+            "start oauth",
+            "please reconnect",
+            "reconnect google",
+            "session expired",
+            "missing newly required scopes",
+            "insufficient authentication scopes",
+            "access_token_scope_insufficient",
+        )
+    )
+
+
 def _sync_temporarily_unavailable_detail(source: str) -> str:
     return f"{source} temporarily unavailable; sync skipped"
 
@@ -635,6 +653,15 @@ def sync_google_fit_for_user(user_id: str, target_date: Optional[date] = None) -
     except FileNotFoundError as exc:
         return {"ok": False, "source": "google_fit", "detail": str(exc)}
     except Exception as exc:
+        if _is_google_fit_not_connected_error(exc):
+            log.debug("Google Fit sync skipped for user %s: %s", user_id, exc)
+            return {
+                "ok": False,
+                "source": "google_fit",
+                "snapshot_date": target.isoformat(),
+                "detail": str(exc),
+                "not_connected": True,
+            }
         if _is_transient_sync_error(exc):
             log.debug("Google Fit sync skipped: %s", exc)
             return {
@@ -715,7 +742,7 @@ def sync_health_for_user(user_id: str) -> Dict:
         if not gfit_unavailable:
             gfit_result = sync_google_fit_for_user(user_id, target_date=target)
             gfit_results.append(gfit_result)
-            if gfit_result.get("transient"):
+            if gfit_result.get("transient") or gfit_result.get("not_connected"):
                 gfit_unavailable = True
         if sync_strava:
             strava_results.append(sync_strava_for_user(user_id, target_date=target))
@@ -745,6 +772,7 @@ def sync_health_for_user(user_id: str) -> Dict:
         "detail": " | ".join(details),
         "google_fit": gfit_results,
         "strava": strava_results,
+        "not_connected": bool(gfit_results and gfit_results[0].get("not_connected")),
     }
 
 

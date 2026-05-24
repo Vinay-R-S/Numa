@@ -17,10 +17,27 @@ _TRANSIENT_ERROR_MARKERS = (
     "timeout",
 )
 
+_NOT_CONNECTED_ERROR_MARKERS = (
+    "is not connected",
+    "not connected",
+    "start oauth",
+    "please reconnect",
+    "reconnect google",
+    "session expired",
+    "missing newly required scopes",
+    "insufficient authentication scopes",
+    "access_token_scope_insufficient",
+)
+
 
 def _is_transient_dependency_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(marker in text for marker in _TRANSIENT_ERROR_MARKERS)
+
+
+def _is_not_connected_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _NOT_CONNECTED_ERROR_MARKERS)
 
 
 def _dependency_unavailable_detail(service: str) -> str:
@@ -28,7 +45,7 @@ def _dependency_unavailable_detail(service: str) -> str:
 
 
 def _log_sync_exception(message: str, exc: Exception, *args) -> None:
-    if _is_transient_dependency_error(exc):
+    if _is_transient_dependency_error(exc) or _is_not_connected_error(exc):
         log.debug(message, *args, exc)
     else:
         log.warning(message, *args, exc)
@@ -45,18 +62,22 @@ def fetch_latest_for_user(user_id: str) -> Dict:
     }
 
     try:
-        from src.calendar.service import get_events_for_frontend
+        from src.calendar.service import get_events_for_frontend, has_calendar_credentials
 
-        events = get_events_for_frontend(user_id=user_id, force_refresh=True)
-        result["calendar"] = {
-            "ok": True,
-            "fetched": len(events),
-            "detail": "Calendar fetch complete",
-        }
+        if has_calendar_credentials(user_id):
+            events = get_events_for_frontend(user_id=user_id, force_refresh=True)
+            result["calendar"] = {
+                "ok": True,
+                "fetched": len(events),
+                "detail": "Calendar fetch complete",
+            }
     except Exception as exc:
         _log_sync_exception("Calendar fetch failed for user %s: %s", exc, user_id)
-        detail = _dependency_unavailable_detail("Calendar") if _is_transient_dependency_error(exc) else str(exc)
-        result["calendar"] = {"ok": False, "fetched": 0, "detail": detail}
+        if _is_not_connected_error(exc):
+            result["calendar"] = {"ok": True, "fetched": 0, "detail": "not connected"}
+        else:
+            detail = _dependency_unavailable_detail("Calendar") if _is_transient_dependency_error(exc) else str(exc)
+            result["calendar"] = {"ok": False, "fetched": 0, "detail": detail}
 
     try:
         from src.slack_agent.router import fetch_latest_slack_for_user
@@ -68,13 +89,23 @@ def fetch_latest_for_user(user_id: str) -> Dict:
         result["slack"] = {"ok": False, "fetched": 0, "channels": 0, "detail": detail}
 
     try:
+        from src.calendar.service import has_calendar_credentials
         from src.health_agent.router import sync_health_for_user
 
-        result["health"] = sync_health_for_user(user_id)
+        if has_calendar_credentials(user_id):
+            health_result = sync_health_for_user(user_id)
+            if health_result.get("not_connected"):
+                health_result["ok"] = True
+            result["health"] = health_result
+        else:
+            result["health"] = {"ok": True, "detail": "Google Fit not connected"}
     except Exception as exc:
         _log_sync_exception("Health sync failed for user %s: %s", exc, user_id)
-        detail = _dependency_unavailable_detail("Health") if _is_transient_dependency_error(exc) else str(exc)
-        result["health"] = {"ok": False, "detail": detail}
+        if _is_not_connected_error(exc):
+            result["health"] = {"ok": True, "detail": "not connected"}
+        else:
+            detail = _dependency_unavailable_detail("Health") if _is_transient_dependency_error(exc) else str(exc)
+            result["health"] = {"ok": False, "detail": detail}
 
     try:
         from src.github_agent.router import fetch_and_store_github_stats_for_user

@@ -105,7 +105,7 @@ export default function ArchitectureSection() {
         </motion.div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          {layers.map((layer, i) => {
+          {layers.map((layer) => {
             const Icon = layer.icon;
             return (
               <div
