@@ -101,98 +101,129 @@ cp server/.env.example server/.env
 
 ### 1. Supabase: project setup with Google OAuth and GitHub OAuth
 
-1. Create a new Supabase project from the dashboard, pick your organization, select a region close to your users, and set a strong database password. Save the password somewhere secure because you will need it when building the connection string.
-2. Wait for the project to finish provisioning, then open Project Settings → API. Copy the Project URL, anon public key, and service_role key. The Project URL becomes `SUPABASE_URL`; the anon key goes to the client; the service_role key stays backend-only.
-3. Open Project Settings → Database → Connection string. For the free tier, choose Transaction Pooler and use IPv4. Copy the URI that looks like `postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres` and place it in `DATABASE_URL`.
-4. Open Authentication → URL Configuration. Set `Site URL` to `http://localhost:3000` for local development and add `http://localhost:3000/**` to Redirect URLs. If you later deploy, add the production URL as well.
-5. Keep Supabase Auth enabled only after the provider keys are configured. That avoids partially configured sign-in attempts during setup.
+| Step | Action |
+|---|---|
+| Step 1 | Create a Supabase project from the dashboard. Pick your organization, choose a region close to you, and set a strong database password. Save the password because it is needed for the database connection string. |
+| Step 2 | Wait for provisioning to finish, then open `Project Settings > API`. Copy the Project URL, anon public key, and service_role key. |
+| Step 3 | Put the Project URL in `SUPABASE_URL`. Put the anon public key in both backend and client env files. Keep the service_role key backend-only in `SUPABASE_SERVICE_ROLE_KEY`. |
+| Step 4 | Open `Project Settings > Database > Connection string`. For the free tier, choose Transaction Pooler and IPv4. Copy the URI like `postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres`. |
+| Step 5 | Put the copied database URI in `DATABASE_URL`. |
+| Step 6 | Open `Authentication > URL Configuration`. Set `Site URL` to `http://localhost:3000` for local development. |
+| Step 7 | Add `http://localhost:3000/**` to Redirect URLs. Add production URLs later if you deploy. |
+| Step 8 | Enable Supabase Auth only after provider keys are configured, so partially configured sign-in attempts do not fail during setup. |
 
 #### Google OAuth in Supabase Auth
 
-1. In Google Cloud Console, open Google Auth Platform. The main sections you need are Branding, Audience, Data Access, and Clients.
-2. Under Branding, create the consent screen details: app name, user support email, developer contact email, and logo if you want the page to look polished.
-3. Under Audience, choose External if you are testing with personal Google accounts. Add yourself as a test user so you can sign in before publishing.
-4. Under Data Access, add the minimum scopes your app needs. For Supabase Google sign-in, keep the request minimal and avoid adding unnecessary sensitive scopes.
-5. Open Clients, click Create Client, and choose Web application.
-6. Add `http://localhost:3000` under Authorized JavaScript origins.
-7. Copy the Supabase Google callback URL from Authentication → Providers → Google and paste it into Authorized redirect URIs.
-8. Create the client, then copy the Client ID and Client Secret immediately. Google only shows the full secret at creation time, so store it safely.
-9. Go back to Supabase Authentication → Providers → Google, enable Google, and paste the Client ID and Client Secret.
-10. Save the provider configuration and test sign-in from the app.
+| Step | Action |
+|---|---|
+| Step 1 | In Google Cloud Console, open Google Auth Platform. Use the `Branding`, `Audience`, `Data Access`, and `Clients` sections. |
+| Step 2 | Under `Branding`, add the app name, user support email, developer contact email, and logo if needed. |
+| Step 3 | Under `Audience`, choose `External` if testing with personal Google accounts. Add yourself as a test user before publishing. |
+| Step 4 | Under `Data Access`, add only the minimum scopes needed for Supabase Google sign-in. Avoid unnecessary sensitive scopes. |
+| Step 5 | Open `Clients`, click `Create Client`, and choose `Web application`. |
+| Step 6 | Add `http://localhost:3000` under Authorized JavaScript origins. |
+| Step 7 | Copy the Supabase Google callback URL from `Authentication > Providers > Google`. Paste it into Authorized redirect URIs. |
+| Step 8 | Create the client. Copy the Client ID and Client Secret immediately because Google only shows the full secret at creation time. |
+| Step 9 | Go back to Supabase `Authentication > Providers > Google`, enable Google, and paste the Client ID and Client Secret. |
+| Step 10 | Save the provider configuration and test sign-in from the app. |
 
 #### GitHub OAuth in Supabase Auth
 
-1. In GitHub, open Settings → Developer settings → OAuth Apps and create a new OAuth App.
-2. Set the Homepage URL to `http://localhost:3000`.
-3. Copy the GitHub callback URL from Supabase Authentication → Providers → GitHub and paste it into Authorization callback URL.
-4. Create the app, then copy the Client ID and generate the Client Secret.
-5. In Supabase Authentication → Providers → GitHub, turn GitHub on and paste the credentials.
-6. Save the provider settings, then test the OAuth flow from the frontend.
+| Step | Action |
+|---|---|
+| Step 1 | In GitHub, open `Settings > Developer settings > OAuth Apps` and create a new OAuth App. |
+| Step 2 | Set the Homepage URL to `http://localhost:3000`. |
+| Step 3 | Copy the GitHub callback URL from Supabase `Authentication > Providers > GitHub`. Paste it into Authorization callback URL. |
+| Step 4 | Create the app, copy the Client ID, and generate the Client Secret. |
+| Step 5 | In Supabase `Authentication > Providers > GitHub`, enable GitHub and paste the credentials. |
+| Step 6 | Save the provider settings and test the OAuth flow from the frontend. |
 
 ### 2. Qdrant cluster setup
 
-1. Create a Qdrant Cloud account and start a new cluster from the cloud dashboard.
-2. Choose the smallest plan that matches your needs for development, then note the cluster name, region, and deployment status.
-3. Open the cluster details page and copy the cluster URL plus the API key.
-4. Put the API key into `QDRANT_API_KEY` and the cluster URL into `QDRANT_URL_ENDPOINT`.
-5. Keep the key private and do not commit it to the repository.
+| Step | Action |
+|---|---|
+| Step 1 | Create a Qdrant Cloud account. |
+| Step 2 | Start a new cluster from the cloud dashboard. |
+| Step 3 | Choose the smallest plan that matches development needs. Note the cluster name, region, and deployment status. |
+| Step 4 | Open the cluster details page and copy the cluster URL and API key. |
+| Step 5 | Put the API key in `QDRANT_API_KEY`. |
+| Step 6 | Put the cluster URL in `QDRANT_URL_ENDPOINT`. |
+| Step 7 | Keep the key private and never commit it to the repository. |
 
 ### 3. Google Calendar and Email API setup
 
-1. In Google Cloud Console, either reuse the same project you created for OAuth or create a separate project for Google Calendar and email access.
-2. Go to APIs & Services → Library and enable Google Calendar API. If your app sends or reads email, also enable the Gmail API or the specific email API your implementation uses.
-3. Open Google Auth Platform → Clients, create a Web application OAuth client, and add `http://localhost:8000/calendar/oauth/callback` as the redirect URI.
-4. Download the OAuth client JSON file and save it as `server/apiConfig/google/google_web_oauth_client.json`.
-5. Store any Google refresh token that your backend receives inside `server/apiConfig/google/tokens`. This lets the backend reuse the credential without forcing the user to log in every time.
-6. Add the required Google Calendar scopes in Data Access. If you use email features, add the Gmail scopes as well, but keep the permissions as narrow as possible.
-7. Update the backend environment with `GOOGLE_OAUTH_REDIRECT_URI`, `GOOGLE_OAUTH_SUCCESS_REDIRECT`, `GOOGLE_CALENDAR_CREDENTIALS_FILE`, and `GOOGLE_CALENDAR_TOKEN_DIR`.
+| Step | Action |
+|---|---|
+| Step 1 | In Google Cloud Console, reuse the same OAuth project or create a separate project for Google Calendar and email access. |
+| Step 2 | Open `APIs & Services > Library` and enable Google Calendar API. |
+| Step 3 | If the app sends or reads email, also enable Gmail API or the specific email API used by your implementation. |
+| Step 4 | Open `Google Auth Platform > Clients`, create a Web application OAuth client, and add `http://localhost:8000/calendar/oauth/callback` as the redirect URI. |
+| Step 5 | Download the OAuth client JSON file. Save it as `server/apiConfig/google/google_web_oauth_client.json`. |
+| Step 6 | Store Google refresh tokens inside `server/apiConfig/google/tokens` so the backend can reuse credentials without forcing login every time. |
+| Step 7 | Add the required Google Calendar scopes in `Data Access`. If email features are used, add Gmail scopes too, but keep permissions narrow. |
+| Step 8 | Update `GOOGLE_OAUTH_REDIRECT_URI`, `GOOGLE_OAUTH_SUCCESS_REDIRECT`, `GOOGLE_CALENDAR_CREDENTIALS_FILE`, and `GOOGLE_CALENDAR_TOKEN_DIR` in `server/.env`. |
 
 ### 4. Google Fit and Strava
 
-1. Google Fit is deprecated for new signups, so only keep it if your project already has access. For a new health stack, prefer Health Connect instead.
-2. If you are continuing with Google Fit, reuse the same Google Cloud project and OAuth client used for Calendar when possible.
-3. Enable the fitness scopes your backend needs, such as activity, sleep, and location read access, then make sure the consent screen still only requests the minimum necessary scopes.
-4. Google Fit uses the same OAuth callback as Calendar: `http://localhost:8000/calendar/oauth/callback`. Add that exact redirect URI to the Google OAuth client.
-5. After changing Fit scopes, reconnect Google from the app so the saved token includes the Fitness permissions.
-6. In Strava, open Settings -> API and create a new application.
-7. Set the Authorization Callback Domain to `localhost` so your local callback can complete the OAuth flow.
-8. Copy the Strava Client ID and Client Secret and store them in `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`.
-9. Generate or exchange for a Strava refresh token and store it in `STRAVA_REFRESH_TOKEN`. Strava sync requires all three values.
-10. Set `GOOGLE_FIT_TOKEN_FILE` to a JSON token file path, such as `D:/Numa/server/apiConfig/google/tokens/google_fit_token.json`. If you give a directory, the backend writes `google_fit_token.json` inside it for the legacy standalone flow.
-11. Set `STRAVA_TOKEN_FILE` to `D:/Numa/server/apiConfig/strava/token.json` if you want refreshed Strava access tokens persisted locally.
-12. You can enter Google Fit and Strava values from Settings -> Integration Keys. They are saved into `server/.env`.
+| Step | Action |
+|---|---|
+| Step 1 | Google Fit is deprecated for new signups, so only keep it if your project already has access. For a new health stack, prefer Health Connect. |
+| Step 2 | If continuing with Google Fit, reuse the same Google Cloud project and OAuth client used for Calendar when possible. |
+| Step 3 | Enable the fitness scopes needed by the backend, such as activity, sleep, and location read access. Keep the consent screen limited to the minimum required scopes. |
+| Step 4 | Add `http://localhost:8000/calendar/oauth/callback` to the Google OAuth client because Google Fit uses the same OAuth callback as Calendar. |
+| Step 5 | After changing Fit scopes, reconnect Google from the app so the saved token includes Fitness permissions. |
+| Step 6 | In Strava, open `Settings > API` and create a new application. |
+| Step 7 | Set the Authorization Callback Domain to `localhost` so the local callback can complete the OAuth flow. |
+| Step 8 | Copy the Strava Client ID and Client Secret into `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`. |
+| Step 9 | Generate or exchange for a Strava refresh token and store it in `STRAVA_REFRESH_TOKEN`. Strava sync requires client ID, client secret, and refresh token. |
+| Step 10 | Set `GOOGLE_FIT_TOKEN_FILE` to a JSON token path such as `D:/Numa/server/apiConfig/google/tokens/google_fit_token.json`. If a directory is provided, the backend writes `google_fit_token.json` inside it for the legacy standalone flow. |
+| Step 11 | Set `STRAVA_TOKEN_FILE` to `D:/Numa/server/apiConfig/strava/token.json` if refreshed Strava access tokens should persist locally. |
+| Step 12 | You can enter Google Fit and Strava values from `Settings > Integration Keys`; the app saves them into `server/.env`. |
 
 ### 5. Slack complete setup with Ngrok
 
-1. In the Slack API portal, create a new app from scratch and choose the workspace that should receive the integration.
-2. Open OAuth & Permissions and add the bot token scopes used by the app. At minimum, keep `channels:history`, `channels:read`, `chat:write`, `users:read`, `groups:history`, `groups:read`, `im:history`, and `mpim:history`.
-3. Open Event Subscriptions and turn it on.
-4. Start Ngrok against your local backend port, then copy the HTTPS forwarding URL into the Slack Request URL field.
-5. Subscribe to the bot events your app consumes, including `message.channels`, `message.groups`, `message.im`, and `message.mpim`.
-6. Install the app to your workspace so Slack issues the Bot User OAuth Token.
-7. Open Basic Information and copy the Signing Secret.
-8. Copy the Client ID and Client Secret as well, then put all of those values in the backend environment.
-9. Update `SLACK_REDIRECT_URI` to match the deployed callback URL you use in production.
+| Step | Action |
+|---|---|
+| Step 1 | In the Slack API portal, create a new app from scratch and choose the workspace that should receive the integration. |
+| Step 2 | Open `OAuth & Permissions` and add the bot token scopes used by the app. At minimum, keep `channels:history`, `channels:read`, `chat:write`, `users:read`, `groups:history`, `groups:read`, `im:history`, and `mpim:history`. |
+| Step 3 | Open `Event Subscriptions` and turn it on. |
+| Step 4 | Start ngrok against the local backend port. With Docker, run `.\scripts\docker-run.ps1`; without Docker, run `py .\getNgrok.py` from `server`. |
+| Step 5 | Copy the HTTPS forwarding URL into the Slack Request URL field as `https://your-ngrok-url/slack/events`. |
+| Step 6 | Subscribe to bot events consumed by the app, including `message.channels`, `message.groups`, `message.im`, and `message.mpim`. |
+| Step 7 | Install the app to your workspace so Slack issues the Bot User OAuth Token. |
+| Step 8 | Open `Basic Information` and copy the Signing Secret. |
+| Step 9 | Copy the Client ID and Client Secret. Put all Slack values in the backend environment. |
+| Step 10 | Put your ngrok auth token in `NGROK_AUTHTOKEN`. |
+| Step 11 | Update `SLACK_REDIRECT_URI` to match the callback URL used in production or by ngrok, such as `https://your-ngrok-url/slack/callback`. |
 
 ### 6. GitHub and LeetCode
 
-1. For backend GitHub OAuth access, create a separate GitHub OAuth App from GitHub Settings -> Developer settings -> OAuth Apps. Set Homepage URL to `http://localhost:3000` and Authorization callback URL to `http://localhost:8000/api/github/callback`.
-2. Copy the GitHub Client ID and Client Secret and store them in the backend environment as `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. Keep `GITHUB_OAUTH_REDIRECT_URI=http://localhost:8000/api/github/callback`.
-3. Do not reuse the same GitHub OAuth App that Supabase Auth uses unless that app also has the backend callback URL configured. Supabase login and Productivity GitHub analytics use different callback URLs.
-4. If OAuth gives a redirect URI error, use a GitHub Personal Access Token instead. In GitHub, open Settings -> Developer settings -> Personal access tokens.
-5. Recommended option: choose Fine-grained tokens -> Generate new token. Select your account, set an expiration, choose the repositories NUMA should read, then grant read-only repository access. If you need private repo stats and commits, include those private repositories in the token access.
-6. Alternative option: choose Tokens classic -> Generate new token. Select `repo` and `read:user`. GitHub classic tokens usually start with `ghp_`; fine-grained tokens usually start with `github_pat_`.
-7. Generate the token and copy it immediately. GitHub will not show the full token again.
-8. Start the app, open Productivity -> GitHub, paste the token into "Or connect with a GitHub token", and click Connect. NUMA stores it in the backend `github_auth` table for repo stats, private repo access, commit history, and agent context.
-9. For LeetCode, set `LEETCODE_USERNAME` in the backend environment so the agent can resolve the correct public profile.
-10. If you later add authenticated LeetCode features, keep the username stable so analytics and history stay consistent.
+| Step | Action |
+|---|---|
+| Step 1 | For backend GitHub OAuth access, create a separate GitHub OAuth App from `GitHub Settings > Developer settings > OAuth Apps`. |
+| Step 2 | Set Homepage URL to `http://localhost:3000`. |
+| Step 3 | Set Authorization callback URL to `http://localhost:8000/api/github/callback`. |
+| Step 4 | Copy the GitHub Client ID and Client Secret into `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. |
+| Step 5 | Keep `GITHUB_OAUTH_REDIRECT_URI=http://localhost:8000/api/github/callback`. |
+| Step 6 | Do not reuse the same GitHub OAuth App used by Supabase Auth unless it also has the backend callback URL configured. Supabase login and Productivity GitHub analytics use different callback URLs. |
+| Step 7 | If OAuth gives a redirect URI error, use a GitHub Personal Access Token instead. Open `Settings > Developer settings > Personal access tokens`. |
+| Step 8 | Recommended option: choose `Fine-grained tokens > Generate new token`. Select your account, set an expiration, choose repositories NUMA should read, then grant read-only repository access. Include private repositories if private repo stats and commits are needed. |
+| Step 9 | Alternative option: choose `Tokens classic > Generate new token`. Select `repo` and `read:user`. GitHub classic tokens usually start with `ghp_`; fine-grained tokens usually start with `github_pat_`. |
+| Step 10 | Generate the token and copy it immediately because GitHub will not show the full token again. |
+| Step 11 | Start the app, open `Productivity > GitHub`, paste the token into `Or connect with a GitHub token`, and click `Connect`. NUMA stores it in the backend `github_auth` table for repo stats, private repo access, commit history, and agent context. |
+| Step 12 | For LeetCode, set `LEETCODE_USERNAME` in the backend environment so the agent can resolve the correct public profile. |
+| Step 13 | If authenticated LeetCode features are added later, keep the username stable so analytics and history stay consistent. |
 
 ### 7. Groq and Gemini API keys
 
-1. Create a Groq API key in the Groq console, then paste it into `GROQ_API_KEY`.
-2. If you want a default model, keep `GROQ_MODEL` and `GROQ_MASTER_MODEL` aligned with the Groq model you actually plan to use.
-3. Create a Gemini API key in Google AI Studio and paste it into `GOOGLE_API_KEY`.
-4. Store both keys only in environment variables and never in frontend code or committed config.
+| Step | Action |
+|---|---|
+| Step 1 | Create a Groq API key in the Groq console. |
+| Step 2 | Paste the Groq key into `GROQ_API_KEY`. |
+| Step 3 | Keep `GROQ_MODEL` and `GROQ_MASTER_MODEL` aligned with the Groq model you plan to use. |
+| Step 4 | Create a Gemini API key in Google AI Studio. |
+| Step 5 | Paste the Gemini key into `GOOGLE_API_KEY`. |
+| Step 6 | Store both keys only in environment variables. Never place them in frontend code or committed config. |
 
 ### 8. Environment variables
 
@@ -215,10 +246,8 @@ BACKEND_URL=http://localhost:8000
 # ===== GOOGLE CALENDAR =====
 GOOGLE_OAUTH_REDIRECT_URI=http://localhost:8000/calendar/oauth/callback
 GOOGLE_OAUTH_SUCCESS_REDIRECT=http://localhost:3000/calendar
-GOOGLE_CALENDAR_CREDENTIALS_FILE=server/apiConfig/google/google_web_oauth_client.json
-GOOGLE_CALENDAR_TOKEN_DIR=server/apiConfig/google/tokens
-GOOGLE_CALENDAR_CLIENT_ID=your-google-calendar-client-id
-GOOGLE_CALENDAR_CLIENT_SECRET=your-google-calendar-client-secret
+GOOGLE_CALENDAR_CREDENTIALS_FILE=/path/to/google_web_oauth_client.json
+GOOGLE_CALENDAR_TOKEN_DIR=/path/to/token/directory
 
 # ===== GOOGLE FIT =====
 GOOGLE_FIT_CLIENT_ID=your-google-fit-client-id
@@ -233,6 +262,7 @@ SLACK_CLIENT_ID=your-slack-client-id
 SLACK_CLIENT_SECRET=your-slack-client-secret
 SLACK_REDIRECT_URI=https://your-domain/slack/callback
 SLACK_MESSAGE_RETENTION_DAYS=7
+NGROK_AUTHTOKEN=your-ngrok-auth-token
 
 # ===== GITHUB =====
 GITHUB_CLIENT_ID=your-github-client-id
@@ -277,8 +307,9 @@ LEETCODE_USERNAME=your-leetcode-username
 ### client/.env.local
 
 ```env
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
+NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co/
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+BACKEND_URL=http://127.0.0.1:8000
 ```
 
 ### Running the app
@@ -337,68 +368,128 @@ npm run dev
 
 ## Project Structure
 
-```
+```text
 Numa/
-├── client/                          # Next.js frontend
-│   ├── src/
-│   │   ├── app/
-│   │   │   ├── (protected)/
-│   │   │   │   ├── home/            # Master agent dashboard
-│   │   │   │   ├── calendar/        # Google Calendar view
-│   │   │   │   ├── tasklist/        # Kanban board
-│   │   │   │   ├── slack/           # Slack integration
-│   │   │   │   ├── health/          # Health tracking (Google Fit + Strava)
-│   │   │   │   ├── journal/         # Daily journal
-│   │   │   │   ├── mental-peace/    # Meditation & yoga
-│   │   │   │   ├── productivity/    # GitHub & LeetCode analytics
-│   │   │   │   ├── settings/        # App & API settings
-│   │   │   │   └── under-construction/
-│   │   │   ├── auth/                # Sign in / Sign up
-│   │   │   └── api/                 # Next.js API proxy → FastAPI
-│   │   ├── components/              # Shared UI components
-│   │   └── lib/                     # Utilities & config
-│   ├── public/                      # Static assets
-│   └── package.json
-│
-├── server/                          # FastAPI backend
-│   ├── main.py                      # App entry point & router registration
-│   ├── src/
-│   │   ├── ai_settings/             # LLM provider config
-│   │   ├── api/                     # Internal API utilities
-│   │   ├── auth/                    # Authentication & JWT
-│   │   ├── calendar/                # Google Calendar service
-│   │   ├── calendar_agent/          # AI calendar sub-agent
-│   │   ├── dashboard/               # Dashboard aggregation
-│   │   ├── github_agent/            # GitHub sub-agent
-│   │   ├── health_agent/            # Health data sub-agent (Google Fit + Strava)
-│   │   ├── journal/                 # Journal service
-│   │   ├── leetcode/                # LeetCode tracker
-│   │   ├── master_agent/            # Orchestrator / routing agent
-│   │   ├── memory/                  # Qdrant vector memory
-│   │   ├── slack_agent/             # Slack sub-agent
-│   │   ├── tasks/                   # Task CRUD & analytics
-│   │   ├── context_assembler.py     # Token-budget context builder
-│   │   ├── data_planner.py          # Zero-cost intent classifier
-│   │   ├── data_sync.py             # Background data sync scheduler
-│   │   ├── db.py                    # Pooled DB connection (asyncpg)
-│   │   ├── embedder.py              # HuggingFace embedding service
-│   │   ├── llm_factory.py           # Multi-provider LLM factory
-│   │   └── rate_limiter.py          # Token-bucket rate limiter w/ fallback
-│   ├── migrations/                  # Alembic DB migrations
-│   │   └── versions/
-│   ├── apiConfig/
-│   │   └── google/                  # Google OAuth JSON credentials
-│   ├── sql/                         # Raw SQL schema files
-│   ├── alembic.ini                  # Alembic configuration
-│   ├── pyproject.toml               # Project metadata & dependencies
-│   ├── requirements.txt             # pip-compatible dependency list
-│   └── uv.lock                      # uv lockfile
-│
-├── models/                          # Cached HuggingFace embedding models
-├── scripts/                         # Dev utility scripts (cache cleanup, etc.)
-├── docs/                            # Architecture diagrams & project docs
-└── .gitignore
+|-- .github/
+|   `-- workflows/
+|       `-- ci.yml                 # GitHub Actions CI suites
+|-- client/                        # Next.js frontend
+|   |-- assets/                    # Frontend image and font assets
+|   |-- public/                    # Static public assets
+|   |-- src/
+|   |   |-- app/                   # Next.js app router pages and API proxy
+|   |   |-- components/            # Shared UI and feature components
+|   |   `-- lib/                   # Utilities, stores, Supabase, settings
+|   |-- Dockerfile                 # Client container definition
+|   |-- package.json
+|   |-- package-lock.json
+|   |-- next.config.ts
+|   `-- tsconfig.json
+|-- server/                        # FastAPI backend
+|   |-- assets/                    # Backend image assets
+|   |-- audio/                     # Audio files served by backend
+|   |-- migrations/                # Alembic migrations
+|   |-- scripts/                   # Backend utility scripts
+|   |-- sql/                       # Raw SQL schema files
+|   |-- src/
+|   |   |-- ai_settings/           # LLM provider config
+|   |   |-- api/                   # External API helpers
+|   |   |-- audio_library/         # Audio library routes
+|   |   |-- auth/                  # Authentication and JWT helpers
+|   |   |-- calendar/              # Google Calendar service
+|   |   |-- calendar_agent/        # Calendar sub-agent
+|   |   |-- dashboard/             # Dashboard aggregation
+|   |   |-- github_agent/          # GitHub analytics and agent tools
+|   |   |-- health_agent/          # Google Fit and Strava health data
+|   |   |-- journal/               # Journal service
+|   |   |-- leetcode/              # LeetCode tracker
+|   |   |-- master_agent/          # Main agent orchestrator
+|   |   |-- memory/                # Qdrant semantic memory
+|   |   |-- slack_agent/           # Slack integration and sub-agent
+|   |   |-- tasks/                 # Task CRUD and analytics
+|   |   |-- context_assembler.py
+|   |   |-- data_planner.py
+|   |   |-- data_sync.py
+|   |   |-- db.py
+|   |   |-- embedder.py
+|   |   |-- llm_factory.py
+|   |   `-- rate_limiter.py
+|   |-- Dockerfile                 # Server container definition
+|   |-- alembic.ini
+|   |-- getNgrok.py
+|   |-- main.py
+|   |-- pyproject.toml
+|   |-- requirements.txt
+|   `-- uv.lock
+|-- scripts/
+|   |-- cleanCache.py
+|   |-- c.py
+|   |-- d.py
+|   `-- docker-run.ps1             # Build and run Docker containers
+|-- tests/                         # Isolated pytest test suites
+|-- docker-compose.yml             # Client, server, and ngrok services
+|-- pytest.ini
+|-- README.md
+`-- .gitignore
 ```
+
+## Docker Setup
+
+This Docker setup runs the app in separate containers:
+
+| Service | Container | Local URL |
+|---|---|---|
+| Client | `numa-client` | `http://localhost:3000` |
+| Server | `numa-server` | `http://localhost:8000` |
+| Ngrok | `ngrok` | `http://localhost:4040` |
+
+Before running Docker, make sure these files exist and contain your values:
+
+```powershell
+server\.env
+client\.env.local
+```
+
+Build images and run client, server, and ngrok:
+
+```powershell
+.\scripts\docker-run.ps1
+```
+
+Build images and run only client and server:
+
+```powershell
+.\scripts\docker-run.ps1 -NoNgrok
+```
+
+Run containers and follow logs:
+
+```powershell
+.\scripts\docker-run.ps1 -Logs
+```
+
+Stop all Docker containers:
+
+```powershell
+.\scripts\docker-run.ps1 -Down
+```
+
+Useful URLs after startup:
+
+```text
+Client:  http://localhost:3000
+Server:  http://localhost:8000
+Ngrok UI: http://localhost:4040
+```
+
+For Slack, copy the URLs printed by the script after ngrok starts:
+
+```text
+Slack Request URL: https://your-ngrok-url/slack/events
+Slack Redirect URL: https://your-ngrok-url/slack/callback
+```
+
+The Docker setup uses `server/.env` and `client/.env.local` at runtime. These files are not copied into the Docker images.
 
 ## License
 MIT

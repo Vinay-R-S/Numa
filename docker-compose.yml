@@ -1,0 +1,55 @@
+name: numa
+
+services:
+  server:
+    image: numa-server:local
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    env_file:
+      - ./server/.env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      GOOGLE_CALENDAR_CREDENTIALS_FILE: /app/apiConfig/google/google_web_oauth_client.json
+      GOOGLE_CALENDAR_TOKEN_DIR: /app/apiConfig/google/tokens
+      GOOGLE_FIT_TOKEN_FILE: /app/apiConfig/google/tokens/google_fit_token.json
+      STRAVA_TOKEN_FILE: /app/apiConfig/strava/token.json
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server/apiConfig:/app/apiConfig
+      - ./server/assets:/app/assets
+      - ./server/audio:/app/audio
+      - ./server/models:/app/models
+    restart: unless-stopped
+
+  client:
+    image: numa-client:local
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    env_file:
+      - ./client/.env.local
+    environment:
+      BACKEND_URL: http://server:8000
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    env_file:
+      - ./server/.env
+    command:
+      - http
+      - http://server:8000
+      - --log=stdout
+      - --web-addr=0.0.0.0:4040
+    ports:
+      - "4040:4040"
+    depends_on:
+      - server
+    restart: unless-stopped
