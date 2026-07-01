@@ -1,5 +1,6 @@
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +24,8 @@ from src.github_agent.router import router as github_router
 from src.leetcode.router import router as leetcode_router
 from src.dashboard.router import router as dashboard_router
 from src.audio_library.router import router as audio_library_router
-from src.db import init_db
+from src.core.db import init_db
+from src.core.scheduler import start_periodic_sync_scheduler
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +37,19 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 # (unlike "*") which lets allow_credentials work correctly.
 IS_DEV = not FRONTEND_URL
 
-app = FastAPI(title="Numa API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import asyncio
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, lambda: init_db(raise_on_error=True))
+
+    import threading
+    threading.Thread(target=start_periodic_sync_scheduler, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Numa API", version="1.0.0", lifespan=lifespan)
 AUDIO_ROOT = SERVER_ROOT / "audio"
 AUDIO_ROOT.mkdir(parents=True, exist_ok=True)
 IMAGE_ASSETS_ROOT = SERVER_ROOT / "assets" / "images"
@@ -49,85 +63,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ── Background scheduler ──────────────────────────────────────────────────────
-
-def _start_periodic_sync_scheduler():
-    """
-    Start an APScheduler background job that fetches latest external app data
-    for every connected user every 30 minutes by default.
-
-    This acts as a safety net for missed webhook events and runs retention cleanup.
-    """
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler  # type: ignore
-        from apscheduler.triggers.interval import IntervalTrigger  # type: ignore
-    except ImportError:
-        log.warning(
-            "APScheduler not installed - periodic app fetch disabled. "
-            "Install apscheduler to enable background sync."
-        )
-        return
-
-    interval_minutes = max(1, int(os.getenv("SYNC_SCHEDULER_INTERVAL_MINUTES", "30")))
-
-    def _periodic_fetch_job():
-        try:
-            from src.data_sync import fetch_latest_for_users
-
-            result = fetch_latest_for_users()
-            log.info(
-                "Periodic app fetch complete for %d connected user(s): ok=%s",
-                result.get("users", 0),
-                result.get("ok"),
-            )
-        except Exception as exc:
-            log.warning("Periodic app fetch failed: %s", exc)
-
-    def _daily_health_purge_job():
-        """Delete health snapshots older than 8 days. Runs at 8 AM IST."""
-        try:
-            from src.health_agent.router import purge_old_health_snapshots
-            deleted = purge_old_health_snapshots()
-            log.info("Daily health purge complete: %d rows deleted", deleted)
-        except Exception as exc:
-            log.warning("Daily health purge failed: %s", exc)
-
-    scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
-    scheduler.add_job(
-        _periodic_fetch_job,
-        trigger=IntervalTrigger(minutes=interval_minutes),
-        id="periodic_app_fetch",
-        replace_existing=True,
-        misfire_grace_time=300,
-        max_instances=1,
-        coalesce=True,
-    )
-
-    from apscheduler.triggers.cron import CronTrigger  # type: ignore
-    scheduler.add_job(
-        _daily_health_purge_job,
-        trigger=CronTrigger(hour=8, minute=0),
-        id="daily_health_purge",
-        replace_existing=True,
-        misfire_grace_time=600,
-        max_instances=1,
-        coalesce=True,
-    )
-
-    scheduler.start()
-    log.info("Periodic app fetch scheduled every %d minute(s).", interval_minutes)
-    log.info("Daily health purge scheduled at 8:00 AM IST.")
-
-
-@app.on_event("startup")
-async def on_startup():
-    import asyncio
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, lambda: init_db(raise_on_error=True))
-
-    import threading
-    threading.Thread(target=_start_periodic_sync_scheduler, daemon=True).start()
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
@@ -184,7 +119,7 @@ def health_check():
 
 def _rate_limiter_status() -> dict:
     try:
-        from src.rate_limiter import rate_limiter
+        from src.core.rate_limiter import rate_limiter
         return rate_limiter.get_status()
     except Exception:
         return {"enabled": False}
@@ -192,7 +127,7 @@ def _rate_limiter_status() -> dict:
 
 def _embedding_cache_status() -> dict:
     try:
-        from src.embedder import embedder
+        from src.core.embedder import embedder
         return embedder.cache_stats
     except Exception:
         return {}
