@@ -93,6 +93,11 @@ pnpm-debug.log*
 .vercel/
 
 # ------------------------------
+# Claude local working files
+# ------------------------------
+CLAUDE.md
+
+# ------------------------------
 # Miscallaneous
 # ------------------------------
 models
@@ -111,3 +116,4 @@ audio
 !server/audio/**
 agent-arc.mmd
 dump
+PLAN.md

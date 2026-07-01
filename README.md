@@ -422,9 +422,8 @@ Numa/
 |   |-- requirements.txt
 |   `-- uv.lock
 |-- scripts/
-|   |-- cleanCache.py
-|   |-- c.py
-|   |-- d.py
+|   |-- clean_cache.py             # Remove Python cache artifacts
+|   |-- normalize_dashes.py        # Replace em/en dashes with hyphens
 |   `-- docker-run.ps1             # Build and run Docker containers
 |-- tests/                         # Isolated pytest test suites
 |-- docker-compose.yml             # Client, server, and ngrok services

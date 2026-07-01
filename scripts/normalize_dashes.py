@@ -1,21 +1,19 @@
 """
-Replace em dashes and en dashes with normal hyphens across project files.
-Only touches project source files - skips packages, models, and dependencies.
-Usage: python d.py
+Replace em dashes and en dashes with normal hyphens across project source files.
+Skips packages, virtualenvs, build output, and dependencies.
+Usage: python scripts/normalize_dashes.py
 """
 import os
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-
-PROJECT_DIRS = {"client/src", "server/src", "server/main.py", "docs"}
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXTS = {".tsx", ".ts", ".py", ".md", ".css", ".json", ".html", ".jsx", ".js"}
 SKIP = {
     ".git", "node_modules", ".next", "__pycache__", ".venv", "venv", "env",
     "models", "dist", "build", ".egg-info", "package-lock.json",
 }
 
-EM = "\u2014"
-EN = "\u2013"
+EM = "\u2014"  # em dash
+EN = "\u2013"  # en dash
 REPLACE = "-"
 
 
@@ -27,7 +25,7 @@ def should_skip(path: str) -> bool:
 count = 0
 files_fixed = 0
 
-for root, dirs, files in os.walk(ROOT):
+for root, dirs, files in os.walk(PROJECT_ROOT):
     dirs[:] = [d for d in dirs if d not in SKIP]
     if should_skip(root):
         continue
@@ -50,7 +48,7 @@ for root, dirs, files in os.walk(ROOT):
 
         new = text.replace(EM, REPLACE).replace(EN, REPLACE)
         open(path, "w", encoding="utf-8").write(new)
-        print(f"  Fixed {n} dash(es) in {os.path.relpath(path, ROOT)}")
+        print(f"  Fixed {n} dash(es) in {os.path.relpath(path, PROJECT_ROOT)}")
         count += n
         files_fixed += 1
 
