@@ -7,7 +7,7 @@ SERVER_ROOT = Path(__file__).resolve().parents[1]
 if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
-from src.db import SCHEMA_VERSION, init_db, verify_required_tables  # noqa: E402
+from src.core.db import init_db, verify_required_tables  # noqa: E402
 
 
 if __name__ == "__main__":
@@ -16,4 +16,4 @@ if __name__ == "__main__":
     missing = verify_required_tables()
     if missing:
         raise SystemExit(f"Schema init finished, but tables are still missing: {', '.join(missing)}")
-    print(f"Database schema created/repaired/migrated to: {SCHEMA_VERSION}")
+    print("Database schema created/migrated to Alembic head.")

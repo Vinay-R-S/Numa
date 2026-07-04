@@ -2,27 +2,35 @@
 
 Numa uses Supabase PostgreSQL. Application tables live in the `public` schema and reference Supabase-managed `auth.users`.
 
-The canonical schema is maintained in `server/src/db.py` as the `TABLES` list. On backend startup, `init_db()` creates `public.numa_schema_migrations`, checks the current schema version/checksum, verifies required tables exist, and only runs the idempotent schema statements when the database is missing or stale.
-
-For manual Supabase setup, use:
+Alembic is the single source of schema truth. All DDL lives in `server/migrations/versions/*.py`, ordered by numeric filename prefix:
 
 ```text
-server/sql/schema.sql
+0001_baseline_schema.py                     # full base schema (tables, functions, triggers)
+0002_add_indexes_triggers_deprecate_blobs.py
+0003_expand_github_integration_cache.py
+0004_add_health_heart_metrics.py
+0005_add_health_sleep_intraday_cache.py
 ```
 
-Open **Supabase Dashboard -> SQL Editor -> New query**, paste the whole file, and run it. This is the file to use when startup logs show missing tables such as `public.profiles`, `public.tasks`, or `public.cal_calendars`.
+On backend startup, `init_db()` runs `alembic upgrade head`. On a clean database the baseline migration builds the full schema; on an existing database only pending migrations run. It is idempotent and safe to call on every startup.
 
-You can also run the startup bootstrapper manually from `server/`:
+You can run the same bootstrap manually from `server/`:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\init_db.py
 ```
 
-## Keeping Schema In Sync
+or invoke Alembic directly:
 
-1. Update `TABLES` in `server/src/db.py`.
-2. Bump `SCHEMA_VERSION` when the schema changes.
-3. Regenerate `server/sql/schema.sql` from `TABLES`.
-4. Restart the backend or run the SQL manually in Supabase.
+```powershell
+.\.venv\Scripts\alembic.exe upgrade head
+```
 
-The old task-only schema file was removed so there is one clear source for manual database setup.
+## Changing the schema
+
+1. Create a migration: `alembic revision -m "short_meaningful_name"`.
+2. Rename the generated file with the next numeric prefix (e.g. `0006_short_meaningful_name.py`), keeping the `revision`/`down_revision` ids Alembic generated.
+3. Write the DDL as `op.execute(...)` statements in `upgrade()`.
+4. Apply with `alembic upgrade head` (or restart the backend).
+
+Migration `revision` ids stay stable across renames because Alembic identifies migrations by the `revision` variable, not the filename. Existing databases stamped at a prior head keep resolving without a manual re-stamp.

@@ -390,7 +390,6 @@ Numa/
 |   |-- audio/                     # Audio files served by backend
 |   |-- migrations/                # Alembic migrations
 |   |-- scripts/                   # Backend utility scripts
-|   |-- sql/                       # Raw SQL schema files
 |   |-- src/
 |   |   |-- ai_settings/           # LLM provider config
 |   |   |-- api/                   # External API helpers
