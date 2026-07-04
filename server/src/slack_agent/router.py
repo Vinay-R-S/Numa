@@ -35,7 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from ..auth.dependencies import get_current_user
-from ..db import _get_conn
+from .repository import slack_repository
 from .schemas import (
     SlackChatRequest,
     SlackChatResponse,
@@ -162,10 +162,6 @@ def _build_slack_authorization_url(user_id: str) -> str:
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
-def _row_to_dict(row, description) -> dict:
-    return {col.name: val for col, val in zip(description, row)}
-
-
 def _get_or_create_channel(
     slack_id: str,
     name: Optional[str],
@@ -173,136 +169,53 @@ def _get_or_create_channel(
     is_private: bool = False,
 ) -> Optional[str]:
     """Return the UUID of a slack_channels row, creating it if necessary."""
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id, name FROM public.slack_channels WHERE slack_id = %s LIMIT 1",
-            (slack_id,),
-        )
-        row = cur.fetchone()
-        if row:
-            channel_id, existing_name = row
-            if name and (not existing_name or existing_name != name):
-                cur.execute(
-                    "UPDATE public.slack_channels SET name = %s, is_private = %s WHERE id = %s",
-                    (name, is_private, channel_id),
-                )
-                conn.commit()
-            elif is_private:
-                cur.execute(
-                    "UPDATE public.slack_channels SET is_private = %s WHERE id = %s",
-                    (is_private, channel_id),
-                )
-                conn.commit()
-            cur.close()
-            return str(channel_id)
-        cur.execute(
-            """
-            INSERT INTO public.slack_channels (slack_id, name, team_id, is_private)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id
-            """,
-            (slack_id, name, team_id, is_private),
-        )
-        new_id = str(cur.fetchone()[0])
-        conn.commit()
-        cur.close()
-        return new_id
+        return slack_repository.get_or_create_channel(slack_id, name, team_id, is_private)
     except Exception as exc:
         log.warning("_get_or_create_channel failed: %s", exc)
-        conn.rollback()
         return None
-    finally:
-        conn.close()
 
 
 def _get_channel_name_from_db(slack_id: str) -> Optional[str]:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT name FROM public.slack_channels WHERE slack_id = %s LIMIT 1",
-            (slack_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
-        return row[0] if row else None
+        return slack_repository.channel_name(slack_id)
     except Exception:
         return None
-    finally:
-        conn.close()
 
 
 def _resolve_user_id_by_slack(slack_user_id: str) -> Optional[str]:
     """Return NUMA user_id for a given Slack user id (from slack_auth table)."""
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT user_id FROM public.slack_auth WHERE slack_user_id = %s LIMIT 1",
-            (slack_user_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
-        return str(row[0]) if row else None
+        return slack_repository.user_id_by_slack(slack_user_id)
     except Exception as exc:
         log.warning("_resolve_user_id_by_slack failed: %s", exc)
         return None
-    finally:
-        conn.close()
 
 
 def _user_ids_for_slack_team(team_id: str) -> list[str]:
     if not team_id:
         return []
 
-    conn = None
     try:
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT user_id FROM public.slack_auth WHERE slack_team_id = %s",
-            (team_id,),
-        )
-        rows = cur.fetchall() or []
-        cur.close()
+        rows = slack_repository.user_ids_for_team(team_id)
         return [str(row[0]) for row in rows if row and row[0]]
     except Exception as exc:
         _log_dependency_exception("_user_ids_for_slack_team failed: %s", exc)
         return []
-    finally:
-        if conn:
-            conn.close()
 
 
 def _team_bot_token(team_id: str) -> Optional[str]:
     if not team_id:
         return None
 
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT bot_token, access_token
-            FROM public.slack_auth
-            WHERE slack_team_id = %s
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """,
-            (team_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
+        row = slack_repository.team_bot_token(team_id)
         if not row:
             return None
         return (row[0] or row[1] or "").strip() or None
     except Exception as exc:
         log.warning("_team_bot_token failed: %s", exc)
         return None
-    finally:
-        conn.close()
 
 
 def _raw_payload_dict(raw_payload) -> dict:
@@ -447,48 +360,15 @@ def _save_slack_message(event: dict, channel_name: Optional[str] = None):
     resolved_channel_name = channel_name or _get_channel_name_from_db(slack_chan_id)
     channel_uuid = _get_or_create_channel(slack_chan_id, resolved_channel_name, slack_team_id) if slack_chan_id else None
 
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO public.slack_messages
-                (user_id, slack_user_id, slack_team_id, channel_id, slack_channel_id,
-                 channel_name, text, ts, thread_ts, message_type, raw_payload)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ts) DO UPDATE SET
-                user_id = COALESCE(public.slack_messages.user_id, EXCLUDED.user_id),
-                slack_team_id = EXCLUDED.slack_team_id,
-                channel_id = COALESCE(public.slack_messages.channel_id, EXCLUDED.channel_id),
-                slack_channel_id = EXCLUDED.slack_channel_id,
-                channel_name = COALESCE(EXCLUDED.channel_name, public.slack_messages.channel_name),
-                text = EXCLUDED.text,
-                thread_ts = EXCLUDED.thread_ts,
-                message_type = EXCLUDED.message_type,
-                raw_payload = EXCLUDED.raw_payload
-            """,
-            (
-                user_id,
-                slack_user_id,
-                slack_team_id,
-                channel_uuid,
-                slack_chan_id,
-                resolved_channel_name,
-                text,
-                ts,
-                event.get("thread_ts"),
-                "message",
-                json.dumps(event),
-            ),
+        slack_repository.save_message(
+            user_id, slack_user_id, slack_team_id, channel_uuid, slack_chan_id,
+            resolved_channel_name, text, ts, event.get("thread_ts"), "message",
+            json.dumps(event),
         )
-        conn.commit()
-        cur.close()
     except Exception as exc:
         log.warning("_save_slack_message DB insert failed: %s", exc)
-        conn.rollback()
         return
-    finally:
-        conn.close()
 
     # Ingest into Qdrant (best-effort)
     if text.strip() and user_id:
@@ -513,42 +393,16 @@ def _delete_slack_message_by_ts(ts: str, slack_user_id: Optional[str] = None) ->
 
     user_id = _resolve_user_id_by_slack(slack_user_id or "") if slack_user_id else None
     if not user_id:
-        conn = _get_conn()
         try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT user_id FROM public.slack_messages WHERE ts = %s LIMIT 1",
-                (ts,),
-            )
-            row = cur.fetchone()
-            cur.close()
-            user_id = str(row[0]) if row and row[0] else None
+            user_id = slack_repository.user_id_by_message_ts(ts)
         except Exception as exc:
             log.warning("_delete_slack_message_by_ts lookup failed: %s", exc)
-        finally:
-            conn.close()
 
-    conn = _get_conn()
     task_ids: list[str] = []
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id, user_id FROM public.tasks WHERE external_ref = %s",
-            (f"slack:{ts}",),
-        )
-        task_ids = [str(row[0]) for row in (cur.fetchall() or []) if row and row[0]]
-        cur.execute("DELETE FROM public.slack_messages WHERE ts = %s", (ts,))
-        cur.execute(
-            "DELETE FROM public.tasks WHERE external_ref = %s",
-            (f"slack:{ts}",),
-        )
-        conn.commit()
-        cur.close()
+        task_ids = slack_repository.delete_message_and_tasks(ts)
     except Exception as exc:
         log.warning("_delete_slack_message_by_ts DB delete failed: %s", exc)
-        conn.rollback()
-    finally:
-        conn.close()
 
     if user_id:
         delete_message(user_id=user_id, ts=ts)
@@ -575,27 +429,11 @@ def _update_slack_message(event: dict, channel_name: Optional[str] = None) -> No
         return
 
     resolved_channel_name = channel_name or _get_channel_name_from_db(slack_chan_id)
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE public.slack_messages
-            SET text = %s,
-                channel_name = COALESCE(%s, channel_name),
-                raw_payload = %s
-            WHERE ts = %s
-            """,
-            (text, resolved_channel_name, json.dumps(event), ts),
-        )
-        conn.commit()
-        cur.close()
+        slack_repository.update_message(text, resolved_channel_name, json.dumps(event), ts)
     except Exception as exc:
         log.warning("_update_slack_message DB update failed: %s", exc)
-        conn.rollback()
         return
-    finally:
-        conn.close()
 
     if text.strip():
         ingest_message(
@@ -633,53 +471,17 @@ def _save_slack_message_for_user(
     except Exception:
         created_at = datetime.now(timezone.utc)
 
-    conn = _get_conn()
     inserted = False
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO public.slack_messages
-                (user_id, slack_user_id, slack_team_id, channel_id, slack_channel_id,
-                 channel_name, text, ts, thread_ts, message_type, raw_payload, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ts) DO UPDATE SET
-                user_id = EXCLUDED.user_id,
-                slack_user_id = EXCLUDED.slack_user_id,
-                slack_team_id = EXCLUDED.slack_team_id,
-                channel_id = COALESCE(EXCLUDED.channel_id, public.slack_messages.channel_id),
-                slack_channel_id = EXCLUDED.slack_channel_id,
-                channel_name = COALESCE(EXCLUDED.channel_name, public.slack_messages.channel_name),
-                text = EXCLUDED.text,
-                thread_ts = EXCLUDED.thread_ts,
-                message_type = EXCLUDED.message_type,
-                raw_payload = EXCLUDED.raw_payload,
-                created_at = EXCLUDED.created_at
-            """,
-            (
-                user_id,
-                slack_user_id,
-                slack_team_id,
-                channel_uuid,
-                slack_chan_id,
-                resolved_channel_name,
-                text,
-                ts,
-                event.get("thread_ts"),
-                event.get("subtype") or "message",
-                json.dumps(event),
-                created_at,
-            ),
+        rowcount = slack_repository.save_message_for_user(
+            user_id, slack_user_id, slack_team_id, channel_uuid, slack_chan_id,
+            resolved_channel_name, text, ts, event.get("thread_ts"),
+            event.get("subtype") or "message", json.dumps(event), created_at,
         )
-        inserted = cur.rowcount > 0
-        conn.commit()
-        cur.close()
+        inserted = rowcount > 0
     except Exception as exc:
         log.warning("_save_slack_message_for_user DB insert failed: %s", exc)
-        conn.rollback()
         return False
-    finally:
-        conn.close()
 
     if text.strip():
         try:
@@ -700,20 +502,12 @@ def _save_slack_message_for_user(
 
 
 def get_all_connected_slack_user_ids() -> list[str]:
-    conn = None
     try:
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT user_id FROM public.slack_auth")
-        rows = cur.fetchall() or []
-        cur.close()
+        rows = slack_repository.all_user_ids()
         return [str(row[0]) for row in rows]
     except Exception as exc:
         _log_dependency_exception("get_all_connected_slack_user_ids failed: %s", exc)
         return []
-    finally:
-        if conn:
-            conn.close()
 
 
 def fetch_latest_slack_for_user(user_id: str) -> dict:
@@ -721,27 +515,12 @@ def fetch_latest_slack_for_user(user_id: str) -> dict:
     if not user_id:
         return {"ok": False, "fetched": 0, "channels": 0, "detail": "Missing user id"}
 
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT access_token, bot_token, slack_team_id
-            FROM public.slack_auth
-            WHERE user_id = %s
-            LIMIT 1
-            """,
-            (user_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
+        row = slack_repository.auth_tokens_for_user(user_id)
     except Exception as exc:
         _log_dependency_exception("fetch_latest_slack_for_user auth lookup failed: %s", exc)
         detail = _temporary_unavailable_detail("Slack database") if _is_transient_dependency_error(exc) else str(exc)
         return {"ok": False, "fetched": 0, "channels": 0, "detail": detail}
-    finally:
-        if conn:
-            conn.close()
 
     if not row:
         return {"ok": True, "fetched": 0, "channels": 0, "detail": "Slack not connected"}
@@ -864,40 +643,13 @@ def _upsert_slack_auth(
     team_name: Optional[str],
     authed_user_obj: Optional[dict],
 ):
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO public.slack_auth
-                (user_id, slack_user_id, slack_team_id, access_token, bot_token, team_name, authed_user_obj)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
-                slack_user_id   = EXCLUDED.slack_user_id,
-                slack_team_id   = EXCLUDED.slack_team_id,
-                access_token    = EXCLUDED.access_token,
-                bot_token       = EXCLUDED.bot_token,
-                team_name       = EXCLUDED.team_name,
-                authed_user_obj = EXCLUDED.authed_user_obj,
-                updated_at      = NOW()
-            """,
-            (
-                user_id,
-                slack_user_id,
-                slack_team_id,
-                access_token,
-                bot_token,
-                team_name,
-                json.dumps(authed_user_obj) if authed_user_obj else None,
-            ),
+        slack_repository.upsert_auth(
+            user_id, slack_user_id, slack_team_id, access_token, bot_token, team_name,
+            json.dumps(authed_user_obj) if authed_user_obj else None,
         )
-        conn.commit()
-        cur.close()
     except Exception as exc:
         log.warning("_upsert_slack_auth failed: %s", exc)
-        conn.rollback()
-    finally:
-        conn.close()
 
 
 # ── HMAC Signature Verification ───────────────────────────────────────────────
@@ -1022,17 +774,7 @@ def _run_agent_task_extraction(text: str, ts: Optional[str], team_id: Optional[s
         mentioned_slack_ids = re.findall(r"<@([A-Z0-9]+)>", text)
         if not mentioned_slack_ids:
             return
-        conn = _get_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT user_id, slack_user_id FROM public.slack_auth WHERE slack_user_id = ANY(%s)",
-                (mentioned_slack_ids,),
-            )
-            rows = cur.fetchall()
-            cur.close()
-        finally:
-            conn.close()
+        rows = slack_repository.user_ids_by_slack_ids(mentioned_slack_ids)
 
         for user_id_row, _slack_id in rows:
             user_id = str(user_id_row)
@@ -1125,19 +867,10 @@ def send_slack_message(
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid session")
 
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT access_token, bot_token FROM public.slack_auth WHERE user_id = %s LIMIT 1",
-            (user_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
+        row = slack_repository.send_tokens_for_user(user_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"DB error: {exc}")
-    finally:
-        conn.close()
 
     if not row:
         raise HTTPException(status_code=400, detail="Slack not connected")
@@ -1179,69 +912,13 @@ def get_slack_messages(
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid session")
 
-    conn = _get_conn()
+    global _last_channel_backfill
     try:
-        global _last_channel_backfill
-        cur = conn.cursor()
         import time as _time
         if _time.time() - _last_channel_backfill > 60:
-            cur.execute(
-                """
-                UPDATE public.slack_messages sm
-                SET channel_name = sc.name
-                FROM public.slack_channels sc
-                WHERE sm.channel_id = sc.id
-                  AND sm.user_id = %s
-                  AND sm.channel_name IS NULL
-                  AND sc.name IS NOT NULL
-                """,
-                (user_id,),
-            )
-            conn.commit()
+            slack_repository.backfill_channel_names(user_id)
             _last_channel_backfill = _time.time()
-        if channel:
-            cur.execute(
-                """
-                SELECT *
-                FROM (
-                    SELECT id, user_id, slack_user_id, slack_team_id, slack_channel_id,
-                           channel_name, text, ts, thread_ts, message_type, raw_payload,
-                           created_at
-                    FROM public.slack_messages
-                    WHERE user_id = %s
-                      AND created_at > NOW() - INTERVAL '7 days'
-                      AND (
-                          LOWER(channel_name) = LOWER(%s)
-                          OR slack_channel_id = %s
-                      )
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                ) recent
-                ORDER BY created_at ASC
-                """,
-                (user_id, channel.lstrip("#"), channel, limit),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT *
-                FROM (
-                    SELECT id, user_id, slack_user_id, slack_team_id, slack_channel_id,
-                           channel_name, text, ts, thread_ts, message_type, raw_payload,
-                           created_at
-                    FROM public.slack_messages
-                    WHERE user_id = %s
-                      AND created_at > NOW() - INTERVAL '7 days'
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                ) recent
-                ORDER BY created_at ASC
-                """,
-                (user_id, limit),
-            )
-        rows = cur.fetchall()
-        msgs = [_row_to_dict(r, cur.description) for r in rows]
-        cur.close()
+        msgs = slack_repository.list_messages(user_id, channel, limit)
         return [
             SlackMessageOut(
                 id=str(m["id"]),
@@ -1265,8 +942,6 @@ def get_slack_messages(
     except Exception as exc:
         log.error("get_slack_messages failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to fetch messages")
-    finally:
-        conn.close()
 
 
 # ── 4. Channels ───────────────────────────────────────────────────────────────
@@ -1278,41 +953,15 @@ def get_slack_channels(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=401, detail="Invalid session")
 
     team_id = None
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT slack_team_id
-            FROM public.slack_auth
-            WHERE user_id = %s
-            LIMIT 1
-            """,
-            (user_id,),
-        )
-        auth_row = cur.fetchone()
+        auth_row = slack_repository.team_id_for_user(user_id)
         if not auth_row:
-            cur.close()
             return []
         team_id = auth_row[0]
-
-        cur.execute(
-            """
-            SELECT sc.id, sc.slack_id, sc.name, sc.team_id, sc.is_private, sc.created_at
-            FROM public.slack_channels sc
-            WHERE sc.team_id = %s
-            ORDER BY sc.name ASC
-            """,
-            (team_id,),
-        )
-        rows = cur.fetchall()
-        chs  = [_row_to_dict(r, cur.description) for r in rows]
-        cur.close()
+        chs = slack_repository.channels_for_team(team_id)
     except Exception as exc:
         log.error("get_slack_channels failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to fetch channels")
-    finally:
-        conn.close()
 
     if not chs and team_id:
         sync_result = fetch_latest_slack_for_user(user_id)
@@ -1320,26 +969,11 @@ def get_slack_channels(current_user: dict = Depends(get_current_user)):
             detail = sync_result.get("detail") or "Slack channel sync failed"
             raise HTTPException(status_code=502, detail=f"Slack sync failed: {detail}")
 
-        conn = _get_conn()
         try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT sc.id, sc.slack_id, sc.name, sc.team_id, sc.is_private, sc.created_at
-                FROM public.slack_channels sc
-                WHERE sc.team_id = %s
-                ORDER BY sc.name ASC
-                """,
-                (team_id,),
-            )
-            rows = cur.fetchall()
-            chs = [_row_to_dict(r, cur.description) for r in rows]
-            cur.close()
+            chs = slack_repository.channels_for_team(team_id)
         except Exception as exc:
             log.error("get_slack_channels post-sync fetch failed: %s", exc)
             raise HTTPException(status_code=500, detail="Failed to fetch synced channels")
-        finally:
-            conn.close()
 
     return [
         SlackChannelOut(
@@ -1362,16 +996,8 @@ def get_slack_status(current_user: dict = Depends(get_current_user)):
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid session")
 
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT slack_user_id, slack_team_id, team_name, bot_token FROM public.slack_auth WHERE user_id = %s",
-            (user_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
-
+        row = slack_repository.status_for_user(user_id)
         if row:
             return SlackStatusOut(
                 connected=True,
@@ -1384,8 +1010,6 @@ def get_slack_status(current_user: dict = Depends(get_current_user)):
     except Exception as exc:
         log.error("get_slack_status failed: %s", exc)
         return SlackStatusOut(connected=False)
-    finally:
-        conn.close()
 
 
 # ── 6. OAuth Connect ──────────────────────────────────────────────────────────
@@ -1471,27 +1095,14 @@ def purge_old_slack_messages():
     purge_old_messages()
 
     # 2. PostgreSQL purge
-    conn = None
     db_ok = True
     message = "Old Slack data purged (7-day window)"
     try:
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            "DELETE FROM public.slack_messages WHERE created_at < NOW() - INTERVAL '7 days'"
-        )
-        deleted = cur.rowcount
-        conn.commit()
-        cur.close()
+        deleted = slack_repository.purge_old_messages()
         log.info("Purged %d slack_messages rows older than 7 days", deleted)
     except Exception as exc:
         db_ok = False
         _log_dependency_exception("DB purge failed: %s", exc)
         message = _temporary_unavailable_detail("Slack database") if _is_transient_dependency_error(exc) else str(exc)
-        if conn:
-            conn.rollback()
-    finally:
-        if conn:
-            conn.close()
 
     return {"ok": db_ok, "message": message}

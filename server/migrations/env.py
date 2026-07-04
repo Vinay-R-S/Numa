@@ -25,9 +25,11 @@ if db_url:
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     config.set_main_option("sqlalchemy.url", db_url)
 
-# Logging setup from alembic.ini
+# Logging setup from alembic.ini. Keep disable_existing_loggers=False so running
+# `alembic upgrade head` programmatically from init_db() at server startup does
+# not silence already-configured loggers (uvicorn, app modules).
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # No declarative metadata - we use raw SQL migrations
 target_metadata = None

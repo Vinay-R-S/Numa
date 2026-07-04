@@ -29,8 +29,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth.dependencies import get_current_user
-from ..db import _get_conn
 from ..memory import memory_service
+from .repository import health_repository
 from .schemas import (
     HealthChatRequest,
     HealthChatResponse,
@@ -65,18 +65,11 @@ def _resolve_timezone_name(name: Optional[str]) -> ZoneInfo:
 
 
 def _get_user_timezone(user_id: str) -> ZoneInfo:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT timezone FROM public.profiles WHERE id = %s", (user_id,))
-        row = cur.fetchone()
-        cur.close()
-        return _resolve_timezone_name(row[0] if row else None)
+        return _resolve_timezone_name(health_repository.timezone_name(user_id))
     except Exception as exc:
         log.debug("Falling back to default timezone for health sync: %s", exc)
         return _resolve_timezone_name(None)
-    finally:
-        conn.close()
 
 
 def _millis(dt: datetime) -> int:
@@ -237,10 +230,6 @@ def _sync_temporarily_unavailable_detail(source: str) -> str:
 
 # ── DB helpers ───────────────────────────────────────────────────────────────
 
-def _row_to_dict(row, description) -> dict:
-    return {col.name: val for col, val in zip(description, row)}
-
-
 def _store_health_snapshot_vector(
     user_id: str,
     source: str,
@@ -308,81 +297,36 @@ def upsert_health_snapshot(
     data: Dict,
 ) -> bool:
     """Upsert one health snapshot row. Returns True on success."""
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO public.health_snapshots
-                (user_id, source, snapshot_date, steps, active_minutes, calories,
-                 distance_km, sleep_hours, heart_rate_bpm, heart_points,
-                 sleep_start_at, sleep_end_at, sleep_stages, sleep_segments,
-                 activities)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (user_id, source, snapshot_date)
-            DO UPDATE SET
-                steps          = EXCLUDED.steps,
-                active_minutes = EXCLUDED.active_minutes,
-                calories       = EXCLUDED.calories,
-                distance_km    = EXCLUDED.distance_km,
-                sleep_hours    = EXCLUDED.sleep_hours,
-                heart_rate_bpm = EXCLUDED.heart_rate_bpm,
-                heart_points   = EXCLUDED.heart_points,
-                sleep_start_at = EXCLUDED.sleep_start_at,
-                sleep_end_at   = EXCLUDED.sleep_end_at,
-                sleep_stages   = EXCLUDED.sleep_stages,
-                sleep_segments = EXCLUDED.sleep_segments,
-                activities     = EXCLUDED.activities,
-                updated_at     = NOW()
-            """,
-            (
-                user_id,
-                source,
-                snapshot_date,
-                data.get("steps"),
-                data.get("active_minutes"),
-                data.get("calories"),
-                data.get("distance_km"),
-                data.get("sleep_hours"),
-                data.get("heart_rate_bpm"),
-                data.get("heart_points"),
-                _dt_from_millis(data.get("sleep_start_ms")),
-                _dt_from_millis(data.get("sleep_end_ms")),
-                json.dumps(data.get("sleep_stages")) if data.get("sleep_stages") else None,
-                json.dumps(data.get("sleep_segments")) if data.get("sleep_segments") else None,
-                json.dumps(data.get("activities")) if data.get("activities") else None,
-            ),
+        health_repository.upsert_snapshot(
+            user_id,
+            source,
+            snapshot_date,
+            data.get("steps"),
+            data.get("active_minutes"),
+            data.get("calories"),
+            data.get("distance_km"),
+            data.get("sleep_hours"),
+            data.get("heart_rate_bpm"),
+            data.get("heart_points"),
+            _dt_from_millis(data.get("sleep_start_ms")),
+            _dt_from_millis(data.get("sleep_end_ms")),
+            json.dumps(data.get("sleep_stages")) if data.get("sleep_stages") else None,
+            json.dumps(data.get("sleep_segments")) if data.get("sleep_segments") else None,
+            json.dumps(data.get("activities")) if data.get("activities") else None,
         )
-        conn.commit()
-        cur.close()
-        _store_health_snapshot_vector(user_id, source, snapshot_date, data)
-        return True
     except Exception as exc:
         log.warning("upsert_health_snapshot failed: %s", exc)
-        conn.rollback()
         return False
-    finally:
-        conn.close()
+    _store_health_snapshot_vector(user_id, source, snapshot_date, data)
+    return True
 
 
 def delete_health_snapshot(user_id: str, source: str, snapshot_date: date) -> None:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            DELETE FROM public.health_snapshots
-            WHERE user_id = %s AND source = %s AND snapshot_date = %s
-            """,
-            (user_id, source, snapshot_date),
-        )
-        conn.commit()
-        cur.close()
+        health_repository.delete_snapshot(user_id, source, snapshot_date)
     except Exception as exc:
         log.warning("delete_health_snapshot failed: %s", exc)
-        conn.rollback()
-    finally:
-        conn.close()
 
 
 def upsert_health_intraday_snapshot(
@@ -397,47 +341,23 @@ def upsert_health_intraday_snapshot(
     steps = sum(int(bucket.get("steps") or 0) for bucket in buckets)
     calories = sum(int(bucket.get("calories") or 0) for bucket in buckets)
     distance_km = round(sum(float(bucket.get("distance_km") or 0) for bucket in buckets), 2)
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO public.health_intraday_snapshots
-                (user_id, source, snapshot_date, window_start_at, window_end_at,
-                 bucket_minutes, steps, calories, distance_km, buckets)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (user_id, source, snapshot_date, bucket_minutes)
-            DO UPDATE SET
-                window_start_at = EXCLUDED.window_start_at,
-                window_end_at   = EXCLUDED.window_end_at,
-                steps           = EXCLUDED.steps,
-                calories        = EXCLUDED.calories,
-                distance_km     = EXCLUDED.distance_km,
-                buckets         = EXCLUDED.buckets,
-                updated_at      = NOW()
-            """,
-            (
-                user_id,
-                source,
-                snapshot_date,
-                window_start_at,
-                window_end_at,
-                bucket_minutes,
-                steps,
-                calories,
-                distance_km,
-                json.dumps(buckets),
-            ),
+        health_repository.upsert_intraday(
+            user_id,
+            source,
+            snapshot_date,
+            window_start_at,
+            window_end_at,
+            bucket_minutes,
+            steps,
+            calories,
+            distance_km,
+            json.dumps(buckets),
         )
-        conn.commit()
-        cur.close()
         return True
     except Exception as exc:
         log.warning("upsert_health_intraday_snapshot failed: %s", exc)
-        conn.rollback()
         return False
-    finally:
-        conn.close()
 
 
 def get_health_intraday_snapshot(
@@ -446,32 +366,11 @@ def get_health_intraday_snapshot(
     source: str = "google_fit",
     bucket_minutes: int = 60,
 ) -> Optional[Dict]:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, user_id, source, snapshot_date, window_start_at, window_end_at,
-                   bucket_minutes, steps, calories, distance_km, buckets,
-                   created_at, updated_at
-            FROM public.health_intraday_snapshots
-            WHERE user_id = %s
-              AND source = %s
-              AND snapshot_date = %s
-              AND bucket_minutes = %s
-            LIMIT 1
-            """,
-            (user_id, source, snapshot_date, bucket_minutes),
-        )
-        row = cur.fetchone()
-        result = _row_to_dict(row, cur.description) if row else None
-        cur.close()
-        return result
+        return health_repository.get_intraday(user_id, snapshot_date, source, bucket_minutes)
     except Exception as exc:
         log.warning("get_health_intraday_snapshot failed: %s", exc)
         return None
-    finally:
-        conn.close()
 
 
 def _has_health_values(data: Dict) -> bool:
@@ -503,75 +402,24 @@ def get_health_snapshots(
     days: int = 8,
 ) -> List[Dict]:
     """Fetch recent health snapshots for a user (up to N days)."""
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
         cutoff = date.today() - timedelta(days=days)
-        if source:
-            cur.execute(
-                """
-                SELECT id, user_id, source, snapshot_date, steps, active_minutes,
-                       calories, distance_km, sleep_hours, heart_rate_bpm,
-                       heart_points, sleep_start_at, sleep_end_at,
-                       sleep_stages, sleep_segments, activities,
-                       created_at, updated_at
-                FROM public.health_snapshots
-                WHERE user_id = %s AND source = %s AND snapshot_date >= %s
-                ORDER BY snapshot_date DESC
-                """,
-                (user_id, source, cutoff),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT id, user_id, source, snapshot_date, steps, active_minutes,
-                       calories, distance_km, sleep_hours, heart_rate_bpm,
-                       heart_points, sleep_start_at, sleep_end_at,
-                       sleep_stages, sleep_segments, activities,
-                       created_at, updated_at
-                FROM public.health_snapshots
-                WHERE user_id = %s AND snapshot_date >= %s
-                ORDER BY snapshot_date DESC
-                """,
-                (user_id, cutoff),
-            )
-        rows = cur.fetchall()
-        result = [_row_to_dict(r, cur.description) for r in rows]
-        cur.close()
-        return result
+        return health_repository.get_snapshots(user_id, source, cutoff)
     except Exception as exc:
         log.warning("get_health_snapshots failed: %s", exc)
         return []
-    finally:
-        conn.close()
 
 
 def purge_old_health_snapshots() -> int:
     """Delete health rows older than 8 days. Returns count of deleted rows."""
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
         cutoff = date.today() - timedelta(days=8)
-        cur.execute(
-            "DELETE FROM public.health_snapshots WHERE snapshot_date < %s",
-            (cutoff,),
-        )
-        deleted = cur.rowcount
-        cur.execute(
-            "DELETE FROM public.health_intraday_snapshots WHERE snapshot_date < %s",
-            (cutoff,),
-        )
-        deleted += cur.rowcount
-        conn.commit()
-        cur.close()
+        deleted = health_repository.purge_older_than(cutoff)
         log.info("Purged %d health snapshots older than %s", deleted, cutoff)
         return deleted
     except Exception as exc:
         log.warning("purge_old_health_snapshots failed: %s", exc)
-        conn.rollback()
         return 0
-    finally:
-        conn.close()
 
 
 # ── Google Fit sync ──────────────────────────────────────────────────────────

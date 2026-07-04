@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from ..db import _get_conn
+from .repository import journal_repository
 
 log = logging.getLogger(__name__)
 
@@ -22,51 +22,32 @@ SUMMARY_SYSTEM_PROMPT = (
 )
 
 
+def _day_bounds(target_date: date):
+    start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+    return start, start + timedelta(days=1)
+
+
 def _fetch_journal_content(user_id: str, target_date: date) -> str:
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT title, content, mood, tags FROM public.journal_entries WHERE user_id = %s AND entry_date = %s",
-            (user_id, target_date),
-        )
-        row = cur.fetchone()
-        cur.close()
-        if not row:
-            return ""
-        title, content, mood, tags = row
-        parts = []
-        if title:
-            parts.append(f"Journal title: {title}")
-        if content:
-            parts.append(f"Journal: {content[:1000]}")
-        if mood:
-            parts.append(f"Mood: {mood}")
-        if tags:
-            parts.append(f"Tags: {', '.join(tags)}")
-        return "\n".join(parts)
-    finally:
-        conn.close()
+    row = journal_repository.content_row(user_id, target_date)
+    if not row:
+        return ""
+    title, content, mood, tags = row
+    parts = []
+    if title:
+        parts.append(f"Journal title: {title}")
+    if content:
+        parts.append(f"Journal: {content[:1000]}")
+    if mood:
+        parts.append(f"Mood: {mood}")
+    if tags:
+        parts.append(f"Tags: {', '.join(tags)}")
+    return "\n".join(parts)
 
 
 def _fetch_calendar_events(user_id: str, target_date: date) -> str:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        end = start + timedelta(days=1)
-        cur.execute(
-            """
-            SELECT title, start_at, end_at
-            FROM public.cal_events
-            WHERE user_id = %s AND start_at >= %s AND start_at < %s AND deleted_at IS NULL
-            ORDER BY start_at
-            LIMIT 15
-            """,
-            (user_id, start, end),
-        )
-        rows = cur.fetchall()
-        cur.close()
+        start, end = _day_bounds(target_date)
+        rows = journal_repository.calendar_events(user_id, start, end)
         if not rows:
             return ""
         lines = ["Calendar events:"]
@@ -75,28 +56,12 @@ def _fetch_calendar_events(user_id: str, target_date: date) -> str:
         return "\n".join(lines)
     except Exception:
         return ""
-    finally:
-        conn.close()
 
 
 def _fetch_completed_tasks(user_id: str, target_date: date) -> str:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        end = start + timedelta(days=1)
-        cur.execute(
-            """
-            SELECT title, status
-            FROM public.tasks
-            WHERE user_id = %s AND completed_at >= %s AND completed_at < %s
-            ORDER BY completed_at
-            LIMIT 20
-            """,
-            (user_id, start, end),
-        )
-        rows = cur.fetchall()
-        cur.close()
+        start, end = _day_bounds(target_date)
+        rows = journal_repository.completed_tasks(user_id, start, end)
         if not rows:
             return ""
         lines = [f"Completed tasks ({len(rows)}):"]
@@ -105,25 +70,11 @@ def _fetch_completed_tasks(user_id: str, target_date: date) -> str:
         return "\n".join(lines)
     except Exception:
         return ""
-    finally:
-        conn.close()
 
 
 def _fetch_health_data(user_id: str, target_date: date) -> str:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT source, steps, active_minutes, calories, distance_km, sleep_hours,
-                   heart_rate_bpm, heart_points
-            FROM public.health_snapshots
-            WHERE user_id = %s AND snapshot_date = %s
-            """,
-            (user_id, target_date),
-        )
-        rows = cur.fetchall()
-        cur.close()
+        rows = journal_repository.health_rows(user_id, target_date)
         if not rows:
             return ""
         lines = ["Health data:"]
@@ -147,36 +98,12 @@ def _fetch_health_data(user_id: str, target_date: date) -> str:
         return "\n".join(lines)
     except Exception:
         return ""
-    finally:
-        conn.close()
 
 
 def _fetch_slack_highlights(user_id: str, target_date: date) -> str:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        end = start + timedelta(days=1)
-        cur.execute(
-            """
-            SELECT channel_name, sender_name, text
-            FROM public.slack_messages
-            WHERE user_id = %s
-              AND (
-                (created_at >= %s AND created_at < %s)
-                OR (
-                  ts ~ '^[0-9]+(\.[0-9]+)?$'
-                  AND to_timestamp(ts::double precision) >= %s
-                  AND to_timestamp(ts::double precision) < %s
-                )
-              )
-            ORDER BY created_at DESC
-            LIMIT 15
-            """,
-            (user_id, start, end, start, end),
-        )
-        rows = cur.fetchall()
-        cur.close()
+        start, end = _day_bounds(target_date)
+        rows = journal_repository.slack_highlights(user_id, start, end)
         if not rows:
             return ""
         lines = [f"Slack highlights ({len(rows)} messages):"]
@@ -186,41 +113,19 @@ def _fetch_slack_highlights(user_id: str, target_date: date) -> str:
         return "\n".join(lines)
     except Exception:
         return ""
-    finally:
-        conn.close()
 
 
 def _fetch_github_activity(user_id: str, target_date: date | None = None) -> str:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT github_username FROM public.github_auth WHERE user_id = %s",
-            (user_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
+        row = journal_repository.github_username(user_id)
         if not row or not row[0]:
             return ""
         username = row[0]
         if target_date is None:
             return f"GitHub: Connected as {username}"
 
-        cur = conn.cursor()
-        start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        end = start + timedelta(days=1)
-        cur.execute(
-            """
-            SELECT repo_full_name, message
-            FROM public.github_commits
-            WHERE user_id = %s AND committed_at >= %s AND committed_at < %s
-            ORDER BY committed_at DESC
-            LIMIT 10
-            """,
-            (user_id, start, end),
-        )
-        commits = cur.fetchall()
-        cur.close()
+        start, end = _day_bounds(target_date)
+        commits = journal_repository.github_commits(user_id, start, end)
         if not commits:
             return f"GitHub: Connected as {username}"
         lines = [f"GitHub activity for {username} ({len(commits)} cached commits):"]
@@ -229,8 +134,6 @@ def _fetch_github_activity(user_id: str, target_date: date | None = None) -> str
         return "\n".join(lines)
     except Exception:
         return ""
-    finally:
-        conn.close()
 
 
 AUTO_GENERATE_SYSTEM_PROMPT = (

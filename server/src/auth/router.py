@@ -129,16 +129,9 @@ def bootstrap_integrations(
     # Slack requires Slack OAuth consent.
     try:
         from ..slack_agent.router import _build_slack_authorization_url
-        from ..db import _get_conn
+        from .repository import auth_repository
 
-        conn = _get_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT 1 FROM public.slack_auth WHERE user_id = %s LIMIT 1", (user_id,))
-            slack_connected = cur.fetchone() is not None
-            cur.close()
-        finally:
-            conn.close()
+        slack_connected = auth_repository.slack_auth_exists(user_id)
 
         bot_configured = bool((os.getenv("SLACK_BOT_TOKEN") or "").strip())
         services["slack"] = {
