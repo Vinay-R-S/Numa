@@ -37,7 +37,7 @@ def embedding_model_name() -> str:
 
 
 def _model_cache_dir() -> str:
-    server_root = Path(__file__).resolve().parents[1]
+    server_root = Path(__file__).resolve().parents[2]
     raw = (
         os.getenv("HUGGINGFACE_MODEL_CACHE_DIR")
         or ""

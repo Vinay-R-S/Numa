@@ -14,7 +14,7 @@ from alembic import op
 
 # revision identifiers
 revision = "73d76abc6ad6"
-down_revision = None
+down_revision = "a1b2c3d4e5f6"
 branch_labels = None
 depends_on = None
 
