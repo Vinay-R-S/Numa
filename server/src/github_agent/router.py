@@ -12,11 +12,10 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
-from psycopg2.extras import Json
 
 from ..auth.dependencies import get_current_user
-from ..db import _get_conn
 from ..memory import memory_service
+from .repository import github_repository
 from .schemas import (
     GitHubAuthStatus,
     GitHubChatRequest,
@@ -91,33 +90,11 @@ def _get_github_config():
 
 
 def _get_github_token(user_id: str) -> str | None:
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT access_token FROM public.github_auth WHERE user_id = %s",
-            (user_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
-        return row[0] if row else None
-    finally:
-        conn.close()
+    return github_repository.get_access_token(user_id)
 
 
 def _get_github_username(user_id: str) -> str | None:
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT github_username FROM public.github_auth WHERE user_id = %s",
-            (user_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
-        return row[0] if row else None
-    finally:
-        conn.close()
+    return github_repository.get_username(user_id)
 
 
 def _token_permissions_from_headers(headers: httpx.Headers, *, source: str) -> dict:
@@ -129,30 +106,13 @@ def _token_permissions_from_headers(headers: httpx.Headers, *, source: str) -> d
     }
 
 
-def _parse_github_dt(value: str | None):
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
 def get_all_connected_github_user_ids() -> list[str]:
-    conn = None
     try:
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT user_id FROM public.github_auth")
-        rows = cur.fetchall() or []
-        cur.close()
+        rows = github_repository.all_user_ids()
         return [str(row[0]) for row in rows if row and row[0]]
     except Exception as exc:
         _log_dependency_exception("Could not list connected GitHub users: %s", exc)
         return []
-    finally:
-        if conn:
-            conn.close()
 
 
 def _store_github_stats_vector(user_id: str, stats: dict) -> None:
@@ -209,134 +169,17 @@ def _store_github_stats_vector(user_id: str, stats: dict) -> None:
 def _cache_github_stats(user_id: str, stats: dict) -> None:
     repos = stats.get("recent_repos") or []
     commits = stats.get("recent_commits") or []
-    conn = None
     try:
-        conn = _get_conn()
-        cur = conn.cursor()
-        for repo in repos:
-            cur.execute(
-                """
-                INSERT INTO public.github_repositories
-                    (user_id, github_repo_id, name, full_name, owner_login, private,
-                     fork, archived, disabled, language, stars, forks, open_issues,
-                     default_branch, html_url, clone_url, pushed_at, updated_at_api,
-                     permissions, raw_payload, last_synced_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (user_id, full_name) DO UPDATE SET
-                    github_repo_id = EXCLUDED.github_repo_id,
-                    name = EXCLUDED.name,
-                    owner_login = EXCLUDED.owner_login,
-                    private = EXCLUDED.private,
-                    fork = EXCLUDED.fork,
-                    archived = EXCLUDED.archived,
-                    disabled = EXCLUDED.disabled,
-                    language = EXCLUDED.language,
-                    stars = EXCLUDED.stars,
-                    forks = EXCLUDED.forks,
-                    open_issues = EXCLUDED.open_issues,
-                    default_branch = EXCLUDED.default_branch,
-                    html_url = EXCLUDED.html_url,
-                    clone_url = EXCLUDED.clone_url,
-                    pushed_at = EXCLUDED.pushed_at,
-                    updated_at_api = EXCLUDED.updated_at_api,
-                    permissions = EXCLUDED.permissions,
-                    raw_payload = EXCLUDED.raw_payload,
-                    last_synced_at = NOW()
-                """,
-                (
-                    user_id,
-                    repo.get("github_repo_id"),
-                    repo.get("name"),
-                    repo.get("full_name"),
-                    repo.get("owner_login"),
-                    bool(repo.get("private", False)),
-                    bool(repo.get("fork", False)),
-                    bool(repo.get("archived", False)),
-                    bool(repo.get("disabled", False)),
-                    repo.get("language"),
-                    int(repo.get("stars") or 0),
-                    int(repo.get("forks") or 0),
-                    int(repo.get("open_issues") or 0),
-                    repo.get("default_branch"),
-                    repo.get("html_url"),
-                    repo.get("clone_url"),
-                    _parse_github_dt(repo.get("pushed_at")),
-                    _parse_github_dt(repo.get("updated_at")),
-                    Json(repo.get("permissions") or {}),
-                    Json(repo),
-                ),
-            )
-
-        for commit in commits:
-            sha = commit.get("full_sha") or commit.get("sha")
-            if not sha or not commit.get("repo"):
-                continue
-            cur.execute(
-                """
-                INSERT INTO public.github_commits
-                    (user_id, repo_full_name, sha, message, author_name, author_email,
-                     author_login, committed_at, html_url, raw_payload, last_synced_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (user_id, repo_full_name, sha) DO UPDATE SET
-                    message = EXCLUDED.message,
-                    author_name = EXCLUDED.author_name,
-                    author_email = EXCLUDED.author_email,
-                    author_login = EXCLUDED.author_login,
-                    committed_at = EXCLUDED.committed_at,
-                    html_url = EXCLUDED.html_url,
-                    raw_payload = EXCLUDED.raw_payload,
-                    last_synced_at = NOW()
-                """,
-                (
-                    user_id,
-                    commit.get("repo"),
-                    sha,
-                    commit.get("message") or "",
-                    commit.get("author"),
-                    commit.get("author_email"),
-                    commit.get("author_login"),
-                    _parse_github_dt(commit.get("date")),
-                    commit.get("html_url"),
-                    Json(commit),
-                ),
-            )
-        conn.commit()
-        cur.close()
+        github_repository.cache_stats(user_id, repos, commits)
     except Exception as exc:
         _log_dependency_exception("GitHub DB cache update failed: %s", exc)
-    finally:
-        if conn:
-            conn.close()
 
 
 def _load_cached_github_stats(user_id: str, username: str) -> dict | None:
-    conn = None
     try:
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT avatar_url
-            FROM public.github_auth
-            WHERE user_id = %s
-            """,
-            (user_id,),
-        )
-        auth_row = cur.fetchone()
+        auth_row, repo_rows, commit_rows = github_repository.cache_rows(user_id)
         avatar_url = auth_row[0] if auth_row else None
 
-        cur.execute(
-            """
-            SELECT name, full_name, private, language, stars, forks,
-                   updated_at_api, html_url, last_synced_at
-            FROM public.github_repositories
-            WHERE user_id = %s
-            ORDER BY COALESCE(pushed_at, updated_at_api, last_synced_at) DESC
-            LIMIT 8
-            """,
-            (user_id,),
-        )
-        repo_rows = cur.fetchall() or []
         recent_repos = [
             {
                 "name": row[0],
@@ -352,17 +195,6 @@ def _load_cached_github_stats(user_id: str, username: str) -> dict | None:
         ]
         repo_last_synced = [row[8] for row in repo_rows if row[8]]
 
-        cur.execute(
-            """
-            SELECT repo_full_name, sha, message, author_name, committed_at, html_url, last_synced_at
-            FROM public.github_commits
-            WHERE user_id = %s
-            ORDER BY committed_at DESC NULLS LAST, last_synced_at DESC
-            LIMIT 20
-            """,
-            (user_id,),
-        )
-        commit_rows = cur.fetchall() or []
         recent_commits = [
             {
                 "repo": row[0],
@@ -387,12 +219,10 @@ def _load_cached_github_stats(user_id: str, username: str) -> dict | None:
         )
 
         if not recent_repos and not recent_commits:
-            cur.close()
             return None
 
         last_synced_values = repo_last_synced + commit_last_synced
         last_synced_at = max(last_synced_values) if last_synced_values else None
-        cur.close()
         return {
             "username": username,
             "avatar_url": avatar_url,
@@ -410,9 +240,6 @@ def _load_cached_github_stats(user_id: str, username: str) -> dict | None:
     except Exception as exc:
         _log_dependency_exception("Could not load cached GitHub stats: %s", exc)
         return None
-    finally:
-        if conn:
-            conn.close()
 
 
 def _cache_is_fresh(stats: dict | None, max_age_minutes: int = 10) -> bool:
@@ -509,42 +336,10 @@ def github_callback(code: str = Query(...), state: str = Query(...)):
     gh_user_id = gh_user.get("id", 0)
     avatar_url = gh_user.get("avatar_url", "")
 
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO public.github_auth
-                (user_id, github_username, github_user_id, access_token, scope, avatar_url,
-                 token_source, token_permissions, token_last_verified_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
-                github_username = EXCLUDED.github_username,
-                github_user_id  = EXCLUDED.github_user_id,
-                access_token    = EXCLUDED.access_token,
-                scope           = EXCLUDED.scope,
-                avatar_url      = EXCLUDED.avatar_url,
-                token_source    = EXCLUDED.token_source,
-                token_permissions = EXCLUDED.token_permissions,
-                token_last_verified_at = EXCLUDED.token_last_verified_at,
-                updated_at      = NOW()
-            """,
-            (
-                user_id,
-                username,
-                gh_user_id,
-                access_token,
-                scope,
-                avatar_url,
-                "oauth",
-                Json(token_permissions),
-                datetime.now(timezone.utc),
-            ),
-        )
-        conn.commit()
-        cur.close()
-    finally:
-        conn.close()
+    github_repository.upsert_auth(
+        user_id, username, gh_user_id, access_token, scope, avatar_url,
+        "oauth", token_permissions, datetime.now(timezone.utc),
+    )
 
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
     return RedirectResponse(f"{frontend_url}/settings?github=connected")
@@ -586,42 +381,10 @@ def connect_github_token(
     if not username or not gh_user_id:
         raise HTTPException(400, "GitHub token did not return a valid user")
 
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO public.github_auth
-                (user_id, github_username, github_user_id, access_token, scope, avatar_url,
-                 token_source, token_permissions, token_last_verified_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
-                github_username = EXCLUDED.github_username,
-                github_user_id  = EXCLUDED.github_user_id,
-                access_token    = EXCLUDED.access_token,
-                scope           = EXCLUDED.scope,
-                avatar_url      = EXCLUDED.avatar_url,
-                token_source    = EXCLUDED.token_source,
-                token_permissions = EXCLUDED.token_permissions,
-                token_last_verified_at = EXCLUDED.token_last_verified_at,
-                updated_at      = NOW()
-            """,
-            (
-                user_id,
-                username,
-                gh_user_id,
-                access_token,
-                scope,
-                avatar_url,
-                "pat",
-                Json(token_permissions),
-                datetime.now(timezone.utc),
-            ),
-        )
-        conn.commit()
-        cur.close()
-    finally:
-        conn.close()
+    github_repository.upsert_auth(
+        user_id, username, gh_user_id, access_token, scope, avatar_url,
+        "pat", token_permissions, datetime.now(timezone.utc),
+    )
 
     return GitHubAuthStatus(
         connected=True,
@@ -637,25 +400,15 @@ def github_status(current_user: dict = Depends(get_current_user)):
     if not user_id:
         raise HTTPException(401, "Missing user session")
 
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT github_username, avatar_url, scope FROM public.github_auth WHERE user_id = %s",
-            (user_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
-        if not row:
-            return GitHubAuthStatus(connected=False)
-        return GitHubAuthStatus(
-            connected=True,
-            github_username=row[0],
-            avatar_url=row[1],
-            scope=row[2],
-        )
-    finally:
-        conn.close()
+    row = github_repository.get_status(user_id)
+    if not row:
+        return GitHubAuthStatus(connected=False)
+    return GitHubAuthStatus(
+        connected=True,
+        github_username=row[0],
+        avatar_url=row[1],
+        scope=row[2],
+    )
 
 
 @router.delete("/disconnect", status_code=204)
@@ -664,17 +417,7 @@ def disconnect_github(current_user: dict = Depends(get_current_user)):
     if not user_id:
         raise HTTPException(401, "Missing user session")
 
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM public.github_resource_snapshots WHERE user_id = %s", (user_id,))
-        cur.execute("DELETE FROM public.github_commits WHERE user_id = %s", (user_id,))
-        cur.execute("DELETE FROM public.github_repositories WHERE user_id = %s", (user_id,))
-        cur.execute("DELETE FROM public.github_auth WHERE user_id = %s", (user_id,))
-        conn.commit()
-        cur.close()
-    finally:
-        conn.close()
+    github_repository.disconnect(user_id)
 
 
 @router.get("/stats", response_model=GitHubUserStats)

@@ -89,13 +89,7 @@ def _get_llm(model_override=None, user_id=None):
 
 # ── PostgreSQL helpers ────────────────────────────────────────────────────────
 
-def _get_conn():
-    from ..db import _get_conn as _conn  # type: ignore
-    return _conn()
-
-
-def _row_to_dict(row, description) -> dict:
-    return {col.name: val for col, val in zip(description, row)}
+from .repository import slack_repository
 
 
 def _normalize_text(value: str) -> str:
@@ -214,45 +208,11 @@ def _is_actionable_slack_message(text: str) -> bool:
 
 def _fetch_recent_db_messages(user_id: str, limit: int = 15, channel_name: Optional[str] = None) -> List[Dict]:
     """Fetch recent Slack messages for a user from PostgreSQL (7-day window)."""
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        if channel_name:
-            cur.execute(
-                """
-                SELECT id, user_id, slack_user_id, slack_channel_id, channel_name, text, ts,
-                       thread_ts, message_type, created_at
-                FROM public.slack_messages
-                WHERE user_id = %s
-                  AND created_at > NOW() - INTERVAL '7 days'
-                  AND (LOWER(channel_name) = LOWER(%s) OR slack_channel_id = %s)
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (user_id, channel_name, channel_name, limit),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT id, user_id, slack_user_id, slack_channel_id, channel_name, text, ts,
-                       thread_ts, message_type, created_at
-                FROM public.slack_messages
-                WHERE user_id = %s
-                  AND created_at > NOW() - INTERVAL '7 days'
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (user_id, limit),
-            )
-        rows  = cur.fetchall()
-        msgs  = [_row_to_dict(r, cur.description) for r in rows]
-        cur.close()
-        return msgs
+        return slack_repository.recent_messages(user_id, limit, channel_name)
     except Exception as exc:
         log.warning("_fetch_recent_db_messages failed: %s", exc)
         return []
-    finally:
-        conn.close()
 
 
 def _insert_task_from_slack(
@@ -265,108 +225,53 @@ def _insert_task_from_slack(
     status: str = "planned",
 ) -> Optional[Dict]:
     """Insert a task into public.tasks with source_name='Slack'."""
-    conn = _get_conn()
+    due = None
+    if due_date:
+        try:
+            due = due_date if isinstance(due_date, datetime) else datetime.fromisoformat(str(due_date).replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    normalized_title = _normalize_text(title)
+    if not normalized_title:
+        return None
+
+    if priority not in {"low", "medium", "high", "urgent"}:
+        priority = "medium"
+    if status not in {"planned", "inprogress", "completed", "pending"}:
+        status = "planned"
+
+    if slack_ts:
+        ext = f"slack:{slack_ts}"
+    else:
+        raw_key = f"{user_id}|{normalized_title.lower()}|{_normalize_text(description or '').lower()}|{due.isoformat() if due else ''}"
+        ext = f"slack:manual:{hashlib.sha256(raw_key.encode('utf-8')).hexdigest()[:24]}"
+
+    completed_at = datetime.now(timezone.utc) if status == "completed" else None
     try:
-        cur = conn.cursor()
-        due = None
-        if due_date:
-            try:
-                due = due_date if isinstance(due_date, datetime) else datetime.fromisoformat(str(due_date).replace("Z", "+00:00"))
-            except Exception:
-                pass
-
-        normalized_title = _normalize_text(title)
-        if not normalized_title:
-            return None
-
-        if priority not in {"low", "medium", "high", "urgent"}:
-            priority = "medium"
-        if status not in {"planned", "inprogress", "completed", "pending"}:
-            status = "planned"
-
-        if slack_ts:
-            ext = f"slack:{slack_ts}"
-        else:
-            raw_key = f"{user_id}|{normalized_title.lower()}|{_normalize_text(description or '').lower()}|{due.isoformat() if due else ''}"
-            ext = f"slack:manual:{hashlib.sha256(raw_key.encode('utf-8')).hexdigest()[:24]}"
-
-        completed_at = datetime.now(timezone.utc) if status == "completed" else None
-        cur.execute(
-            """
-            INSERT INTO public.tasks
-                (user_id, title, description, status, priority, due_date,
-                 source_name, source_logo, external_ref, position, completed_at)
-            VALUES (%s, %s, %s, %s, %s, %s, 'Slack', 'slack', %s, 0, %s)
-            ON CONFLICT (user_id, external_ref)
-            DO UPDATE SET
-                title = EXCLUDED.title,
-                description = EXCLUDED.description,
-                status = EXCLUDED.status,
-                priority = EXCLUDED.priority,
-                due_date = EXCLUDED.due_date,
-                completed_at = EXCLUDED.completed_at,
-                updated_at = NOW()
-            RETURNING id, user_id, title, description, status, priority,
-                      due_date, reminder_at, source_name, source_logo,
-                      external_ref, position, completed_at, created_at, updated_at
-            """,
-            (user_id, normalized_title, description, status, priority, due, ext, completed_at),
+        task = slack_repository.insert_task_from_slack(
+            user_id, normalized_title, description, status, priority, due, ext, completed_at,
         )
-        row  = cur.fetchone()
-        task = _row_to_dict(row, cur.description) if row else {}
-        if task and task.get("id"):
-            cur.execute(
-                """
-                DELETE FROM public.tasks
-                WHERE user_id = %s
-                  AND source_name = 'Slack'
-                  AND LOWER(title) = LOWER(%s)
-                  AND id <> %s
-                  AND (external_ref IS NULL OR external_ref = %s)
-                """,
-                (user_id, normalized_title, task["id"], ext),
-            )
-        conn.commit()
-        cur.close()
-        if task:
-            try:
-                from ..tasks import service as task_service
-                task_service.store_task_snapshot(task)
-            except Exception:
-                pass
-        return task
     except Exception as exc:
         log.warning("_insert_task_from_slack failed: %s", exc)
-        conn.rollback()
         return None
-    finally:
-        conn.close()
+
+    if task:
+        try:
+            from ..tasks import service as task_service
+            task_service.store_task_snapshot(task)
+        except Exception:
+            pass
+    return task
 
 
 def _list_slack_tasks(user_id: str, limit: int = 10) -> List[Dict]:
     """List tasks created from Slack for a user."""
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, title, status, priority, due_date, source_name, external_ref, created_at
-            FROM public.tasks
-            WHERE user_id = %s AND source_name = 'Slack'
-            ORDER BY created_at DESC
-            LIMIT %s
-            """,
-            (user_id, limit),
-        )
-        rows  = cur.fetchall()
-        tasks = [_row_to_dict(r, cur.description) for r in rows]
-        cur.close()
-        return tasks
+        return slack_repository.list_slack_tasks(user_id, limit)
     except Exception as exc:
         log.warning("_list_slack_tasks failed: %s", exc)
         return []
-    finally:
-        conn.close()
 
 
 # ── Slack SDK helper ──────────────────────────────────────────────────────────
@@ -420,30 +325,13 @@ def _create_tasks_from_recent_slack(user_id: str, limit: int = 20) -> Tuple[List
 
 
 def _get_slack_token_for_user(user_id: str) -> Optional[str]:
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT bot_token, access_token
-            FROM public.slack_auth
-            WHERE user_id = %s
-            LIMIT 1
-            """,
-            (user_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
-        if not row:
-            row_token = ""
-        else:
-            row_token = (row[0] or row[1] or "").strip()
+        row = slack_repository.slack_tokens_for_user(user_id)
+        row_token = "" if not row else (row[0] or row[1] or "").strip()
         if row_token:
             return row_token
     except Exception as exc:
         log.warning("_get_slack_token_for_user failed: %s", exc)
-    finally:
-        conn.close()
 
     env_token = os.getenv("SLACK_BOT_TOKEN", "").strip()
     if env_token and not env_token.startswith("xoxb-placeholder"):

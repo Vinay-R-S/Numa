@@ -7,13 +7,13 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth.dependencies import get_current_user
-from ..db import _get_conn
 from ..llm_factory import (
     encrypt_api_key,
     get_available_providers,
     PROVIDER_MODELS,
     DEFAULT_MODELS,
 )
+from .repository import ai_settings_repository
 from .schemas import (
     AISettingsUpdate,
     AISettingsResponse,
@@ -24,8 +24,7 @@ from .schemas import (
 router = APIRouter(prefix="/api/ai-settings", tags=["ai-settings"])
 
 
-def _row_to_response(row, description) -> AISettingsResponse:
-    d = {col.name: val for col, val in zip(description, row)}
+def _row_to_response(d: dict) -> AISettingsResponse:
     return AISettingsResponse(
         provider=d["provider"],
         model_id=d["model_id"],
@@ -43,22 +42,8 @@ def get_settings(current_user: dict = Depends(get_current_user)):
 
     providers = [ProviderInfo(**p) for p in get_available_providers()]
 
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT provider, model_id, encrypted_api_key, ollama_base_url, temperature
-            FROM public.user_ai_settings
-            WHERE user_id = %s
-            """,
-            (user_id,),
-        )
-        row = cur.fetchone()
-        current = _row_to_response(row, cur.description) if row else None
-        cur.close()
-    finally:
-        conn.close()
+    row = ai_settings_repository.get(user_id)
+    current = _row_to_response(row) if row else None
 
     return ProvidersListResponse(providers=providers, current=current)
 
@@ -86,56 +71,19 @@ def update_settings(
     if body.api_key and body.api_key.strip():
         encrypted = encrypt_api_key(body.api_key.strip())
 
-    conn = _get_conn()
     try:
-        cur = conn.cursor()
-
-        if encrypted:
-            cur.execute(
-                """
-                INSERT INTO public.user_ai_settings
-                    (user_id, provider, model_id, encrypted_api_key, ollama_base_url, temperature)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    provider          = EXCLUDED.provider,
-                    model_id          = EXCLUDED.model_id,
-                    encrypted_api_key = EXCLUDED.encrypted_api_key,
-                    ollama_base_url   = EXCLUDED.ollama_base_url,
-                    temperature       = EXCLUDED.temperature,
-                    updated_at        = NOW()
-                RETURNING provider, model_id, encrypted_api_key, ollama_base_url, temperature
-                """,
-                (user_id, body.provider, body.model_id, encrypted,
-                 body.ollama_base_url, body.temperature),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO public.user_ai_settings
-                    (user_id, provider, model_id, ollama_base_url, temperature)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    provider        = EXCLUDED.provider,
-                    model_id        = EXCLUDED.model_id,
-                    ollama_base_url = EXCLUDED.ollama_base_url,
-                    temperature     = EXCLUDED.temperature,
-                    updated_at      = NOW()
-                RETURNING provider, model_id, encrypted_api_key, ollama_base_url, temperature
-                """,
-                (user_id, body.provider, body.model_id,
-                 body.ollama_base_url, body.temperature),
-            )
-
-        row = cur.fetchone()
-        result = _row_to_response(row, cur.description)
-        conn.commit()
-        cur.close()
-        return result
+        result = ai_settings_repository.upsert(
+            user_id=user_id,
+            provider=body.provider,
+            model_id=body.model_id,
+            encrypted=encrypted,
+            ollama_base_url=body.ollama_base_url,
+            temperature=body.temperature,
+            include_key=bool(encrypted),
+        )
     except Exception as exc:
-        conn.rollback()
         raise HTTPException(500, f"Failed to save AI settings: {exc}")
-    finally:
-        conn.close()
+    return _row_to_response(result)
 
 
 @router.delete("", status_code=204)
@@ -145,14 +93,7 @@ def delete_settings(current_user: dict = Depends(get_current_user)):
     if not user_id:
         raise HTTPException(401, "Missing user session")
 
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM public.user_ai_settings WHERE user_id = %s", (user_id,))
-        conn.commit()
-        cur.close()
-    finally:
-        conn.close()
+    ai_settings_repository.delete(user_id)
 
 
 _INTEGRATION_CHECK_KEYS = {
