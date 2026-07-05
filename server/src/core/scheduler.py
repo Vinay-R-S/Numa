@@ -40,7 +40,7 @@ def start_periodic_sync_scheduler():
     def _daily_health_purge_job():
         """Delete health snapshots older than 8 days. Runs at 8 AM IST."""
         try:
-            from src.health_agent.router import purge_old_health_snapshots
+            from src.health_agent.persistence import purge_old_health_snapshots
             deleted = purge_old_health_snapshots()
             log.info("Daily health purge complete: %d rows deleted", deleted)
         except Exception as exc:

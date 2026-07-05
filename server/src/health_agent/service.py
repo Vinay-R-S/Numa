@@ -82,7 +82,7 @@ def _fmt_metric(value: float, unit: str) -> str:
 
 
 def _build_diet_recommendation(user_id: str) -> str:
-    from .router import get_health_snapshots
+    from .persistence import get_health_snapshots
 
     snapshots = get_health_snapshots(user_id, days=8)
     today = date.today()
@@ -266,8 +266,8 @@ def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None
 
 
 def _health_toolset(tool_decorator, user_id: str):
-    from .router import (
-        get_health_snapshots,
+    from .persistence import get_health_snapshots
+    from .sync import (
         sync_google_fit_for_user,
         _sync_strava_with_health_all,
         sync_strava_for_user,
