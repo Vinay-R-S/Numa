@@ -68,7 +68,7 @@ def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None
 
 
 def _github_toolset(tool_decorator, user_id: str):
-    from .router import _get_github_token, _get_github_username
+    from .persistence import _get_github_token, _get_github_username
     from ..tasks.agent_tools import make_task_tools
 
     def _get_client():
@@ -149,7 +149,7 @@ def _github_toolset(tool_decorator, user_id: str):
 
         stats = client.get_contribution_stats(username)
         try:
-            from .router import _store_github_stats_vector
+            from .persistence import _store_github_stats_vector
             _store_github_stats_vector(user_id, stats)
         except Exception:
             pass
