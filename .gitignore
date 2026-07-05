@@ -116,5 +116,6 @@ audio
 !server/audio/**
 agent-arc.mmd
 dump
+CLAUDE.md
 PLAN.md
 SETUP.md
