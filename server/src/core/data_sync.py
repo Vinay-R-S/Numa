@@ -90,7 +90,7 @@ def fetch_latest_for_user(user_id: str) -> Dict:
 
     try:
         from src.calendar.service import has_calendar_credentials
-        from src.health_agent.router import sync_health_for_user
+        from src.health_agent.sync import sync_health_for_user
 
         if has_calendar_credentials(user_id):
             health_result = sync_health_for_user(user_id)
