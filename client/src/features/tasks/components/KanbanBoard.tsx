@@ -14,12 +14,12 @@ import {
   type DragOverEvent,
 } from "@dnd-kit/core"
 import { Plus } from "lucide-react"
-import type { Task, TaskStatus } from "./types"
+import type { Task, TaskStatus } from "../tasks.types"
 import { KanbanColumn } from "./KanbanColumn"
 import { TaskCard } from "./TaskCard"
 import { TaskDialog } from "./TaskDialog"
 import { TaskDetailSheet } from "./TaskDetailSheet"
-import { patchTaskStatus, createTask, updateTask, deleteTask } from "./api"
+import { patchTaskStatus, createTask, updateTask, deleteTask } from "../tasks.api"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -28,8 +28,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { toast } from "./toast"
-import { scheduleReminder, cancelReminder } from "./notifications"
+import { toast } from "../toast"
+import { scheduleReminder, cancelReminder } from "../notifications"
 
 const STATUSES: TaskStatus[] = ["planned", "inprogress", "completed", "pending"]
 
