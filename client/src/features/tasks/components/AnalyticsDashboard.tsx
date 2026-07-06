@@ -23,7 +23,7 @@ import {
   BarChart2,
 } from "lucide-react"
 import { format, parseISO } from "date-fns"
-import type { TaskStats } from "./types"
+import type { TaskStats } from "../tasks.types"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"

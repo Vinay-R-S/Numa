@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import type { Task, TaskStats } from "@/components/tasklist/types"
+import type { Task, TaskStats } from "@/features/tasks/tasks.types"
 import {
   fetchTasks,
   createTask as apiCreateTask,
@@ -8,7 +8,7 @@ import {
   deleteTask as apiDeleteTask,
   fetchStats,
   fetchCompletedHistory,
-} from "@/components/tasklist/api"
+} from "@/features/tasks/tasks.api"
 
 interface TasksStore {
   // State

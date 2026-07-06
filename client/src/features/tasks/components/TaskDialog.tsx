@@ -23,8 +23,8 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { DatePicker } from "@/components/ui/date-picker"
 import { TimePicker } from "@/components/ui/time-picker"
-import { requestNotificationPermission, scheduleReminder } from "./notifications"
-import type { Task, TaskStatus, TaskPriority } from "./types"
+import { requestNotificationPermission, scheduleReminder } from "../notifications"
+import type { Task, TaskStatus, TaskPriority } from "../tasks.types"
 
 interface TaskDialogProps {
   open: boolean

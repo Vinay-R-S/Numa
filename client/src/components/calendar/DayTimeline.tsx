@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CalendarDays, Droplets, UtensilsCrossed, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { fetchTasks } from "@/components/tasklist/api"
-import type { Task } from "@/components/tasklist/types"
+import { fetchTasks } from "@/features/tasks/tasks.api"
+import type { Task } from "@/features/tasks/tasks.types"
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

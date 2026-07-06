@@ -20,8 +20,8 @@ import {
   Hash,
 } from "lucide-react"
 import { format, isPast, isToday } from "date-fns"
-import type { Task } from "./types"
-import { PRIORITY_CONFIG, COLUMN_CONFIG } from "./types"
+import type { Task } from "../tasks.types"
+import { PRIORITY_CONFIG, COLUMN_CONFIG } from "../tasks.types"
 import { cn } from "@/lib/utils"
 
 interface TaskDetailSheetProps {
