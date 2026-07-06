@@ -15,6 +15,28 @@ import { Separator } from "@/components/ui/separator"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 
+const KANBAN_SKELETON_KEYS = ["kanban-1", "kanban-2", "kanban-3", "kanban-4"]
+const HISTORY_SKELETON_KEYS = ["history-1", "history-2", "history-3", "history-4", "history-5", "history-6"]
+
+function fireTaskReminder(task: Task) {
+  if (Notification.permission !== "granted") return
+  new Notification(`Reminder: ${task.title}`, {
+    body: task.description ?? "Task reminder from NUMA",
+    icon: task.source_logo ?? undefined,
+  })
+}
+
+function scheduleTaskReminders(tasks: Task[]) {
+  const now = Date.now()
+  tasks.forEach((task) => {
+    if (!task.reminder_at) return
+    const diff = new Date(task.reminder_at).getTime() - now
+    if (diff > 0 && diff <= 60_000) {
+      setTimeout(() => fireTaskReminder(task), diff)
+    }
+  })
+}
+
 export default function TasklistPage() {
   // Use global store for cached data
   const {
@@ -53,12 +75,12 @@ export default function TasklistPage() {
   }, [fetchAllTasks, fetchAllStats, fetchAllHistory])
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("Notification" in window)) return
-    const timeoutId = window.setTimeout(() => {
+    if (typeof globalThis.window === "undefined" || !("Notification" in globalThis)) return
+    const timeoutId = globalThis.setTimeout(() => {
       setNotificationPermission(Notification.permission)
     }, 0)
 
-    return () => window.clearTimeout(timeoutId)
+    return () => globalThis.clearTimeout(timeoutId)
   }, [])
 
   // Clean up stats debounce timer on unmount
@@ -98,31 +120,66 @@ export default function TasklistPage() {
 
   // Web Push reminder scheduler - only prompt once, persist choice
   useEffect(() => {
-    if (!("Notification" in window)) return
-
-    const checkReminders = () => {
-      const now = new Date()
-      tasks.forEach((task) => {
-        if (!task.reminder_at) return
-        const reminderTime = new Date(task.reminder_at)
-        const diff = reminderTime.getTime() - now.getTime()
-        if (diff > 0 && diff <= 60_000) {
-          setTimeout(() => {
-            if (Notification.permission === "granted") {
-              new Notification(`Reminder: ${task.title}`, {
-                body: task.description ?? "Task reminder from NUMA",
-                icon: task.source_logo ?? undefined,
-              })
-            }
-          }, diff)
-        }
-      })
-    }
-
+    if (!("Notification" in globalThis)) return
     if (Notification.permission === "granted") {
-      checkReminders()
+      scheduleTaskReminders(tasks)
     }
   }, [tasks])
+
+  const renderHistoryContent = () => {
+    if (loadingHistory && historyTasks.length === 0) {
+      return (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {HISTORY_SKELETON_KEYS.map((key) => (
+            <Skeleton key={key} className="h-20 rounded-xl" />
+          ))}
+        </div>
+      )
+    }
+
+    if (historyTasks.length === 0) {
+      return (
+        <div className="flex h-24 items-center justify-center rounded-2xl border border-dashed border-white/10 text-sm text-muted-foreground">
+          No completed tasks from previous days
+        </div>
+      )
+    }
+
+    return (
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+        {historyTasks.map((task) => {
+          const priorityCfg = task.priority ? PRIORITY_CONFIG[task.priority] : null
+          return (
+            <button
+              key={task.id}
+              onClick={() => {
+                setHistoryDetailTask(task)
+                setHistoryDetailOpen(true)
+              }}
+              className="group text-left rounded-xl border border-border/50 bg-card p-3 hover:border-border hover:shadow-md transition-all duration-200"
+            >
+              <p className="text-sm font-medium text-muted-foreground line-through line-clamp-1 group-hover:text-foreground transition-colors">
+                {task.title}
+              </p>
+              <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                {task.completed_at && (
+                  <span className="text-[10px] text-emerald-500/80 font-medium">
+                    ✓ {format(new Date(task.completed_at), "MMM d, yyyy")}
+                  </span>
+                )}
+                {priorityCfg && (
+                  <span className={cn("text-[10px] font-medium", priorityCfg.color)}>
+                    <span className={cn("inline-block h-1.5 w-1.5 rounded-full mr-1 align-middle", priorityCfg.dot)} />
+                    {priorityCfg.label}
+                  </span>
+                )}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-full px-3 py-4 space-y-6 max-w-[1600px] mx-auto sm:px-6 sm:py-6 sm:space-y-10">
@@ -174,8 +231,8 @@ export default function TasklistPage() {
       {/* ── Kanban Board ─────────────────────────────────────────────────────── */}
       {loadingTasks && tasks.length === 0 ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {[...Array(4)].map((_, i) => (
-            <Skeleton key={i} className="h-96 rounded-2xl" />
+          {KANBAN_SKELETON_KEYS.map((key) => (
+            <Skeleton key={key} className="h-96 rounded-2xl" />
           ))}
         </div>
       ) : (
@@ -210,7 +267,7 @@ export default function TasklistPage() {
               Tasks completed on previous days
               {!loadingHistory && historyTasks.length > 0 && (
                 <span className="ml-1 text-emerald-400 font-medium">
-                  · {historyTasks.length} task{historyTasks.length !== 1 ? "s" : ""}
+                  · {historyTasks.length} task{historyTasks.length === 1 ? "" : "s"}
                 </span>
               )}
             </p>
@@ -224,54 +281,7 @@ export default function TasklistPage() {
           </div>
         </button>
 
-        {historyExpanded && (
-          <div className="mt-4">
-            {loadingHistory && historyTasks.length === 0 ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {[...Array(6)].map((_, i) => (
-                  <Skeleton key={i} className="h-20 rounded-xl" />
-                ))}
-              </div>
-            ) : historyTasks.length === 0 ? (
-              <div className="flex h-24 items-center justify-center rounded-2xl border border-dashed border-white/10 text-sm text-muted-foreground">
-                No completed tasks from previous days
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                {historyTasks.map((task) => {
-                  const priorityCfg = task.priority ? PRIORITY_CONFIG[task.priority] : null
-                  return (
-                    <button
-                      key={task.id}
-                      onClick={() => {
-                        setHistoryDetailTask(task)
-                        setHistoryDetailOpen(true)
-                      }}
-                      className="group text-left rounded-xl border border-border/50 bg-card p-3 hover:border-border hover:shadow-md transition-all duration-200"
-                    >
-                      <p className="text-sm font-medium text-muted-foreground line-through line-clamp-1 group-hover:text-foreground transition-colors">
-                        {task.title}
-                      </p>
-                      <div className="mt-1.5 flex items-center gap-2 flex-wrap">
-                        {task.completed_at && (
-                          <span className="text-[10px] text-emerald-500/80 font-medium">
-                            ✓ {format(new Date(task.completed_at), "MMM d, yyyy")}
-                          </span>
-                        )}
-                        {priorityCfg && (
-                          <span className={cn("text-[10px] font-medium", priorityCfg.color)}>
-                            <span className={cn("inline-block h-1.5 w-1.5 rounded-full mr-1 align-middle", priorityCfg.dot)} />
-                            {priorityCfg.label}
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        )}
+        {historyExpanded && <div className="mt-4">{renderHistoryContent()}</div>}
       </div>
 
       <Separator className="opacity-20" />
