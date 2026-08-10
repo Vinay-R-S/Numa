@@ -24,8 +24,8 @@ import {
 import {
   checkCalendarTokenHealth,
   getGoogleCalendarAuthorizationUrl,
-  TokenHealthResult,
-} from "@/components/calendar/api"
+  type TokenHealthResult,
+} from "@/features/calendar"
 import {
   connectSlack,
   getSlackStatus,

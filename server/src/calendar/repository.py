@@ -188,6 +188,53 @@ def _read_month_events_from_db(user_id: str, month_start: datetime, month_end: d
 # NORMALIZED STORAGE - cal_calendars / cal_events / cal_attendees
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Slim agent-facing read. One literal statement over a half-open window, so the
+# repository keeps zero f-string SQL (PLAN 8) and callers share one bound rule.
+_AGENT_EVENTS_SQL = """
+    SELECT e.google_event_id, e.title, e.start_at, c.name
+    FROM public.cal_events e
+    JOIN public.cal_calendars c ON c.id = e.calendar_id
+    WHERE e.user_id     = %s
+      AND e.start_at   >= %s
+      AND e.start_at   <  %s
+      AND e.deleted_at IS NULL
+      AND c.calendar_type IN ('personal', 'shared')
+    ORDER BY e.start_at
+"""
+
+
+def read_events_between(user_id: str, window_start: datetime, window_end: datetime) -> List[Dict]:
+    """
+    Slim agent-facing read of personal/shared events in the half-open window
+    [window_start, window_end) - holidays and birthdays excluded.
+
+    Returns [] when nothing is cached OR the read fails (including a failure to
+    acquire a connection), so callers fall back to the Google API.
+    """
+    conn = None
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(_AGENT_EVENTS_SQL, (user_id, window_start, window_end))
+        rows = cur.fetchall() or []
+        cur.close()
+        return [
+            {
+                "summary": row[1],
+                "start": _to_local(row[2]).isoformat(),
+                "id": row[0],
+                "calendar": row[3],
+            }
+            for row in rows
+        ]
+    except Exception as exc:
+        log.warning("Failed to read cached calendar events: %s", exc)
+        return []
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _ensure_cal_calendar(user_id: str, cal: Dict, calendar_type: str = "personal") -> str:
     """
     Upsert a row into cal_calendars and return its UUID (as string).

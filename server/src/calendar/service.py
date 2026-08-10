@@ -42,13 +42,24 @@ in cohesive sibling modules, re-exported here so existing callers are unaffected
   repository      - cal_* SQL + task/memory/Qdrant persistence
   sync            - calendar -> task/memory sync
   agent.tools     - agent-facing create/modify/delete/find tools
+
+Orchestration class (NUMA-114 P4, PLAN 16.1 / 21.1)
+---------------------------------------------------
+The six entrypoints now live on `CalendarService`, with the repository, the
+task/memory sync and the Google service factory injected through the
+constructor. The module-level functions are thin delegating shims over the
+`calendar_service` singleton, so every existing import path is unchanged. The
+last two raw SQL blocks moved into `repository.read_events_between`, so the
+service no longer touches the DB pool (PLAN 18).
 """
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
-from ..db import _get_conn
+from ..core.base import BaseService
+from . import repository as calendar_repository
+from . import sync as calendar_sync
 from .datetime_utils import (
     TIMEZONE_NAME,
     TIMEZONE,
@@ -106,6 +117,7 @@ from .google_client import (
 )
 from .repository import (
     CACHE_TTL_MINUTES,
+    read_events_between,
     _is_cache_fresh_for_month,
     _read_month_events_from_db,
     _ensure_cal_calendar,
@@ -136,162 +148,259 @@ from .agent.tools import (
 log = logging.getLogger(__name__)
 
 
-# ── Main frontend fetch (with cache) ─────────────────────────────────────────
-
-def get_events_for_frontend(
-    user_id: Optional[str] = None,
-    force_refresh: bool = False,
-) -> List[Dict]:
+class CalendarService(BaseService):
     """
-    Return all events for the current calendar month, including holidays and
-    birthdays, colour-coded by calendar type.
+    Calendar orchestration (PLAN 16.1 / 21.1).
 
-    Cache behaviour
-    ---------------
-    If the DB cache is fresh (last_synced_at < CACHE_TTL_MINUTES ago) AND
-    there are events in the DB, serve from cal_events - no Google API call.
-    Pass force_refresh=True (or ?refresh=true on the endpoint) to bypass.
-
-    This saves both Google API quota and Groq context tokens, because the
-    Master Agent can query cal_events with SQL instead of sending raw JSON.
+    Owns the month fetch + cache decision, the agent-facing reads and the
+    create/update/delete flows. Collaborators are injected: the repository for
+    persistence, the sync module for the task/memory mirror, and the Google
+    service factory. Pure helpers (datetime maths, calendar classification,
+    payload formatting) stay plain module functions.
     """
-    month_start, month_end = _current_month_window()
 
-    # ── Try DB cache first ────────────────────────────────────────────────────
-    if user_id and not force_refresh:
-        if _is_cache_fresh_for_month(user_id, month_start, month_end):
-            cached = _read_month_events_from_db(user_id, month_start, month_end)
-            if cached:
-                log.debug("Serving calendar from DB cache for user %s", user_id)
-                return cached
+    def __init__(
+        self,
+        repository=calendar_repository,
+        sync=calendar_sync,
+        service_factory: Callable = get_calendar_service,
+    ) -> None:
+        super().__init__()
+        self._repository = repository
+        self._sync = sync
+        self._service_factory = service_factory
 
-    # ── Full Google API fetch ─────────────────────────────────────────────────
-    service = get_calendar_service(user_id=user_id)
+    # ── Main frontend fetch (with cache) ─────────────────────────────────────
 
-    # Include ALL calendars (holidays, birthdays, personal)
-    all_calendars = list_all_calendars(service)
+    def get_events_for_frontend(
+        self,
+        user_id: Optional[str] = None,
+        force_refresh: bool = False,
+    ) -> List[Dict]:
+        """
+        Return all events for the current calendar month, including holidays and
+        birthdays, colour-coded by calendar type.
 
-    time_min = month_start.isoformat()
-    time_max = month_end.isoformat()
+        Cache behaviour
+        ---------------
+        If the DB cache is fresh (last_synced_at < CACHE_TTL_MINUTES ago) AND
+        there are events in the DB, serve from cal_events - no Google API call.
+        Pass force_refresh=True (or ?refresh=true on the endpoint) to bypass.
 
-    # Build UUID map: google_cal_id → (cal_uuid, cal_type)
-    cal_uuid_map: Dict[str, Tuple[str, str]] = {}
-    if user_id:
-        for cal in all_calendars:
-            try:
-                cal_type = cal.get("calendar_type") or "personal"
-                cal_uuid = _ensure_cal_calendar(user_id, cal, calendar_type=cal_type)
-                cal_uuid_map[str(cal.get("id") or "")] = (cal_uuid, cal_type)
-            except Exception as exc:
-                log.warning("Could not upsert cal_calendar: %s", exc)
+        This saves both Google API quota and Groq context tokens, because the
+        Master Agent can query cal_events with SQL instead of sending raw JSON.
+        """
+        month_start, month_end = _current_month_window()
 
-    # Prune events outside the current month
-    if user_id:
-        _prune_cal_events_outside_month(user_id, month_start, month_end)
+        # ── Try DB cache first ───────────────────────────────────────────────
+        if user_id and not force_refresh:
+            if self._repository._is_cache_fresh_for_month(user_id, month_start, month_end):
+                cached = self._repository._read_month_events_from_db(user_id, month_start, month_end)
+                if cached:
+                    self.log.debug("Serving calendar from DB cache for user %s", user_id)
+                    return cached
 
-    # Fetch from Google (all calendars, type-aware filtering)
-    fetched_calendar_ids: Set[str] = set()
-    events_raw = fetch_events_across_selected_calendars(
-        service,
-        time_min,
-        time_max,
-        selected_calendars=all_calendars,
-        fetched_calendar_ids=fetched_calendar_ids,
-    )
+        # ── Full Google API fetch ────────────────────────────────────────────
+        service = self._service_factory(user_id=user_id)
 
-    # Persist + sync to tasks (personal only)
-    if user_id:
-        active_events: Set[Tuple[str, str]] = set()
-        for event in events_raw:
-            google_cal_id = str(event.get("_calendar_id") or "primary")
-            google_event_id = str(event.get("id") or "").strip()
-            if google_event_id:
-                active_events.add((google_cal_id, google_event_id))
-            cal_info = cal_uuid_map.get(google_cal_id)
-            if cal_info:
-                cal_uuid, _ = cal_info
-                _store_cal_event(user_id, cal_uuid, event)
-            _sync_calendar_event_to_task(user_id, event)
-        _reconcile_deleted_events_for_month(
-            user_id,
-            month_start,
-            month_end,
-            fetched_calendar_ids,
-            active_events,
+        # Include ALL calendars (holidays, birthdays, personal)
+        all_calendars = list_all_calendars(service)
+
+        time_min = month_start.isoformat()
+        time_max = month_end.isoformat()
+
+        # Build UUID map: google_cal_id -> (cal_uuid, cal_type)
+        cal_uuid_map: Dict[str, Tuple[str, str]] = {}
+        if user_id:
+            for cal in all_calendars:
+                try:
+                    cal_type = cal.get("calendar_type") or "personal"
+                    cal_uuid = self._repository._ensure_cal_calendar(user_id, cal, calendar_type=cal_type)
+                    cal_uuid_map[str(cal.get("id") or "")] = (cal_uuid, cal_type)
+                except Exception as exc:
+                    self.log.warning("Could not upsert cal_calendar: %s", exc)
+
+        # Prune events outside the current month
+        if user_id:
+            self._repository._prune_cal_events_outside_month(user_id, month_start, month_end)
+
+        # Fetch from Google (all calendars, type-aware filtering)
+        fetched_calendar_ids: Set[str] = set()
+        events_raw = fetch_events_across_selected_calendars(
+            service,
+            time_min,
+            time_max,
+            selected_calendars=all_calendars,
+            fetched_calendar_ids=fetched_calendar_ids,
         )
 
-    return [_format_event_for_frontend(event) for event in events_raw]
+        # Persist + sync to tasks (personal only)
+        if user_id:
+            active_events: Set[Tuple[str, str]] = set()
+            for event in events_raw:
+                google_cal_id = str(event.get("_calendar_id") or "primary")
+                google_event_id = str(event.get("id") or "").strip()
+                if google_event_id:
+                    active_events.add((google_cal_id, google_event_id))
+                cal_info = cal_uuid_map.get(google_cal_id)
+                if cal_info:
+                    cal_uuid, _ = cal_info
+                    self._repository._store_cal_event(user_id, cal_uuid, event)
+                self._sync._sync_calendar_event_to_task(user_id, event)
+            self._repository._reconcile_deleted_events_for_month(
+                user_id,
+                month_start,
+                month_end,
+                fetched_calendar_ids,
+                active_events,
+            )
+
+        return [_format_event_for_frontend(event) for event in events_raw]
 
 
-# ── Agent-facing fetches (no cache, no holidays, lean format) ─────────────────
+    # ── Agent-facing fetches (no cache, no holidays, lean format) ────────────
+
+    def _fetch_agent_events_from_google(
+        self,
+        user_id: Optional[str],
+        time_min: str,
+        time_max: str,
+    ) -> List[Dict]:
+        service = self._service_factory(user_id=user_id)
+        events = fetch_events_across_selected_calendars(
+            service,
+            time_min,
+            time_max,
+            selected_calendars=list_selected_calendars(service),
+        )
+        return [
+            {
+                "summary":  event.get("summary", "(No title)"),
+                "start":    event["start"].get("dateTime", event["start"].get("date")),
+                "id":       event.get("id"),
+                "calendar": event.get("_calendar_summary", "Primary"),
+            }
+            for event in events
+        ]
+
+    def get_events_on_date(self, date_str: str, user_id: Optional[str] = None) -> List[Dict]:
+        """
+        Return a slim list of events on a specific date.
+        Reads from DB first (Groq-token-friendly); falls back to Google API.
+
+        A malformed date raises ValueError from `_day_bounds`.
+        """
+        day_start, day_end = _day_bounds(date_str)
+
+        if user_id:
+            cached = self._repository.read_events_between(user_id, day_start, day_end)
+            if cached:
+                return cached
+
+        return self._fetch_agent_events_from_google(
+            user_id, day_start.isoformat(), day_end.isoformat()
+        )
+
+    def list_events_in_window(
+        self,
+        lookback_days: int = 7,
+        lookahead_days: int = 8,
+        user_id: Optional[str] = None,
+    ) -> List[Dict]:
+        """
+        List personal events in a window around now.
+        Reads from DB when possible; falls back to Google API.
+        Used by the AI agent tools (holidays excluded).
+        """
+        today_start = datetime.now(TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
+        window_start = today_start - timedelta(days=lookback_days)
+        window_end   = today_start + timedelta(days=lookahead_days + 1)
+
+        if user_id:
+            cached = self._repository.read_events_between(user_id, window_start, window_end)
+            if cached:
+                return cached
+
+        return self._fetch_agent_events_from_google(
+            user_id, window_start.isoformat(), window_end.isoformat()
+        )
+
+    # ── Event mutations (create / update / delete) ───────────────────────────
+
+    def create_event_from_payload(self, payload, user_id: Optional[str] = None) -> Dict:
+        service = self._service_factory(user_id=user_id)
+        body    = _build_google_event_body(payload)
+        created = service.events().insert(calendarId="primary", body=body).execute()
+        created["_calendar_id"]   = "primary"
+        created["_calendar_type"] = "personal"
+        created.setdefault("_calendar_summary", "Primary")
+        created.setdefault("status", "confirmed")
+        self._repository._persist_mutated_event(user_id, service, created)
+        self._sync._sync_calendar_event_to_task(user_id, created)
+        return _format_event_for_frontend(created)
+
+    def update_event_from_payload(self, event_id: str, payload, user_id: Optional[str] = None) -> Dict:
+        service = self._service_factory(user_id=user_id)
+        calendar_id, actual_event_id = _parse_calendar_event_id(event_id)
+        body    = _build_google_event_body(payload)
+        updated = (
+            service.events()
+            .patch(calendarId=calendar_id, eventId=actual_event_id, body=body)
+            .execute()
+        )
+        updated["_calendar_id"]   = calendar_id
+        updated["_calendar_type"] = "personal"
+        updated.setdefault("_calendar_summary", "Primary")
+        updated.setdefault("status", "confirmed")
+        self._repository._persist_mutated_event(user_id, service, updated)
+        self._sync._sync_calendar_event_to_task(user_id, updated)
+        return _format_event_for_frontend(updated)
+
+    def delete_event_by_id(self, event_id: str, user_id: Optional[str] = None) -> None:
+        service = self._service_factory(user_id=user_id)
+        calendar_id, actual_event_id = _parse_calendar_event_id(event_id)
+
+        try:
+            service.events().delete(calendarId=calendar_id, eventId=actual_event_id).execute()
+        except Exception as exc:
+            # HTTP 410 Gone means the event was already deleted on Google's side.
+            # Treat as success and proceed with local DB / task / Qdrant cleanup.
+            err_str = str(exc)
+            if "410" in err_str or "Resource has been deleted" in err_str:
+                self.log.info(
+                    "Event %s/%s already deleted on Google (410) - proceeding with local cleanup.",
+                    calendar_id, actual_event_id,
+                )
+            else:
+                raise  # Re-raise unexpected errors
+
+        # Always clean up PostgreSQL, tasks, and Qdrant regardless of Google's response
+        self._repository._delete_cal_event_cleanup(user_id, calendar_id, actual_event_id)
+
+
+def _day_bounds(date_str: str) -> Tuple[datetime, datetime]:
+    """
+    Half-open local-timezone day window [midnight, next midnight), shared by the
+    cached read and the Google fallback so both cover the same instants.
+
+    Raises ValueError on a malformed date, as the Google path always did.
+    """
+    target_date = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+    day_start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=TIMEZONE)
+    return day_start, day_start + timedelta(days=1)
+
+
+calendar_service = CalendarService()
+
+
+# ── Module-level shims: keep every existing import path working ───────────────
+
+def get_events_for_frontend(user_id: Optional[str] = None, force_refresh: bool = False) -> List[Dict]:
+    return calendar_service.get_events_for_frontend(user_id=user_id, force_refresh=force_refresh)
+
 
 def get_events_on_date(date_str: str, user_id: Optional[str] = None) -> List[Dict]:
-    """
-    Return a slim list of events on a specific date.
-    Reads from DB first (Groq-token-friendly); falls back to Google API.
-    """
-    try:
-        target_date = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
-        day_start   = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=TIMEZONE)
-        day_end     = datetime.combine(target_date, datetime.max.time()).replace(tzinfo=TIMEZONE)
-
-        # Try DB read - only personal events for the agent
-        if user_id:
-            conn = _get_conn()
-            try:
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT e.google_event_id, e.title, e.start_at, c.name, c.google_cal_id, c.calendar_type
-                    FROM public.cal_events e
-                    JOIN public.cal_calendars c ON c.id = e.calendar_id
-                    WHERE e.user_id     = %s
-                      AND e.start_at   >= %s
-                      AND e.start_at   <= %s
-                      AND e.deleted_at IS NULL
-                      AND c.calendar_type IN ('personal', 'shared')
-                    ORDER BY e.start_at
-                    """,
-                    (user_id, day_start, day_end),
-                )
-                rows = cur.fetchall() or []
-                cur.close()
-                if rows:
-                    return [
-                        {
-                            "summary":  r[1],
-                            "start":    _to_local(r[2]).isoformat(),
-                            "id":       r[0],
-                            "calendar": r[3],
-                        }
-                        for r in rows
-                    ]
-            except Exception:
-                pass
-            finally:
-                conn.close()
-    except Exception:
-        pass
-
-    # Fallback: Google API
-    service = get_calendar_service(user_id=user_id)
-    target_date = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
-    day_start   = datetime.combine(target_date, datetime.strptime("00:00", "%H:%M").time()).replace(tzinfo=TIMEZONE)
-    day_end     = datetime.combine(target_date, datetime.strptime("23:59", "%H:%M").time()).replace(tzinfo=TIMEZONE)
-
-    events = fetch_events_across_selected_calendars(
-        service, day_start.isoformat(), day_end.isoformat(),
-        selected_calendars=list_selected_calendars(service),
-    )
-    return [
-        {
-            "summary":  event.get("summary", "(No title)"),
-            "start":    event["start"].get("dateTime", event["start"].get("date")),
-            "id":       event.get("id"),
-            "calendar": event.get("_calendar_summary", "Primary"),
-        }
-        for event in events
-    ]
+    return calendar_service.get_events_on_date(date_str, user_id=user_id)
 
 
 def list_events_in_window(
@@ -299,124 +408,23 @@ def list_events_in_window(
     lookahead_days: int = 8,
     user_id: Optional[str] = None,
 ) -> List[Dict]:
-    """
-    List personal events in a window around now.
-    Reads from DB when possible; falls back to Google API.
-    Used by the AI agent tools (holidays excluded).
-    """
-    now         = datetime.now(TIMEZONE)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    window_start = today_start - timedelta(days=lookback_days)
-    window_end   = today_start + timedelta(days=lookahead_days + 1)
-
-    # Try DB first
-    if user_id:
-        conn = _get_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT e.google_event_id, e.title, e.start_at, c.name, c.google_cal_id
-                FROM public.cal_events e
-                JOIN public.cal_calendars c ON c.id = e.calendar_id
-                WHERE e.user_id     = %s
-                  AND e.start_at   >= %s
-                  AND e.start_at   <  %s
-                  AND e.deleted_at IS NULL
-                  AND c.calendar_type IN ('personal', 'shared')
-                ORDER BY e.start_at
-                """,
-                (user_id, window_start, window_end),
-            )
-            rows = cur.fetchall() or []
-            cur.close()
-            if rows:
-                return [
-                    {
-                        "summary":  r[1],
-                        "start":    _to_local(r[2]).isoformat(),
-                        "id":       r[0],
-                        "calendar": r[3],
-                    }
-                    for r in rows
-                ]
-        except Exception:
-            pass
-        finally:
-            conn.close()
-
-    # Fallback: Google API
-    service = get_calendar_service(user_id=user_id)
-    time_min = window_start.isoformat()
-    time_max = window_end.isoformat()
-    events   = fetch_events_across_selected_calendars(
-        service, time_min, time_max,
-        selected_calendars=list_selected_calendars(service),
+    return calendar_service.list_events_in_window(
+        lookback_days=lookback_days,
+        lookahead_days=lookahead_days,
+        user_id=user_id,
     )
-    return [
-        {
-            "summary":  event.get("summary", "(No title)"),
-            "start":    event["start"].get("dateTime", event["start"].get("date")),
-            "id":       event.get("id"),
-            "calendar": event.get("_calendar_summary", "Primary"),
-        }
-        for event in events
-    ]
 
-
-# ── Event mutations (create / update / delete) ────────────────────────────────
 
 def create_event_from_payload(payload, user_id: Optional[str] = None) -> Dict:
-    service = get_calendar_service(user_id=user_id)
-    body    = _build_google_event_body(payload)
-    created = service.events().insert(calendarId="primary", body=body).execute()
-    created["_calendar_id"]         = "primary"
-    created["_calendar_type"]       = "personal"
-    created.setdefault("_calendar_summary", "Primary")
-    created.setdefault("status", "confirmed")
-    _persist_mutated_event(user_id, service, created)
-    _sync_calendar_event_to_task(user_id, created)
-    return _format_event_for_frontend(created)
+    return calendar_service.create_event_from_payload(payload, user_id=user_id)
 
 
 def update_event_from_payload(event_id: str, payload, user_id: Optional[str] = None) -> Dict:
-    service = get_calendar_service(user_id=user_id)
-    calendar_id, actual_event_id = _parse_calendar_event_id(event_id)
-    body    = _build_google_event_body(payload)
-    updated = (
-        service.events()
-        .patch(calendarId=calendar_id, eventId=actual_event_id, body=body)
-        .execute()
-    )
-    updated["_calendar_id"]         = calendar_id
-    updated["_calendar_type"]       = "personal"
-    updated.setdefault("_calendar_summary", "Primary")
-    updated.setdefault("status", "confirmed")
-    _persist_mutated_event(user_id, service, updated)
-    _sync_calendar_event_to_task(user_id, updated)
-    return _format_event_for_frontend(updated)
+    return calendar_service.update_event_from_payload(event_id, payload, user_id=user_id)
 
 
 def delete_event_by_id(event_id: str, user_id: Optional[str] = None) -> None:
-    service = get_calendar_service(user_id=user_id)
-    calendar_id, actual_event_id = _parse_calendar_event_id(event_id)
-
-    try:
-        service.events().delete(calendarId=calendar_id, eventId=actual_event_id).execute()
-    except Exception as exc:
-        # HTTP 410 Gone means the event was already deleted on Google's side.
-        # Treat as success and proceed with local DB / task / Qdrant cleanup.
-        err_str = str(exc)
-        if "410" in err_str or "Resource has been deleted" in err_str:
-            log.info(
-                "Event %s/%s already deleted on Google (410) - proceeding with local cleanup.",
-                calendar_id, actual_event_id,
-            )
-        else:
-            raise  # Re-raise unexpected errors
-
-    # Always clean up PostgreSQL, tasks, and Qdrant regardless of Google's response
-    _delete_cal_event_cleanup(user_id, calendar_id, actual_event_id)
+    calendar_service.delete_event_by_id(event_id, user_id=user_id)
 
 
 # Public facade: names re-exported from the sibling modules above so existing
@@ -445,7 +453,8 @@ __all__ = [
     "_is_excluded_google_special_event", "_is_user_related_meeting",
     "_format_event_for_frontend", "_build_google_event_body",
     # repository
-    "CACHE_TTL_MINUTES", "_is_cache_fresh_for_month", "_read_month_events_from_db",
+    "CACHE_TTL_MINUTES", "read_events_between",
+    "_is_cache_fresh_for_month", "_read_month_events_from_db",
     "_ensure_cal_calendar", "_upsert_cal_event", "_upsert_cal_attendees",
     "_store_cal_event", "_persist_mutated_event", "_prune_cal_events_outside_month",
     "_reconcile_deleted_events_for_month", "_delete_cal_event_cleanup",
@@ -456,7 +465,8 @@ __all__ = [
     "is_duplicate_event", "create_calendar_event", "delete_calendar_event",
     "find_events_by_description", "delete_event_by_description",
     "modify_event_by_description", "find_free_slots",
-    # local orchestration entrypoints
+    # local orchestration (class + singleton + shims)
+    "CalendarService", "calendar_service",
     "get_events_for_frontend", "get_events_on_date", "list_events_in_window",
     "create_event_from_payload", "update_event_from_payload", "delete_event_by_id",
 ]

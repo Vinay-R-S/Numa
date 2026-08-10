@@ -1,13 +1,17 @@
 import { create } from "zustand"
-import {
+import { ApiError } from "@/lib/http"
+import type {
+  AgentChatMessage,
   CalendarEvent,
   CalendarEventPayload,
-  AgentChatMessage,
-  fetchCalendarEvents,
+} from "@/features/calendar/calendar.types"
+import {
   createCalendarEvent,
-  updateCalendarEvent,
   deleteCalendarEvent,
-} from "@/components/calendar/api"
+  fetchCalendarEvents,
+  updateCalendarEvent,
+} from "@/features/calendar/calendar.api"
+import { toEventPayload } from "@/features/calendar/calendar.transforms"
 import { loadSessionMessages, saveSessionMessages } from "@/lib/useSessionMessages"
 
 const CALENDAR_AGENT_SESSION_KEY = "numa:session:calendar-agent-chat"
@@ -68,12 +72,12 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
       const data = await fetchCalendarEvents(forceFresh ? { refresh: true } : undefined)
       set({ events: data, lastFetchedAt: now, calendarConnected: true })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to load calendar events"
-      if (msg === "CALENDAR_NOT_CONNECTED") {
-        // Not an error - just not connected yet. Let the UI show the reconnect prompt.
+      // A 401 from /calendar/events means the Google token is missing or expired:
+      // not an error, just not connected. Let the UI show the reconnect prompt.
+      if (err instanceof ApiError && err.status === 401) {
         set({ calendarConnected: false, events: [] })
       } else {
-        set({ error: msg })
+        set({ error: err instanceof Error ? err.message : "Failed to load calendar events" })
       }
     } finally {
       set({ loading: false })
@@ -118,14 +122,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     }))
 
     try {
-      const payload: CalendarEventPayload = {
-        title: event.title,
-        date: event.date.toISOString().slice(0, 10),
-        startTime: event.startTime,
-        endTime: event.endTime,
-        description: event.description,
-      }
-      const updated = await updateCalendarEvent(event.id, payload)
+      const updated = await updateCalendarEvent(event.id, toEventPayload(event))
       set((state) => ({
         events: state.events.map((e) => (e.id === updated.id ? updated : e)),
       }))
