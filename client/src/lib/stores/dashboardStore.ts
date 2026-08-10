@@ -1,49 +1,6 @@
 import { create } from "zustand"
-
-interface DashboardStats {
-  tasks: {
-    total: number
-    completed: number
-    inprogress: number
-    pending: number
-    today?: {
-      total: number
-      completed: number
-      inprogress: number
-      pending: number
-    }
-    streak: number
-    recent: Array<{
-      title: string
-      status: string
-      priority?: string
-      source_name?: string
-    }>
-  }
-  calendar: {
-    today_events: number
-    upcoming: Array<{ title: string; start_at: string; end_at: string }>
-  }
-  slack: { messages_7d: number; active_channels: number }
-  health: {
-    steps?: number
-    active_minutes?: number
-    calories?: number
-    sleep_hours?: number
-    distance_km?: number
-    heart_rate_bpm?: number
-    heart_points?: number
-  }
-  health_weekly: Array<{
-    date: string
-    label: string
-    steps: number
-    calories: number
-    distance_km: number
-  }>
-  github: { connected: boolean; username?: string | null }
-  journal: { has_today: boolean; today_mood?: string | null; streak: number }
-}
+import { fetchDashboardStats } from "@/features/dashboard/dashboard.api"
+import type { DashboardStats } from "@/features/dashboard/dashboard.types"
 
 interface DashboardStore {
   stats: DashboardStats | null
@@ -55,8 +12,6 @@ interface DashboardStore {
   invalidate: () => void
   clearError: () => void
 }
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 const STALE_THRESHOLD = 60 * 1000
 
@@ -83,15 +38,7 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
 
     try {
       set({ error: null })
-      const token =
-        typeof window !== "undefined"
-          ? localStorage.getItem("numa_token")
-          : null
-      const res = await fetch(`${API_BASE}/api/dashboard/stats`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data: DashboardStats = await res.json()
+      const data = await fetchDashboardStats()
       set({ stats: data, lastFetched: Date.now() })
     } catch (err) {
       const msg =
