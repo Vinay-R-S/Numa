@@ -1,10 +1,12 @@
 "use client"
 
-import { Clock, Calendar, Zap, Plus } from "lucide-react"
-import { CalendarEvent } from "@/components/calendar/api"
+import type { ReactNode } from "react"
+import { Calendar, Clock, Plus, Zap } from "lucide-react"
+
+import type { CalendarEvent } from "../calendar.types"
 
 interface Suggestion {
-  icon: React.ReactNode
+  icon: ReactNode
   label: string
   query: string
   category: "quick" | "event" | "time"
@@ -16,9 +18,7 @@ interface AgentSuggestionsProps {
 }
 
 function getSmartSuggestions(events: CalendarEvent[]): Suggestion[] {
-  const now = new Date()
-
-  const quickActions: Suggestion[] = [
+  const suggestions: Suggestion[] = [
     {
       icon: <Plus className="h-3 w-3" />,
       label: "Schedule meeting tomorrow at 10 AM",
@@ -39,21 +39,21 @@ function getSmartSuggestions(events: CalendarEvent[]): Suggestion[] {
     },
   ]
 
-  const upcomingEvents = events
-    .filter((e) => e.date >= now)
+  const now = new Date()
+  const [nextEvent] = events
+    .filter((event) => event.date >= now)
     .sort((a, b) => a.date.getTime() - b.date.getTime())
-    .slice(0, 1)
 
-  if (upcomingEvents.length > 0) {
-    quickActions.push({
+  if (nextEvent) {
+    suggestions.push({
       icon: <Zap className="h-3 w-3" />,
-      label: `Reschedule ${upcomingEvents[0].title}`,
-      query: `Reschedule "${upcomingEvents[0].title}" to tomorrow at 2 PM`,
+      label: `Reschedule ${nextEvent.title}`,
+      query: `Reschedule "${nextEvent.title}" to tomorrow at 2 PM`,
       category: "event",
     })
   }
 
-  return quickActions
+  return suggestions
 }
 
 export function AgentSuggestions({ events, onSelectSuggestion }: AgentSuggestionsProps) {
@@ -65,14 +65,14 @@ export function AgentSuggestions({ events, onSelectSuggestion }: AgentSuggestion
         Quick Actions
       </p>
       <div className="flex flex-wrap gap-1.5">
-        {suggestions.slice(0, 4).map((suggestion, index) => (
+        {suggestions.slice(0, 4).map((suggestion) => (
           <button
-            key={index}
+            key={suggestion.query}
             onClick={() => onSelectSuggestion(suggestion.query)}
             className="flex items-center gap-1.5 rounded-full border border-border/30 bg-muted/20 px-2.5 py-1 text-[11px] text-foreground/80 transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-foreground"
           >
             <span className="text-primary">{suggestion.icon}</span>
-            <span className="truncate max-w-[150px]">{suggestion.label}</span>
+            <span className="max-w-[150px] truncate">{suggestion.label}</span>
           </button>
         ))}
       </div>

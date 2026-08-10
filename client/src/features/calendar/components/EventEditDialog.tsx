@@ -1,9 +1,12 @@
 "use client"
 
 import { useState } from "react"
-import { X, Calendar } from "lucide-react"
+import { Calendar, X } from "lucide-react"
+
 import { Button } from "@/components/ui/button"
-import { CalendarEvent } from "@/components/calendar/api"
+import { calendarEventUpsertSchema } from "../calendar.schema"
+import { toDateParam } from "../calendar.utils"
+import type { CalendarEvent } from "../calendar.types"
 
 interface EventEditDialogProps {
   event: CalendarEvent
@@ -15,23 +18,38 @@ interface EventEditDialogProps {
 export function EventEditDialog({ event, onClose, onSave, onDelete }: EventEditDialogProps) {
   const [title, setTitle] = useState(event.title)
   const [description, setDescription] = useState(event.description)
-  const [date, setDate] = useState(event.date.toISOString().slice(0, 10))
+  const [date, setDate] = useState(toDateParam(event.date))
   const [startTime, setStartTime] = useState(event.startTime)
   const [endTime, setEndTime] = useState(event.endTime)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleSave = async () => {
-    if (!title.trim() || loading) return
+    if (loading) return
 
+    const parsed = calendarEventUpsertSchema.safeParse({
+      title,
+      date,
+      startTime,
+      endTime,
+      description: description.trim(),
+    })
+
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Check the event details")
+      return
+    }
+
+    setError(null)
     setLoading(true)
     try {
       await onSave({
         ...event,
-        title: title.trim(),
-        description: description.trim(),
-        date: new Date(date),
-        startTime,
-        endTime,
+        title: parsed.data.title,
+        description: parsed.data.description,
+        date: new Date(parsed.data.date),
+        startTime: parsed.data.startTime,
+        endTime: parsed.data.endTime,
       })
       onClose()
     } catch (error) {
@@ -136,29 +154,18 @@ export function EventEditDialog({ event, onClose, onSave, onDelete }: EventEditD
             </div>
           </div>
 
+          {error && <p className="text-xs text-destructive">{error}</p>}
+
           <div className="flex gap-2 pt-2">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={onClose}
-              disabled={loading}
-            >
+            <Button variant="outline" className="flex-1" onClick={onClose} disabled={loading}>
               Cancel
             </Button>
             {!event.readonly && (
-              <Button
-                variant="destructive"
-                onClick={handleDelete}
-                disabled={loading}
-              >
+              <Button variant="destructive" onClick={handleDelete} disabled={loading}>
                 Delete
               </Button>
             )}
-            <Button
-              className="flex-1"
-              onClick={handleSave}
-              disabled={!title.trim() || loading}
-            >
+            <Button className="flex-1" onClick={handleSave} disabled={!title.trim() || loading}>
               {loading ? "Saving..." : "Save"}
             </Button>
           </div>
