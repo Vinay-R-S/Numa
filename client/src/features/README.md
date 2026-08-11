@@ -50,6 +50,6 @@ in the feature's `api.ts` (they are intentionally not in the shared client):
 | `components/journal/journalApi.ts` | `features/journal/journal.api.ts` |
 | `components/productivity/productivityApi.ts` | `features/productivity/productivity.api.ts` |
 | `components/agents/masterAgentApi.ts` | `features/agents/masterAgent.api.ts` |
-| `components/agents/slackAgentApi.ts` | `features/slack/slackAgent.api.ts` |
+| `components/agents/slackAgentApi.ts` | `features/slack/slack.api.ts` |
 | `components/calendar/api.ts` | `features/calendar/calendar.api.ts` |
 | `components/tasklist/api.ts` | `features/tasks/tasks.api.ts` |

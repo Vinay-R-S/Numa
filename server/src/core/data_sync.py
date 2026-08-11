@@ -80,7 +80,7 @@ def fetch_latest_for_user(user_id: str) -> Dict:
             result["calendar"] = {"ok": False, "fetched": 0, "detail": detail}
 
     try:
-        from src.slack_agent.router import fetch_latest_slack_for_user
+        from src.slack_agent.events import fetch_latest_slack_for_user
 
         result["slack"] = fetch_latest_slack_for_user(user_id)
     except Exception as exc:
@@ -130,7 +130,7 @@ def connected_user_ids() -> list[str]:
         _log_sync_exception("Could not list connected calendar users: %s", exc)
 
     try:
-        from src.slack_agent.router import get_all_connected_slack_user_ids
+        from src.slack_agent.persistence import get_all_connected_slack_user_ids
 
         users.update(get_all_connected_slack_user_ids())
     except Exception as exc:
@@ -151,9 +151,9 @@ def fetch_latest_for_users(user_ids: Optional[Iterable[str]] = None) -> Dict:
     results = [fetch_latest_for_user(user_id) for user_id in target_user_ids]
 
     try:
-        from src.slack_agent.router import purge_old_slack_messages
+        from src.slack_agent.service import slack_service
 
-        slack_purge = purge_old_slack_messages()
+        slack_purge = slack_service.purge_old_messages()
     except Exception as exc:
         _log_sync_exception("Slack purge failed after fetch: %s", exc)
         detail = _dependency_unavailable_detail("Slack purge") if _is_transient_dependency_error(exc) else str(exc)

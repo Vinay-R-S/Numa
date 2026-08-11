@@ -18,6 +18,9 @@ import type {
   Viewport,
 } from "./calendar.types"
 
+// One home for the fetch-abort check: lib/http owns it.
+export { isAbortError } from "@/lib/http"
+
 export function isSameDay(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&
@@ -122,10 +125,6 @@ export function filterEventsByQuery(events: CalendarEvent[], query: string): Cal
       event.description.toLowerCase().includes(term) ||
       (event.calendarName ?? "").toLowerCase().includes(term)
   )
-}
-
-export function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError"
 }
 
 export function timelineItemState(
