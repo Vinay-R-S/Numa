@@ -1,5 +1,5 @@
-"""Slack Web API helpers: user-name resolution and channel lookup (NUMA-105 P3,
-PLAN 16.2).
+"""Slack Web API helpers: user-name resolution, channel lookup and message post
+(NUMA-105 P3 / NUMA-115 P4, PLAN 16.2).
 
 Holds the in-process workspace user-name cache. Extracted verbatim from
 slack_agent/router.py; router.py re-exports these names.
@@ -131,6 +131,26 @@ def _cache_workspace_user_names(client: httpx.Client, token: str, team_id: str) 
         cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
         if not cursor:
             return
+
+
+def post_chat_message(
+    token: str,
+    channel_id: str,
+    text: str,
+    thread_ts: Optional[str] = None,
+) -> dict:
+    """POST chat.postMessage and return the raw Slack response body."""
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.post(
+            "https://slack.com/api/chat.postMessage",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "channel": channel_id,
+                "text": text,
+                **({"thread_ts": thread_ts} if thread_ts else {}),
+            },
+        )
+    return resp.json()
 
 
 def _resolve_channel_name(channel_id: str, team_id: Optional[str] = None) -> Optional[str]:

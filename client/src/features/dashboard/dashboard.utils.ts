@@ -18,6 +18,5 @@ export function formatWeeklyMetric(value: number, metric: string | number): stri
   return `${formatCompactValue(value)} steps`
 }
 
-export function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError"
-}
+// One home for the fetch-abort check: lib/http owns it.
+export { isAbortError } from "@/lib/http"

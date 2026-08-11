@@ -37,11 +37,19 @@ export interface RequestOptions<T> {
   cache?: RequestCache
   schema?: ZodType<T>
   errorMessage?: string
+  /** Abort the request if the response headers do not arrive in time. */
+  timeoutMs?: number
+  /** Message thrown when `timeoutMs` elapses. Caller-abort still throws AbortError. */
+  timeoutMessage?: string
 }
 
-function authToken(): string | null {
+export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null
   return localStorage.getItem(TOKEN_KEY)
+}
+
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
 }
 
 function withQuery(url: string, query?: QueryParams): string {
@@ -89,21 +97,69 @@ async function extractDetail(res: Response, fallback: string): Promise<string> {
   return fallback
 }
 
+/**
+ * Runs the fetch under an optional timeout. The timer is disarmed as soon as
+ * the response headers arrive, so reading and parsing a slow body is never
+ * counted against the deadline.
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs?: number,
+  timeoutMessage?: string
+): Promise<Response> {
+  if (!timeoutMs) return fetch(url, init)
+
+  const controller = new AbortController()
+  const callerSignal = init.signal
+  const abortFromCaller = () => controller.abort()
+  callerSignal?.addEventListener("abort", abortFromCaller, { once: true })
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (!callerSignal?.aborted && isAbortError(error)) {
+      throw new Error(timeoutMessage || "Request timed out")
+    }
+    throw error
+  } finally {
+    callerSignal?.removeEventListener("abort", abortFromCaller)
+    clearTimeout(timeoutId)
+  }
+}
+
 export async function request<T>(path: string, options: RequestOptions<T> = {}): Promise<T> {
-  const { method = "GET", body, query, headers, signal, cache, schema, errorMessage } = options
-  const token = authToken()
+  const {
+    method = "GET",
+    body,
+    query,
+    headers,
+    signal,
+    cache,
+    schema,
+    errorMessage,
+    timeoutMs,
+    timeoutMessage,
+  } = options
+  const token = getAuthToken()
 
   const finalHeaders = new Headers(headers)
   if (token && !finalHeaders.has("Authorization")) finalHeaders.set("Authorization", `Bearer ${token}`)
   if (isJsonBody(body) && !finalHeaders.has("Content-Type")) finalHeaders.set("Content-Type", "application/json")
 
-  const res = await fetch(buildUrl(path, query), {
-    method,
-    headers: finalHeaders,
-    body: isJsonBody(body) ? JSON.stringify(body) : (body as BodyInit | undefined),
-    signal,
-    cache,
-  })
+  const res = await fetchWithTimeout(
+    buildUrl(path, query),
+    {
+      method,
+      headers: finalHeaders,
+      body: isJsonBody(body) ? JSON.stringify(body) : (body as BodyInit | undefined),
+      signal,
+      cache,
+    },
+    timeoutMs,
+    timeoutMessage
+  )
 
   if (!res.ok) {
     const fallback = errorMessage || res.statusText || `Request failed (${res.status})`

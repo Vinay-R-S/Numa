@@ -21,16 +21,15 @@ import {
   getLocalAiEnabled,
   setLocalAiEnabled,
 } from "@/lib/aiSettings"
+// Deep imports on purpose: the feature barrels re-export hooks and components,
+// which would pull those whole UIs into this route's bundle for two fetchers.
 import {
   checkCalendarTokenHealth,
   getGoogleCalendarAuthorizationUrl,
-  type TokenHealthResult,
-} from "@/features/calendar"
-import {
-  connectSlack,
-  getSlackStatus,
-  type SlackStatus,
-} from "@/components/agents/slackAgentApi"
+} from "@/features/calendar/calendar.api"
+import type { TokenHealthResult } from "@/features/calendar/calendar.types"
+import { connectSlack, getSlackStatus } from "@/features/slack/slack.api"
+import type { SlackStatus } from "@/features/slack/slack.types"
 
 function clampInteger(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback

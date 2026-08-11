@@ -275,7 +275,7 @@ def _extract_and_create_task(text: str, ts: Optional[str], user_id: str):
             "format_instructions": parser.get_format_instructions(),
         })
         if result.is_actionable and result.task_title:
-            from .service import _insert_task_from_slack
+            from .agent import _insert_task_from_slack
             _insert_task_from_slack(
                 user_id=user_id,
                 title=result.task_title,
