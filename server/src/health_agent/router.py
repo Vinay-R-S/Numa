@@ -3,20 +3,24 @@ Health Sub-Agent FastAPI Router
 ================================
 Endpoints
 ---------
-GET  /health-agent/status         - Check Google Fit + Strava config
-GET  /health-agent/snapshots      - Fetch stored snapshots (7+1 day window)
+GET  /health-agent/status          - Check Google Fit + Strava config
+GET  /health-agent/snapshots       - Fetch stored snapshots (7+1 day window)
+GET  /health-agent/intraday        - Hourly buckets for one day
 POST /health-agent/sync/google-fit - Sync today's Google Fit data to Supabase
-POST /health-agent/sync/strava    - Sync today's Strava data to Supabase
-POST /health-agent/chat           - Invoke Health sub-agent (LangGraph)
-POST /health-agent/purge          - Manual purge of old snapshots (internal)
+POST /health-agent/sync/strava     - Sync today's Strava data to Supabase
+POST /health-agent/sync/all        - Sync the recent window from both providers
+POST /health-agent/chat            - Invoke Health sub-agent (LangGraph)
+POST /health-agent/internal/purge  - Manual purge of old snapshots (internal)
 
 Storage
 -------
 health_snapshots table: one row per (user, source, date). Rolling 7+1 day window.
 Purged automatically at 8 AM daily via APScheduler.
 
-Thin routing layer (NUMA-108 P3, PLAN 16.6): helpers live in utils.py, DB/vector
-persistence in persistence.py, provider sync in sync.py, the agent in service.py.
+Thin routing layer (NUMA-108 P3 / NUMA-116 P4, PLAN 2.1 / 16.6 / 18): helpers
+live in utils.py, DB/vector persistence in persistence.py, provider sync in
+sync.py, the LangGraph agent in agent.py, and the orchestration behind these
+routes in the `Depends`-injected `HealthService`.
 """
 from __future__ import annotations
 
@@ -27,46 +31,43 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth.dependencies import get_current_user
-from .persistence import (
-    get_health_intraday_snapshot,
-    get_health_snapshots,
-    purge_old_health_snapshots,
-)
+from ..core.errors import AppError
 from .schemas import (
     HealthChatRequest,
     HealthChatResponse,
     HealthIntradayOut,
-    HealthIntradayBucketOut,
     HealthSnapshotOut,
     HealthStatusOut,
     HealthSyncOut,
 )
-from .sync import (
-    _get_user_timezone,
-    _is_google_fit_configured,
-    _is_strava_configured,
-    sync_google_fit_for_user,
-    sync_health_for_user,
-    sync_strava_for_user,
-)
-from .utils import _bucket_for_api, _empty_intraday_buckets, _intraday_bounds
+from .service import HealthService, health_service, run_health_agent_chat  # noqa: F401  re-exported
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/health-agent", tags=["health-agent"])
 
 
+def get_health_service() -> HealthService:
+    return health_service
+
+
+def _require_user_id(current_user: dict) -> str:
+    user_id = current_user.get("sub") if isinstance(current_user, dict) else None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    return str(user_id)
+
+
+def _http_error(exc: AppError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
 @router.get("/status", response_model=HealthStatusOut)
-def health_status(current_user: dict = Depends(get_current_user)):
-    user_id = current_user.get("sub")
-    snapshots = get_health_snapshots(user_id or "", days=8) if user_id else []
-    today_count = sum(1 for s in snapshots if s.get("snapshot_date") == date.today())
-    return HealthStatusOut(
-        google_fit_configured=_is_google_fit_configured(),
-        strava_configured=_is_strava_configured(),
-        snapshots_today=today_count,
-        total_snapshots=len(snapshots),
-    )
+def health_status(
+    current_user: dict = Depends(get_current_user),
+    service: HealthService = Depends(get_health_service),
+):
+    return HealthStatusOut(**service.get_status(current_user.get("sub")))
 
 
 @router.get("/snapshots", response_model=List[HealthSnapshotOut])
@@ -74,34 +75,10 @@ def get_snapshots(
     source: Optional[str] = Query(None, description="google_fit or strava"),
     days: int = Query(8, ge=1, le=30),
     current_user: dict = Depends(get_current_user),
+    service: HealthService = Depends(get_health_service),
 ):
-    user_id = current_user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    rows = get_health_snapshots(user_id, source=source, days=days)
-    return [
-        HealthSnapshotOut(
-            id=str(r["id"]),
-            user_id=str(r["user_id"]),
-            source=r["source"],
-            snapshot_date=r["snapshot_date"],
-            steps=r.get("steps"),
-            active_minutes=r.get("active_minutes"),
-            calories=r.get("calories"),
-            distance_km=r.get("distance_km"),
-            sleep_hours=r.get("sleep_hours"),
-            heart_rate_bpm=r.get("heart_rate_bpm"),
-            heart_points=r.get("heart_points"),
-            sleep_start_at=r.get("sleep_start_at"),
-            sleep_end_at=r.get("sleep_end_at"),
-            sleep_stages=r.get("sleep_stages"),
-            sleep_segments=r.get("sleep_segments"),
-            activities=r.get("activities"),
-            created_at=r.get("created_at"),
-            updated_at=r.get("updated_at"),
-        )
-        for r in rows
-    ]
+    rows = service.list_snapshots(_require_user_id(current_user), source=source, days=days)
+    return [HealthSnapshotOut(**row) for row in rows]
 
 
 @router.get("/intraday", response_model=HealthIntradayOut)
@@ -109,94 +86,60 @@ def get_intraday(
     snapshot_date: date = Query(..., description="Date to load in YYYY-MM-DD format"),
     source: str = Query("google_fit", description="google_fit"),
     current_user: dict = Depends(get_current_user),
+    service: HealthService = Depends(get_health_service),
 ):
-    user_id = current_user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    if source != "google_fit":
-        raise HTTPException(status_code=400, detail="Intraday health data is currently available for Google Fit only")
-
-    tz = _get_user_timezone(user_id)
-    row = get_health_intraday_snapshot(user_id, snapshot_date=snapshot_date, source=source)
-    if not row:
-        window_start_at, window_end_at = _intraday_bounds(snapshot_date, tz)
-        buckets = _empty_intraday_buckets(window_start_at, window_end_at)
-        return HealthIntradayOut(
-            id=None,
-            user_id=user_id,
-            source=source,
+    try:
+        data = service.get_intraday(
+            _require_user_id(current_user),
             snapshot_date=snapshot_date,
-            window_start_at=window_start_at,
-            window_end_at=window_end_at,
-            bucket_minutes=60,
-            steps=0,
-            calories=0,
-            distance_km=0,
-            buckets=[HealthIntradayBucketOut(**_bucket_for_api(bucket, tz)) for bucket in buckets],
+            source=source,
         )
+    except AppError as exc:
+        raise _http_error(exc) from exc
 
-    buckets = row.get("buckets") or []
-    return HealthIntradayOut(
-        id=str(row["id"]),
-        user_id=str(row["user_id"]),
-        source=row["source"],
-        snapshot_date=row["snapshot_date"],
-        window_start_at=row["window_start_at"],
-        window_end_at=row["window_end_at"],
-        bucket_minutes=row["bucket_minutes"],
-        steps=row.get("steps") or 0,
-        calories=row.get("calories") or 0,
-        distance_km=row.get("distance_km") or 0,
-        buckets=[HealthIntradayBucketOut(**_bucket_for_api(bucket, tz)) for bucket in buckets],
-        created_at=row.get("created_at"),
-        updated_at=row.get("updated_at"),
-    )
+    return HealthIntradayOut(**data)
 
 
 @router.post("/sync/google-fit", response_model=HealthSyncOut)
-def sync_google_fit(current_user: dict = Depends(get_current_user)):
-    user_id = current_user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    result = sync_google_fit_for_user(user_id)
-    return HealthSyncOut(**result)
+def sync_google_fit(
+    current_user: dict = Depends(get_current_user),
+    service: HealthService = Depends(get_health_service),
+):
+    return HealthSyncOut(**service.sync_google_fit(_require_user_id(current_user)))
 
 
 @router.post("/sync/strava", response_model=HealthSyncOut)
-def sync_strava(current_user: dict = Depends(get_current_user)):
-    user_id = current_user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    result = sync_strava_for_user(user_id)
-    return HealthSyncOut(**result)
+def sync_strava(
+    current_user: dict = Depends(get_current_user),
+    service: HealthService = Depends(get_health_service),
+):
+    return HealthSyncOut(**service.sync_strava(_require_user_id(current_user)))
 
 
 @router.post("/sync/all")
-def sync_all(current_user: dict = Depends(get_current_user)):
-    user_id = current_user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    return sync_health_for_user(user_id)
+def sync_all(
+    current_user: dict = Depends(get_current_user),
+    service: HealthService = Depends(get_health_service),
+):
+    return service.sync_all(_require_user_id(current_user))
 
 
 @router.post("/chat", response_model=HealthChatResponse)
 def health_chat(
     request: HealthChatRequest,
     current_user: dict = Depends(get_current_user),
+    service: HealthService = Depends(get_health_service),
 ):
-    user_id = current_user.get("sub")
-    from .service import run_health_agent_chat
-    result = run_health_agent_chat(
+    result = service.chat(
         query=request.query,
         history=[m.model_dump() for m in request.history],
-        user_id=user_id,
+        user_id=current_user.get("sub"),
         model=request.model,
     )
     return HealthChatResponse(**result)
 
 
 @router.post("/internal/purge", include_in_schema=False)
-def purge_old_snapshots():
+def purge_old_snapshots(service: HealthService = Depends(get_health_service)):
     """Called by the APScheduler daily 8 AM job."""
-    deleted = purge_old_health_snapshots()
-    return {"ok": True, "deleted": deleted}
+    return service.purge_old_snapshots()
