@@ -16,7 +16,8 @@ from .service import DashboardService, dashboard_service
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+# Mounted at both /dashboard and /api/dashboard (main.py alias).
+router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 CACHE_HEADERS = {"Cache-Control": "private, max-age=30"}
 

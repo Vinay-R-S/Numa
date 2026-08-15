@@ -16,7 +16,8 @@ from .schemas import (
     JournalSummaryResponse,
 )
 
-router = APIRouter(prefix="/api/journal", tags=["journal"])
+# Mounted at both /journal and /api/journal (main.py alias).
+router = APIRouter(prefix="/journal", tags=["journal"])
 
 
 def _row_to_entry(d: dict) -> JournalEntryOut:

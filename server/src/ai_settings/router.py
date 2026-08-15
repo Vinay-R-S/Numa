@@ -21,7 +21,8 @@ from .schemas import (
     ProvidersListResponse,
 )
 
-router = APIRouter(prefix="/api/ai-settings", tags=["ai-settings"])
+# Mounted at both /ai-settings and /api/ai-settings (main.py alias).
+router = APIRouter(prefix="/ai-settings", tags=["ai-settings"])
 
 
 def _row_to_response(d: dict) -> AISettingsResponse:

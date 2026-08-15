@@ -1,325 +1,174 @@
-"""
-GitHub Sub-Agent Service - LangGraph agentic loop for GitHub queries.
+"""GitHub feature service (NUMA-117 P4, PLAN 2.1 / 5.2 / 21.1).
 
-Tools:
-  check_commits       - count commits today/this week
-  get_pr_status       - list open PRs
-  get_repo_stats      - recent repos with stars/forks
-  get_contribution_overview - full stats summary
+`GitHubService` owns the orchestration that used to sit inside the HTTP routes:
+the OAuth authorization URL and state handshake, the two connect paths (OAuth
+code exchange and personal access token), the connection status roll-up, the
+disconnect, and the stats read with its cache-first / live-fetch / fall-back-to-
+cache ladder. Dependencies (persistence readers, sync callables, the OAuth state
+store and the agent entrypoint) are injected through the constructor.
 
-Entry point:
-  run_github_agent_chat(query, history, user_id, model=None) -> Dict
+The LangGraph sub-agent moved to `agent.py`; its public entrypoint is re-exported
+here so `master_agent.orchestrator` keeps its existing import path.
+
+Errors: methods raise `core.errors.AppError` with the status code the route used
+to raise directly; `router._http_error` maps them back to HTTP.
 """
 from __future__ import annotations
 
-import importlib
-import logging
-import os
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Dict, List, Optional, Sequence, TypedDict
+import secrets
+from typing import Callable, Dict, List, MutableMapping, Optional
+from urllib.parse import urlencode
 
-import operator
-
-log = logging.getLogger(__name__)
-
-GITHUB_AGENT_SYSTEM_PROMPT = (
-    "You are NUMA GitHub sub-agent. You help users understand their GitHub activity - "
-    "commits, pull requests, repositories, and contribution stats. "
-    "Always use tools to fetch real data from the GitHub API - never fabricate numbers. "
-    "If GitHub is not connected, guide users to Settings to connect their account. "
-    "Keep responses concise and developer-friendly. Do not use emojis. Use plain Markdown when structure helps."
+from ..core.base import BaseService
+from ..core.errors import AppError
+from .agent import (  # noqa: F401  re-exported for existing import paths
+    GITHUB_AGENT_SYSTEM_PROMPT,
+    GitHubAgentState,
+    run_github_agent_chat,
 )
+from .config import GITHUB_OAUTH_URL, _get_github_config, _oauth_states
+from .persistence import (
+    _get_github_token,
+    _get_github_username,
+    _load_cached_github_stats,
+    disconnect_github_user,
+    get_connection_status,
+)
+from .schemas import GitHubUserStats
+from .sync import (
+    GitHubConnectError,
+    connect_github_via_oauth,
+    connect_github_via_token,
+    fetch_live_github_stats,
+)
+from .utils import _strip_internal_stats_fields
+
+OAUTH_SCOPES = "repo read:user user:email"
+OAUTH_STATE_BYTES = 32
 
 
-class GitHubAgentState(TypedDict):
-    messages: Annotated[Sequence[object], operator.add]
-    user_query: str
-    user_id: str
-    semantic_context: str
-    mutated: bool
+class GitHubService(BaseService):
+    """GitHub connection and contribution stats behind the /api/github routes."""
 
+    def __init__(
+        self,
+        read_token: Optional[Callable[[str], Optional[str]]] = None,
+        read_username: Optional[Callable[[str], Optional[str]]] = None,
+        read_status: Optional[Callable[[str], Optional[tuple]]] = None,
+        read_cached_stats: Optional[Callable[[str, str], Optional[Dict]]] = None,
+        disconnect_user: Optional[Callable[[str], None]] = None,
+        oauth_config: Optional[Callable[[], tuple]] = None,
+        oauth_states: Optional[MutableMapping[str, str]] = None,
+        connect_oauth: Optional[Callable[[str, str], None]] = None,
+        connect_token: Optional[Callable[[str, str], Dict]] = None,
+        fetch_live_stats: Optional[Callable[[str, str, str], Dict]] = None,
+        chat_agent: Optional[Callable[..., Dict]] = None,
+    ) -> None:
+        super().__init__()
+        self.read_token = read_token or _get_github_token
+        self.read_username = read_username or _get_github_username
+        self.read_status = read_status or get_connection_status
+        self.read_cached_stats = read_cached_stats or _load_cached_github_stats
+        self.disconnect_user = disconnect_user or disconnect_github_user
+        self.oauth_config = oauth_config or _get_github_config
+        self.oauth_states = _oauth_states if oauth_states is None else oauth_states
+        self.connect_oauth = connect_oauth or connect_github_via_oauth
+        self.connect_token = connect_token or connect_github_via_token
+        self.fetch_live_stats = fetch_live_stats or fetch_live_github_stats
+        self.chat_agent = chat_agent or run_github_agent_chat
 
-def _require_deps() -> Dict:
-    try:
-        msgs_mod = importlib.import_module("langchain_core.messages")
-        tools_mod = importlib.import_module("langchain_core.tools")
-        graph_mod = importlib.import_module("langgraph.graph")
-        return {
-            "AIMessage": getattr(msgs_mod, "AIMessage"),
-            "HumanMessage": getattr(msgs_mod, "HumanMessage"),
-            "SystemMessage": getattr(msgs_mod, "SystemMessage"),
-            "ToolMessage": getattr(msgs_mod, "ToolMessage"),
-            "tool": getattr(tools_mod, "tool"),
-            "StateGraph": getattr(graph_mod, "StateGraph"),
-            "END": getattr(graph_mod, "END"),
+    # ── OAuth ────────────────────────────────────────────────────────────────
+
+    def build_authorization_url(self, user_id: str) -> str:
+        """Register a one-shot state for the user and return the GitHub URL."""
+        client_id, _, redirect_uri = self.oauth_config()
+        if not client_id:
+            raise AppError("GITHUB_CLIENT_ID not configured", status_code=500)
+
+        state = secrets.token_urlsafe(OAUTH_STATE_BYTES)
+        self.oauth_states[state] = user_id
+
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": OAUTH_SCOPES,
+            "state": state,
         }
-    except Exception as exc:
-        raise RuntimeError(f"GitHub agent dependencies missing: {exc}") from exc
+        return f"{GITHUB_OAUTH_URL}?{urlencode(params)}"
 
+    def complete_oauth(self, code: str, state: str) -> None:
+        """Consume the state issued by `build_authorization_url` and store tokens."""
+        user_id = self.oauth_states.pop(state, None)
+        if not user_id:
+            raise AppError("Invalid or expired OAuth state", status_code=400)
 
-def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None):
-    from ..llm_factory import get_llm_with_fallback
-    return get_llm_with_fallback(
-        user_id=user_id,
-        agent_name="github",
-        priority="normal",
-        model=model_override,
-    )
+        try:
+            self.connect_oauth(user_id, code)
+        except GitHubConnectError as exc:
+            raise AppError(str(exc), status_code=400) from exc
 
-
-def _github_toolset(tool_decorator, user_id: str):
-    from .persistence import _get_github_token, _get_github_username
-    from ..tasks.agent_tools import make_task_tools
-
-    def _get_client():
-        token = _get_github_token(user_id)
+    def connect_with_token(self, user_id: str, access_token: str) -> Dict:
+        """Verify a personal access token and store it as the user's connection."""
+        token = (access_token or "").strip()
         if not token:
-            return None
-        from .github_client import GitHubClient
-        return GitHubClient(token)
-
-    @tool_decorator
-    def check_commits(period: str = "today") -> str:
-        """Check how many commits the user made today or this week.
-        period: 'today' or 'week'."""
-        client = _get_client()
-        if not client:
-            return "GitHub not connected. Go to Settings → Connect GitHub."
-        username = _get_github_username(user_id)
-        if not username:
-            return "GitHub username not found."
-
-        now = datetime.now(timezone.utc)
-        if period == "week":
-            since = now - timedelta(days=7)
-            label = "this week"
-        else:
-            since = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            label = "today"
-
-        count = client.get_commits_count(username, since)
-        return f"You have {count} commit(s) {label}."
-
-    @tool_decorator
-    def get_pr_status() -> str:
-        """Get the user's open pull requests across all repos."""
-        client = _get_client()
-        if not client:
-            return "GitHub not connected."
-        username = _get_github_username(user_id)
-        if not username:
-            return "GitHub username not found."
-
-        prs = client.get_open_prs(username)
-        if not prs:
-            return "No open pull requests."
-        lines = [f"Open PRs ({len(prs)}):"]
-        for pr in prs:
-            lines.append(f"  - {pr['title']} in {pr['repo']} ({pr['html_url']})")
-        return "\n".join(lines)
-
-    @tool_decorator
-    def get_repo_stats(count: int = 5) -> str:
-        """Get the user's most recently updated repositories with stats."""
-        client = _get_client()
-        if not client:
-            return "GitHub not connected."
-        repos = client.get_repos(per_page=min(count, 15))
-        if not repos:
-            return "No repositories found."
-        lines = [f"Recent repos ({len(repos)}):"]
-        for r in repos:
-            vis = "private" if r["private"] else "public"
-            lines.append(
-                f"  - {r['full_name']} ({vis}) | "
-                f"{r.get('language') or 'N/A'} | "
-                f"stars {r['stars']} | forks {r['forks']}"
-            )
-        return "\n".join(lines)
-
-    @tool_decorator
-    def get_contribution_overview() -> str:
-        """Get a full overview of the user's GitHub contributions: commits, PRs, repos, followers."""
-        client = _get_client()
-        if not client:
-            return "GitHub not connected."
-        username = _get_github_username(user_id)
-        if not username:
-            return "GitHub username not found."
-
-        stats = client.get_contribution_stats(username)
-        try:
-            from .persistence import _store_github_stats_vector
-            _store_github_stats_vector(user_id, stats)
-        except Exception:
-            pass
-        lines = [
-            f"GitHub: @{stats['username']}",
-            f"  Repos: {stats['public_repos']} public, {stats['private_repos']} private",
-            f"  Followers: {stats['followers']} | Following: {stats['following']}",
-            f"  Commits today: {stats['total_commits_today']}",
-            f"  Commits this week: {stats['total_commits_week']}",
-            f"  Open PRs: {stats['open_prs']}",
-        ]
-        return "\n".join(lines)
-
-    task_tools = make_task_tools(tool_decorator, user_id, source_name="GitHub")
-    return [check_commits, get_pr_status, get_repo_stats, get_contribution_overview] + task_tools
-
-
-from functools import lru_cache
-
-
-@lru_cache(maxsize=64)
-def _build_github_graph(user_id: str, model_override: Optional[str] = None):
-    deps = _require_deps()
-    AIMessage = deps["AIMessage"]
-    SystemMessage = deps["SystemMessage"]
-    ToolMessage = deps["ToolMessage"]
-    StateGraph = deps["StateGraph"]
-    END = deps["END"]
-
-    tools = _github_toolset(deps["tool"], user_id)
-    tool_map = {t.name: t for t in tools}
-
-    def call_model(state: GitHubAgentState) -> GitHubAgentState:
-        llm = _get_llm(model_override=model_override, user_id=user_id)
-        llm_with_tools = llm.bind_tools(tools)
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        sem = (state.get("semantic_context") or "").strip()
-        ctx = f"\nRelevant context:\n{sem}\n" if sem else ""
-        system = f"{GITHUB_AGENT_SYSTEM_PROMPT}\nCurrent time: {now}{ctx}"
-        full = [SystemMessage(content=system)] + list(state["messages"])
-        response = llm_with_tools.invoke(full)
-        return {**state, "messages": [response]}
-
-    def call_tools(state: GitHubAgentState) -> GitHubAgentState:
-        last = state["messages"][-1]
-        out = []
-        mutated = state["mutated"]
-        for tc in getattr(last, "tool_calls", []):
-            name, args, tid = tc.get("name"), tc.get("args", {}), tc.get("id")
-            if name not in tool_map:
-                result = f"Unknown tool '{name}'."
-            else:
-                try:
-                    result = tool_map[name].invoke(args)
-                except Exception as exc:
-                    result = f"Error: {exc}"
-            out.append(ToolMessage(content=str(result), tool_call_id=tid))
-        return {**state, "messages": out, "mutated": mutated}
-
-    def should_continue(state: GitHubAgentState):
-        last = state["messages"][-1]
-        rounds = sum(1 for m in state["messages"] if hasattr(m, "tool_calls") and m.tool_calls)
-        if rounds >= 6:
-            return "end"
-        if hasattr(last, "tool_calls") and last.tool_calls:
-            return "call_tools"
-        return "end"
-
-    wf = StateGraph(GitHubAgentState)
-    wf.add_node("call_model", call_model)
-    wf.add_node("call_tools", call_tools)
-    wf.set_entry_point("call_model")
-    wf.add_conditional_edges("call_model", should_continue, {"call_tools": "call_tools", "end": END})
-    wf.add_edge("call_tools", "call_model")
-    return wf.compile(), AIMessage
-
-
-def run_github_agent_chat(
-    query: str,
-    history: List[dict],
-    user_id: Optional[str],
-    model: Optional[str] = None,
-    preloaded_context: Optional[str] = None,
-) -> Dict:
-    if not user_id:
-        return {"response": "User session is missing.", "success": False,
-                "delegated_to": "github-subagent", "refresh_github": False}
-
-    from ..llm_factory import is_any_llm_configured
-    if not is_any_llm_configured(user_id):
-        return {"response": "GitHub sub-agent unavailable - no LLM configured. Go to Settings.",
-                "success": True, "delegated_to": "github-subagent", "refresh_github": False}
-
-    try:
-        deps = _require_deps()
-        HumanMessage = deps["HumanMessage"]
-        AIMessage = deps["AIMessage"]
+            raise AppError("GitHub token is required", status_code=400)
 
         try:
-            from ..memory.service import memory_service
-            if preloaded_context:
-                semantic_context = preloaded_context
-            else:
-                try:
-                    from ..context_assembler import assemble_context
-                    from ..data_planner import RetrievalPlan
+            return self.connect_token(user_id, token)
+        except GitHubConnectError as exc:
+            raise AppError(str(exc), status_code=400) from exc
 
-                    plan = RetrievalPlan(
-                        query=query,
-                        temporal_scope="week",
-                        domains=["github"],
-                        qdrant_collections=["github", "tasks", "memory"],
-                        days_per_domain={"github": 7, "tasks": 7},
-                        token_budget={"github": 2200, "tasks": 1000, "memory": 800},
-                    )
-                    semantic_context = assemble_context(user_id, plan).text
-                except Exception:
-                    semantic_context = memory_service.build_context_for_query(user_id, query)
-        except Exception:
-            semantic_context = ""
+    # ── Connection ───────────────────────────────────────────────────────────
 
-        graph, _ = _build_github_graph(user_id, model)
-
-        history_messages = []
-        for m in history:
-            content = (m.get("content") or "").strip()
-            if not content:
-                continue
-            role = (m.get("role") or "").lower()
-            if role == "user":
-                history_messages.append(HumanMessage(content=content))
-            elif role in ("assistant", "ai"):
-                history_messages.append(AIMessage(content=content))
-
-        initial_state: GitHubAgentState = {
-            "messages": history_messages + [HumanMessage(content=query)],
-            "user_query": query,
-            "user_id": user_id,
-            "semantic_context": semantic_context,
-            "mutated": False,
-        }
-
-        result = graph.invoke(initial_state)
-        messages = result.get("messages", [])
-        if not messages:
-            raise RuntimeError("No response from GitHub sub-agent")
-
-        final = messages[-1]
-        content = getattr(final, "content", str(final))
-        if isinstance(content, list):
-            content = "\n".join(str(p) for p in content)
-
-        if user_id and str(content).strip():
-            try:
-                from ..memory.service import memory_service
-                memory_service.store_turn(user_id, query, str(content))
-            except Exception:
-                pass
-
+    def get_status(self, user_id: str) -> Dict:
+        row = self.read_status(user_id)
+        if not row:
+            return {"connected": False}
         return {
-            "response": str(content),
-            "success": True,
-            "delegated_to": "github-subagent",
-            "refresh_github": bool(result.get("mutated", False)),
+            "connected": True,
+            "github_username": row[0],
+            "avatar_url": row[1],
+            "scope": row[2],
         }
-    except Exception as exc:
-        log.error("GitHub sub-agent error: %s", exc, exc_info=True)
-        return {
-            "response": f"GitHub sub-agent error: {exc}",
-            "success": False,
-            "delegated_to": "github-subagent",
-            "refresh_github": False,
-        }
+
+    def disconnect(self, user_id: str) -> None:
+        self.disconnect_user(user_id)
+
+    # ── Stats ────────────────────────────────────────────────────────────────
+
+    def get_stats(self, user_id: str, force: bool = False) -> Dict:
+        """Cached stats unless `force`, falling back to the cache when GitHub fails."""
+        token = self.read_token(user_id)
+        if not token:
+            raise AppError("GitHub not connected. Go to Settings to connect.", status_code=400)
+
+        username = self.read_username(user_id)
+        if not username:
+            raise AppError("GitHub username not found", status_code=400)
+
+        cached = self.read_cached_stats(user_id, username)
+        if cached and not force:
+            return _strip_internal_stats_fields(cached)
+
+        try:
+            # Validated here, not in the route: a live payload GitHub shaped
+            # differently (a null repo count, say) used to fall through to the
+            # cache rather than surface as a 500, because the old route built the
+            # response model inside this same try.
+            return GitHubUserStats(**self.fetch_live_stats(user_id, token, username)).model_dump()
+        except Exception as exc:
+            self.log.warning("Live GitHub stats fetch failed: %s", exc)
+            if cached:
+                return _strip_internal_stats_fields(cached)
+            raise AppError(
+                "GitHub took too long to respond. Try again in a moment.",
+                status_code=504,
+            ) from exc
+
+    # ── Chat ─────────────────────────────────────────────────────────────────
+
+    def chat(self, query: str, history: List[dict], user_id: Optional[str]) -> Dict:
+        return self.chat_agent(query=query, history=history, user_id=user_id)
+
+
+github_service = GitHubService()

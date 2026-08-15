@@ -79,6 +79,23 @@ app.include_router(leetcode_router)
 app.include_router(dashboard_router)
 app.include_router(audio_library_router)
 
+# Compatibility aliases (NUMA-117). The client proxy at client/src/app/api/
+# [...path]/route.ts forwards /api/<x> to BACKEND/<x>, dropping exactly one
+# segment, so a router that also carries /api in its own prefix is unreachable
+# through the proxy. Those five routers now mount without it, like the other
+# eight, and are re-mounted here under /api so every caller that hits FastAPI
+# directly (the registered GitHub OAuth redirect URI, lib/aiSettings.ts,
+# settings/page.tsx) keeps its URL. Hidden from the schema so each path appears
+# once in the OpenAPI document.
+for _aliased_router in (
+    ai_settings_router,
+    journal_router,
+    github_router,
+    leetcode_router,
+    dashboard_router,
+):
+    app.include_router(_aliased_router, prefix="/api", include_in_schema=False)
+
 app.mount("/audio", StaticFiles(directory=str(AUDIO_ROOT)), name="audio")
 app.mount("/assets/images", StaticFiles(directory=str(IMAGE_ASSETS_ROOT)), name="image_assets")
 
