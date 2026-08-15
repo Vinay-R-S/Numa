@@ -1,0 +1,30 @@
+/**
+ * Productivity feature module public surface (NUMA-117 P4, PLAN 5.3 / 21.2).
+ */
+export * from "./productivity.types"
+export * from "./productivity.api"
+export * from "./productivity.schema"
+export * from "./productivity.utils"
+export * from "./productivity.constants"
+
+export { useGitHub } from "./useGitHub"
+export type { UseGitHubReturn } from "./useGitHub"
+export { useLeetCode } from "./useLeetCode"
+export type { UseLeetCodeReturn } from "./useLeetCode"
+
+export { DifficultyBar } from "./components/DifficultyBar"
+export { DifficultyBreakdown } from "./components/DifficultyBreakdown"
+export { GitHubConnectPanel } from "./components/GitHubConnectPanel"
+export { GitHubProfileHeader } from "./components/GitHubProfileHeader"
+export { GitHubSection } from "./components/GitHubSection"
+export { GitHubStatsGrid } from "./components/GitHubStatsGrid"
+export { LeetCodeEmptyState } from "./components/LeetCodeEmptyState"
+export { LeetCodeSection } from "./components/LeetCodeSection"
+export { LeetCodeSummary } from "./components/LeetCodeSummary"
+export { ProductivityPageHeader } from "./components/ProductivityPageHeader"
+export { ProductivityPanel } from "./components/ProductivityPanel"
+export { RecentCommitsList } from "./components/RecentCommitsList"
+export { RecentReposList } from "./components/RecentReposList"
+export { RecentSubmissionsList } from "./components/RecentSubmissionsList"
+export { SectionErrorBanner } from "./components/SectionErrorBanner"
+export { StatChip } from "./components/StatChip"

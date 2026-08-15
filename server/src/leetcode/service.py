@@ -1,274 +1,82 @@
-"""
-LeetCode Sub-Agent Service
-============================
-LangGraph agentic loop for LeetCode-related queries.
+"""LeetCode feature service (NUMA-117 P4, PLAN 2.1 / 5.2 / 21.1).
 
-Tools:
-  get_leetcode_stats   - fetch full LeetCode profile stats
-  get_recent_solved    - recent accepted submissions
+`LeetCodeService` owns what the routes held inline: the public profile stats
+fetch with its 404/502 error mapping, and the sub-agent chat delegation. The
+GraphQL client is injected through the constructor instead of being a module
+global created at import time.
 
-Entry point:
-  run_leetcode_agent_chat(query, history, user_id, model=None) -> Dict
+The LangGraph sub-agent moved to `agent.py`; its public entrypoint is re-exported
+here so `master_agent.orchestrator` keeps its existing import path.
+
+Errors: methods raise `core.errors.AppError` with the status code the route used
+to raise directly; `router._http_error` maps them back to HTTP.
 """
 from __future__ import annotations
 
-import importlib
-import logging
-from datetime import datetime, timezone
-from functools import lru_cache
-from typing import Annotated, Dict, List, Optional, Sequence, TypedDict
+from typing import Callable, Dict, List, Optional
 
-import operator
+from pydantic import ValidationError
 
-log = logging.getLogger(__name__)
-
-LEETCODE_AGENT_SYSTEM_PROMPT = (
-    "You are NUMA LeetCode sub-agent. You help users track and analyze their "
-    "LeetCode progress. You can fetch profile stats (total solved, difficulty "
-    "breakdown, ranking) and recent accepted submissions. "
-    "Always use tools to fetch real data - never fabricate stats or problem names. "
-    "If a username is not provided, ask the user for it. "
-    "Keep responses concise, encouraging, and coding-focused. Do not use emojis. Use plain Markdown when structure helps."
+from ..core.base import BaseService
+from ..core.errors import AppError
+from .agent import (  # noqa: F401  re-exported for existing import paths
+    LEETCODE_AGENT_SYSTEM_PROMPT,
+    LeetCodeAgentState,
+    run_leetcode_agent_chat,
 )
+from .leetcode_client import LeetCodeClient
+from .schemas import LeetCodeStats
 
 
-class LeetCodeAgentState(TypedDict):
-    messages: Annotated[Sequence[object], operator.add]
-    user_query: str
-    user_id: str
-    semantic_context: str
-    mutated: bool
+class LeetCodeService(BaseService):
+    """LeetCode profile stats and chat behind the /api/leetcode routes."""
 
+    def __init__(
+        self,
+        client: Optional[LeetCodeClient] = None,
+        chat_agent: Optional[Callable[..., Dict]] = None,
+    ) -> None:
+        super().__init__()
+        self.client = client or LeetCodeClient()
+        self.chat_agent = chat_agent or run_leetcode_agent_chat
 
-def _require_deps() -> Dict:
-    try:
-        msgs_mod = importlib.import_module("langchain_core.messages")
-        tools_mod = importlib.import_module("langchain_core.tools")
-        graph_mod = importlib.import_module("langgraph.graph")
-        return {
-            "AIMessage": getattr(msgs_mod, "AIMessage"),
-            "HumanMessage": getattr(msgs_mod, "HumanMessage"),
-            "SystemMessage": getattr(msgs_mod, "SystemMessage"),
-            "ToolMessage": getattr(msgs_mod, "ToolMessage"),
-            "tool": getattr(tools_mod, "tool"),
-            "StateGraph": getattr(graph_mod, "StateGraph"),
-            "END": getattr(graph_mod, "END"),
-        }
-    except Exception as exc:
-        raise RuntimeError(f"LeetCode agent dependencies missing: {exc}") from exc
+    # ── Stats ────────────────────────────────────────────────────────────────
 
-
-def _get_llm(model_override: Optional[str] = None, user_id: Optional[str] = None):
-    from ..llm_factory import get_llm_with_fallback
-    return get_llm_with_fallback(
-        user_id=user_id,
-        agent_name="leetcode",
-        priority="normal",
-        model=model_override,
-    )
-
-
-def _leetcode_toolset(tool_decorator, user_id: str):
-    from .leetcode_client import LeetCodeClient
-    from ..tasks.agent_tools import make_task_tools
-
-    client = LeetCodeClient()
-
-    @tool_decorator
-    def get_leetcode_stats(username: str) -> str:
-        """Fetch full LeetCode profile stats for a user: total solved, difficulty
-        breakdown (easy/medium/hard), acceptance rate, ranking, and reputation.
-        Use this when the user asks about their LeetCode profile, progress, or stats."""
+    def get_stats(self, username: str) -> Dict:
+        """Public profile stats. An unknown user is a 404, an upstream fault a 502."""
         try:
-            stats = client.get_full_stats(username)
-            lines = [
-                f"LeetCode Stats for {stats['username']}:",
-                f"  Total Solved: {stats['total_solved']}",
-                f"  Easy: {stats['easy_solved']} | Medium: {stats['medium_solved']} | Hard: {stats['hard_solved']}",
-                f"  Acceptance Rate: {stats['acceptance_rate']}%",
-                f"  Ranking: {stats['ranking']:,}",
-                f"  Reputation: {stats['reputation']}",
-            ]
-            recent = stats.get("recent_submissions", [])
-            if recent:
-                lines.append(f"  Recent Accepted ({len(recent)}):")
-                for s in recent[:5]:
-                    lines.append(f"    - {s['title']} ({s['lang']}) - {s['status']}")
-            return "\n".join(lines)
+            stats = self.client.get_full_stats(username)
+        except ValidationError as exc:
+            raise self._upstream_error(exc) from exc
         except ValueError as exc:
-            return str(exc)
+            raise AppError(str(exc), status_code=404) from exc
         except Exception as exc:
-            return f"Error fetching LeetCode stats: {exc}"
+            raise self._upstream_error(exc) from exc
 
-    @tool_decorator
-    def get_recent_solved(username: str, count: int = 10) -> str:
-        """Fetch recent accepted LeetCode submissions for a user.
-        Use this when the user asks what problems they solved recently."""
+        # Shaped here, not in the route: the old route built the response model
+        # inside the same try, where `except ValueError` swallowed the Pydantic
+        # ValidationError (it subclasses ValueError) and answered 404 "N
+        # validation errors for LeetCodeStats". A malformed upstream payload is
+        # an upstream fault, so it is now the 502 the route already documented.
         try:
-            safe_count = max(1, min(count, 20))
-            submissions = client.get_recent_submissions(username, limit=safe_count)
-            if not submissions:
-                return f"No recent accepted submissions found for '{username}'."
-            lines = [f"Recent Accepted Submissions for {username} ({len(submissions)}):"]
-            for s in submissions:
-                ts = s.get("timestamp", "")
-                title = s.get("title", "Untitled")
-                lang = s.get("lang", "?")
-                lines.append(f"  - {title} ({lang}) - ts:{ts}")
-            return "\n".join(lines)
-        except ValueError as exc:
-            return str(exc)
-        except Exception as exc:
-            return f"Error fetching recent submissions: {exc}"
+            return LeetCodeStats(**stats).model_dump()
+        except ValidationError as exc:
+            raise self._upstream_error(exc) from exc
 
-    task_tools = make_task_tools(tool_decorator, user_id, source_name="LeetCode")
-    return [get_leetcode_stats, get_recent_solved] + task_tools
+    def _upstream_error(self, exc: Exception) -> AppError:
+        self.log.error("LeetCode stats fetch failed: %s", exc)
+        return AppError("Failed to fetch LeetCode stats", status_code=502)
 
+    # ── Chat ─────────────────────────────────────────────────────────────────
 
-@lru_cache(maxsize=64)
-def _build_leetcode_graph(user_id: str, model_override: Optional[str] = None):
-    deps = _require_deps()
-    AIMessage = deps["AIMessage"]
-    SystemMessage = deps["SystemMessage"]
-    ToolMessage = deps["ToolMessage"]
-    StateGraph = deps["StateGraph"]
-    END = deps["END"]
-
-    tools = _leetcode_toolset(deps["tool"], user_id)
-    tool_map = {t.name: t for t in tools}
-
-    def call_model(state: LeetCodeAgentState) -> LeetCodeAgentState:
-        llm = _get_llm(model_override=model_override, user_id=user_id)
-        llm_with_tools = llm.bind_tools(tools)
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        sem = (state.get("semantic_context") or "").strip()
-        context = f"\nRelevant context from memory:\n{sem}\n" if sem else ""
-        system = f"{LEETCODE_AGENT_SYSTEM_PROMPT}\nCurrent time: {now}{context}"
-        full = [SystemMessage(content=system)] + list(state["messages"])
-        response = llm_with_tools.invoke(full)
-        return {**state, "messages": [response]}
-
-    def call_tools(state: LeetCodeAgentState) -> LeetCodeAgentState:
-        last = state["messages"][-1]
-        out = []
-        for tc in getattr(last, "tool_calls", []):
-            name, args, tid = tc.get("name"), tc.get("args", {}), tc.get("id")
-            if name not in tool_map:
-                result = f"Unknown tool '{name}'."
-            else:
-                try:
-                    result = tool_map[name].invoke(args)
-                except Exception as exc:
-                    result = f"Error running {name}: {exc}"
-            out.append(ToolMessage(content=str(result), tool_call_id=tid))
-        return {**state, "messages": out}
-
-    def should_continue(state: LeetCodeAgentState):
-        last = state["messages"][-1]
-        rounds = sum(1 for m in state["messages"] if hasattr(m, "tool_calls") and m.tool_calls)
-        if rounds >= 6:
-            return "end"
-        if hasattr(last, "tool_calls") and last.tool_calls:
-            return "call_tools"
-        return "end"
-
-    wf = StateGraph(LeetCodeAgentState)
-    wf.add_node("call_model", call_model)
-    wf.add_node("call_tools", call_tools)
-    wf.set_entry_point("call_model")
-    wf.add_conditional_edges("call_model", should_continue, {"call_tools": "call_tools", "end": END})
-    wf.add_edge("call_tools", "call_model")
-    return wf.compile(), AIMessage
+    def chat(
+        self,
+        query: str,
+        history: List[dict],
+        user_id: Optional[str],
+        model: Optional[str] = None,
+    ) -> Dict:
+        return self.chat_agent(query=query, history=history, user_id=user_id, model=model)
 
 
-def run_leetcode_agent_chat(
-    query: str,
-    history: List[dict],
-    user_id: Optional[str],
-    model: Optional[str] = None,
-    preloaded_context: Optional[str] = None,
-) -> Dict:
-    """Invoke the LeetCode sub-agent and return a response dict."""
-    if not user_id:
-        return {
-            "response": "User session is missing. Please sign in again.",
-            "success": False,
-            "delegated_to": "leetcode-subagent",
-        }
-
-    from ..llm_factory import is_any_llm_configured
-    if not is_any_llm_configured(user_id):
-        return {
-            "response": (
-                "LeetCode sub-agent is unavailable - no LLM provider is configured. "
-                "Go to Settings and add an API key for your preferred AI provider."
-            ),
-            "success": True,
-            "delegated_to": "leetcode-subagent",
-        }
-
-    try:
-        deps = _require_deps()
-        HumanMessage = deps["HumanMessage"]
-        AIMessage = deps["AIMessage"]
-
-        try:
-            from ..memory.service import memory_service
-            if preloaded_context:
-                semantic_context = preloaded_context
-            else:
-                semantic_context = memory_service.build_context_for_query(user_id, query)
-        except Exception:
-            semantic_context = ""
-
-        graph, _ = _build_leetcode_graph(user_id, model)
-
-        history_messages: List[object] = []
-        for m in history:
-            content = (m.get("content") or "").strip()
-            if not content:
-                continue
-            role = (m.get("role") or "").lower()
-            if role == "user":
-                history_messages.append(HumanMessage(content=content))
-            elif role in ("assistant", "ai"):
-                history_messages.append(AIMessage(content=content))
-
-        initial_state: LeetCodeAgentState = {
-            "messages": history_messages + [HumanMessage(content=query)],
-            "user_query": query,
-            "user_id": user_id,
-            "semantic_context": semantic_context,
-            "mutated": False,
-        }
-
-        result = graph.invoke(initial_state)
-        messages = result.get("messages", [])
-        if not messages:
-            raise RuntimeError("No response produced by LeetCode sub-agent")
-
-        final = messages[-1]
-        content = getattr(final, "content", str(final))
-        if isinstance(content, list):
-            content = "\n".join(str(part) for part in content)
-
-        if user_id and str(content).strip():
-            try:
-                from ..memory.service import memory_service
-                memory_service.store_turn(user_id, query, str(content))
-            except Exception:
-                pass
-
-        return {
-            "response": str(content),
-            "success": True,
-            "delegated_to": "leetcode-subagent",
-        }
-
-    except Exception as exc:
-        log.error("LeetCode sub-agent error: %s", exc, exc_info=True)
-        return {
-            "response": f"LeetCode sub-agent encountered an error: {exc}",
-            "success": False,
-            "delegated_to": "leetcode-subagent",
-        }
+leetcode_service = LeetCodeService()

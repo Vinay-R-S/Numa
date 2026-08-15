@@ -108,7 +108,7 @@ def fetch_latest_for_user(user_id: str) -> Dict:
             result["health"] = {"ok": False, "detail": detail}
 
     try:
-        from src.github_agent.router import fetch_and_store_github_stats_for_user
+        from src.github_agent.sync import fetch_and_store_github_stats_for_user
 
         result["github"] = fetch_and_store_github_stats_for_user(user_id)
     except Exception as exc:
@@ -137,7 +137,7 @@ def connected_user_ids() -> list[str]:
         _log_sync_exception("Could not list connected Slack users: %s", exc)
 
     try:
-        from src.github_agent.router import get_all_connected_github_user_ids
+        from src.github_agent.persistence import get_all_connected_github_user_ids
 
         users.update(get_all_connected_github_user_ids())
     except Exception as exc:
