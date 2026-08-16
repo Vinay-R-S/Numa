@@ -7,7 +7,7 @@ import { AnalyticsDashboard } from "@/features/tasks/components/AnalyticsDashboa
 import { TaskDetailSheet } from "@/features/tasks/components/TaskDetailSheet"
 import { HeaderActionButton } from "@/components/ui/header-action-button"
 import { useTasksStore } from "@/lib/stores"
-import { fetchLatestAgentData } from "@/components/agents/masterAgentApi"
+import { fetchLatestAgentData } from "@/features/agents"
 import type { Task } from "@/features/tasks/tasks.types"
 import { PRIORITY_CONFIG } from "@/features/tasks/tasks.types"
 import { Skeleton } from "@/components/ui/skeleton"

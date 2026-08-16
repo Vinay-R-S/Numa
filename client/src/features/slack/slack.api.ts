@@ -21,7 +21,7 @@
  *   enough), which would put `undefined` into React state and crash the page on
  *   the next render, so `expectBody` turns that into the endpoint's error.
  */
-import { getAuthToken, http } from "@/lib/http"
+import { expectBody, getAuthToken, http } from "@/lib/http"
 import {
   slackChannelListSchema,
   slackChatResponseSchema,
@@ -45,12 +45,6 @@ const AGENT_TIMEOUT_MESSAGE =
   "Slack agent request timed out. The action may still have completed in Slack."
 
 /** Reject instead of handing `undefined` to the caller (see the header note). */
-async function expectBody<T>(pending: Promise<T>, message: string): Promise<T> {
-  const data = await pending
-  if (data === undefined) throw new Error(message)
-  return data
-}
-
 export async function sendSlackAgentCommand(
   query: string,
   history: SlackAgentMessage[] = [],

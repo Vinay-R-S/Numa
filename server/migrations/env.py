@@ -2,6 +2,7 @@
 Alembic env.py - configured to read DATABASE_URL from server/.env
 and run raw-SQL migrations via psycopg2 (no SQLAlchemy models needed).
 """
+import logging
 import os
 from pathlib import Path
 from logging.config import fileConfig
@@ -25,10 +26,15 @@ if db_url:
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     config.set_main_option("sqlalchemy.url", db_url)
 
-# Logging setup from alembic.ini. Keep disable_existing_loggers=False so running
-# `alembic upgrade head` programmatically from init_db() at server startup does
-# not silence already-configured loggers (uvicorn, app modules).
-if config.config_file_name is not None:
+# Logging setup from alembic.ini, but only when Alembic owns the process.
+#
+# `disable_existing_loggers=False` spares already-created loggers, yet fileConfig
+# still rewrites the ROOT logger's handlers and level (alembic.ini pins it to
+# WARNING). Running `alembic upgrade head` programmatically - init_db() does it
+# on every server startup, and scripts/init_db.py right after basicConfig -
+# therefore tore down the caller's logging config and swallowed its own INFO
+# output. Skip it when the caller has already configured the root logger.
+if config.config_file_name is not None and not logging.getLogger().handlers:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # No declarative metadata - we use raw SQL migrations

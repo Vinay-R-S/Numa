@@ -18,7 +18,7 @@
  *   enough), which would put `undefined` into React state and crash the next
  *   render, so `expectBody` turns that into the endpoint's error.
  */
-import { http } from "@/lib/http"
+import { expectBody, http } from "@/lib/http"
 import {
   healthChatResponseSchema,
   healthIntradaySchema,
@@ -38,12 +38,6 @@ import type {
 } from "./health.types"
 
 /** Reject instead of handing `undefined` to the caller (see the header note). */
-async function expectBody<T>(pending: Promise<T>, message: string): Promise<T> {
-  const data = await pending
-  if (data === undefined) throw new Error(message)
-  return data
-}
-
 export function getHealthStatus(): Promise<HealthStatus> {
   const message = "Failed to fetch health status"
   return expectBody(

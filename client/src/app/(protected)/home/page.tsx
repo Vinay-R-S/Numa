@@ -1,11 +1,11 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
+import { MasterAgentPanel, useMasterAgentChat } from "@/features/agents"
 import {
   DashboardHeader,
   DeveloperCard,
   HealthSection,
-  MasterAgentPanel,
   OverviewRow,
   RecentTasksCard,
   STAT_SKELETON_KEYS,
@@ -15,7 +15,6 @@ import {
   UpcomingEventsCard,
   WeeklyActivityChart,
   useDashboard,
-  useMasterAgentChat,
 } from "@/features/dashboard"
 
 export default function HomePage() {

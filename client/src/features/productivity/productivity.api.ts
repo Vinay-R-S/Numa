@@ -22,7 +22,7 @@
  *   state and crash the next render, so `expectBody` turns that into the
  *   endpoint's error.
  */
-import { http } from "@/lib/http"
+import { expectBody, http } from "@/lib/http"
 import { GITHUB_AUTHORIZE_URL_PREFIX } from "./productivity.constants"
 import {
   githubAuthStatusSchema,
@@ -39,12 +39,6 @@ import type {
 } from "./productivity.types"
 
 /** Reject instead of handing `undefined` to the caller (see the header note). */
-async function expectBody<T>(pending: Promise<T>, message: string): Promise<T> {
-  const data = await pending
-  if (data === undefined) throw new Error(message)
-  return data
-}
-
 export function getGitHubStatus(): Promise<GitHubAuthStatus> {
   const message = "Failed to fetch GitHub status"
   return expectBody(
