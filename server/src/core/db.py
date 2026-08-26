@@ -240,6 +240,9 @@ def _alembic_config():
 
     cfg = Config(str(_SERVER_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(_SERVER_ROOT / "migrations"))
+    # We are embedding Alembic, so env.py must not apply alembic.ini's logging
+    # config: it pins the root logger at WARNING for the rest of the process.
+    cfg.attributes["configure_logger"] = False
     return cfg
 
 

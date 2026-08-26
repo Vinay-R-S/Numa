@@ -40,11 +40,11 @@ import type {
   SlackStatus,
   SlackSyncResult,
 } from "./slack.types"
+
 const SLACK_AGENT_TIMEOUT_MS = 45_000
 const AGENT_TIMEOUT_MESSAGE =
   "Slack agent request timed out. The action may still have completed in Slack."
 
-/** Reject instead of handing `undefined` to the caller (see the header note). */
 export async function sendSlackAgentCommand(
   query: string,
   history: SlackAgentMessage[] = [],

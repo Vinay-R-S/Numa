@@ -38,7 +38,6 @@ import type {
   LeetCodeStats,
 } from "./productivity.types"
 
-/** Reject instead of handing `undefined` to the caller (see the header note). */
 export function getGitHubStatus(): Promise<GitHubAuthStatus> {
   const message = "Failed to fetch GitHub status"
   return expectBody(

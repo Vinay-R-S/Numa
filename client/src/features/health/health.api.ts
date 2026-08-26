@@ -37,7 +37,6 @@ import type {
   HealthSyncResult,
 } from "./health.types"
 
-/** Reject instead of handing `undefined` to the caller (see the header note). */
 export function getHealthStatus(): Promise<HealthStatus> {
   const message = "Failed to fetch health status"
   return expectBody(

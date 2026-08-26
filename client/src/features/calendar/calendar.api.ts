@@ -190,7 +190,12 @@ export async function sendAgentCommand(
     errorMessage: "Agent request failed",
   })
 
+  // Ordered before the envelope check: `http` resolves a body-less or non-JSON
+  // 2xx to `undefined`, which this endpoint answers with the fallback instead
+  // of dereferencing.
+  if (!data) return { response: "No response received." }
+
   if (data.success === false) throw new Error(data.response || "Agent request failed")
 
-  return data ?? { response: "No response received." }
+  return data
 }

@@ -32,9 +32,15 @@ if db_url:
 # still rewrites the ROOT logger's handlers and level (alembic.ini pins it to
 # WARNING). Running `alembic upgrade head` programmatically - init_db() does it
 # on every server startup, and scripts/init_db.py right after basicConfig -
-# therefore tore down the caller's logging config and swallowed its own INFO
-# output. Skip it when the caller has already configured the root logger.
-if config.config_file_name is not None and not logging.getLogger().handlers:
+# therefore pins the whole process at WARNING and swallows the caller's INFO
+# output, including init_db()'s own success line.
+#
+# An embedded caller says so by setting `configure_logger = False` on the Config
+# it passes in (core.db._alembic_config does); the root-handler check is the
+# fallback for any other embedder. The CLI sets neither and configures as usual.
+_owns_logging = config.attributes.get("configure_logger", True)
+
+if _owns_logging and config.config_file_name is not None and not logging.getLogger().handlers:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # No declarative metadata - we use raw SQL migrations
