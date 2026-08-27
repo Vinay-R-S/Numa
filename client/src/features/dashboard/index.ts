@@ -13,8 +13,6 @@ export { ICON_COLORS, STAT_SKELETON_KEYS } from "./dashboard.constants"
 
 export { useDashboard } from "./useDashboard"
 export type { UseDashboardReturn } from "./useDashboard"
-export { useMasterAgentChat } from "./useMasterAgentChat"
-export type { UseMasterAgentChatReturn } from "./useMasterAgentChat"
 
 export { StatCard } from "./components/StatCard"
 export { StatCardSkeleton } from "./components/StatCardSkeleton"
@@ -28,4 +26,3 @@ export { HealthSection } from "./components/HealthSection"
 export { UpcomingEventsCard } from "./components/UpcomingEventsCard"
 export { DeveloperCard } from "./components/DeveloperCard"
 export { RecentTasksCard } from "./components/RecentTasksCard"
-export { MasterAgentPanel } from "./components/MasterAgentPanel"

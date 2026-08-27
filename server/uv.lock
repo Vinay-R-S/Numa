@@ -133,6 +133,20 @@ wheels = [
 ]
 
 [[package]]
+name = "alembic"
+version = "1.18.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mako" },
+    { name = "sqlalchemy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/94/13/8b084e0f2efb0275a1d534838844926f798bd766566b1375174e2448cd31/alembic-1.18.4.tar.gz", hash = "sha256:cb6e1fd84b6174ab8dbb2329f86d631ba9559dd78df550b57804d607672cedbc", size = 2056725, upload-time = "2026-02-10T16:00:47.195Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/29/6533c317b74f707ea28f8d633734dbda2119bbadfc61b2f3640ba835d0f7/alembic-1.18.4-py3-none-any.whl", hash = "sha256:a5ed4adcf6d8a4cb575f3d759f071b03cd6e5c7618eb796cb52497be25bfe19a", size = 263893, upload-time = "2026-02-10T16:00:49.997Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1741,6 +1755,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/80/c6/cbdc6638207f68a3c61ec0b64fa593f6b11de3170d03c852238c31b54960/langsmith-0.7.20.tar.gz", hash = "sha256:fa983a74f75648ee0e80d3f9751162b6f9a438896d5f9bdb6cba9abda451e234", size = 1134732, upload-time = "2026-03-18T00:03:39.129Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/46/9294d4f49de6a8f08e8b83907713ca545459d87d474c6add15d31a36f5dc/langsmith-0.7.20-py3-none-any.whl", hash = "sha256:0162faf791ea48d69009a12a3da917468556b99cf5d5fcacbb8cda064262e118", size = 359314, upload-time = "2026-03-18T00:03:37.59Z" },
+]
+
+[[package]]
+name = "mako"
+version = "1.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markupsafe" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2a/12/b5fa2353e2754cd67fb9f83793fa48ff42c213a5da7e719869d2301f6ab8/mako-1.4.1.tar.gz", hash = "sha256:d7904710b662996425a21627710c4777c45053146942cf8a7aebf757c92b8c27", size = 410165, upload-time = "2026-08-05T06:10:56.611Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a5/54/12ed58d458474aaab5c3d180173e745a4fe131bb330370596876d19ff60f/mako-1.4.1-py3-none-any.whl", hash = "sha256:a359d9a94a541213958742b2698d0a7757bb83551767bc468a74b9905aba9617", size = 80010, upload-time = "2026-08-05T06:10:58.248Z" },
 ]
 
 [[package]]
@@ -3865,6 +3891,7 @@ dependencies = [
     { name = "aiohappyeyeballs" },
     { name = "aiohttp" },
     { name = "aiosignal" },
+    { name = "alembic" },
     { name = "annotated-doc" },
     { name = "annotated-types" },
     { name = "anyio" },
@@ -4039,6 +4066,7 @@ requires-dist = [
     { name = "aiohappyeyeballs", specifier = "==2.6.1" },
     { name = "aiohttp", specifier = "==3.13.3" },
     { name = "aiosignal", specifier = "==1.4.0" },
+    { name = "alembic", specifier = "==1.18.4" },
     { name = "annotated-doc", specifier = "==0.0.4" },
     { name = "annotated-types", specifier = "==0.7.0" },
     { name = "anyio", specifier = "==4.12.1" },

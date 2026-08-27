@@ -2,10 +2,18 @@
 
 import { Bot, BrainCircuit, Loader2, Send, Square, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
 import { cn } from "@/lib/utils"
 import type { UseMasterAgentChatReturn } from "../useMasterAgentChat"
+import { AgentDockShell } from "./AgentDockShell"
+import { AgentMessageContent } from "./AgentMessageContent"
 
+/**
+ * Master agent dock (NUMA-113 P4 / NUMA-118 P4).
+ *
+ * Moved here from `features/dashboard` with the hook. It keeps its own header
+ * (delegation badge), bubbles, spinner and composer: none of those match the
+ * sub-agent docks, so only the frame comes from `AgentDockShell`.
+ */
 type MasterAgentPanelProps = Omit<UseMasterAgentChatReturn, "open" | "toggle">
 
 export function MasterAgentPanel({
@@ -22,7 +30,7 @@ export function MasterAgentPanel({
   handleStop,
 }: MasterAgentPanelProps) {
   return (
-    <section className="fixed inset-x-3 bottom-3 top-auto z-40 flex max-h-[70vh] flex-col rounded-2xl border border-border/40 bg-card/95 p-3 shadow-2xl backdrop-blur-md sm:inset-auto sm:right-6 sm:bottom-6 sm:h-[min(70vh,640px)] sm:w-[min(420px,calc(100vw-3rem))] sm:p-4">
+    <AgentDockShell>
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-primary/20">
@@ -102,6 +110,6 @@ export function MasterAgentPanel({
           <span className="sr-only">{sending ? "Stop" : "Send"}</span>
         </Button>
       </div>
-    </section>
+    </AgentDockShell>
   )
 }

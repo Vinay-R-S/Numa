@@ -8,8 +8,15 @@
  *
  * The timeout is `http`'s own `timeoutMs`, which disarms once the response
  * headers arrive, so a slow body read is not counted against the deadline.
+ *
+ * Every endpoint here answers with JSON. `http` resolves a body-less or
+ * non-JSON 2xx to `undefined` (a proxy that drops the content-type header is
+ * enough), which `tasksStore` would then commit as `tasks: undefined` inside
+ * its try, crashing the page on the next `tasks.length`; `expectBody` turns
+ * that into the endpoint's error instead. `deleteTask` is exempt: it expects
+ * an empty body.
  */
-import { http, ApiError, type RequestOptions } from "@/lib/http"
+import { expectBody, http, ApiError, type RequestOptions } from "@/lib/http"
 import type { Task, TaskStats } from "./tasks.types"
 import { taskListSchema, taskSchema, taskStatsSchema } from "./tasks.schema"
 
@@ -21,15 +28,21 @@ function timed<T>(options: Omit<RequestOptions<T>, "method" | "body">) {
 }
 
 export function fetchTasks(): Promise<Task[]> {
-  return http.get("/tasks", timed({ schema: taskListSchema, errorMessage: "Failed to fetch tasks" }))
+  const message = "Failed to fetch tasks"
+  return expectBody(http.get("/tasks", timed({ schema: taskListSchema, errorMessage: message })), message)
 }
 
 export function createTask(data: Partial<Task> & { title: string }): Promise<Task> {
-  return http.post("/tasks", data, timed({ schema: taskSchema, errorMessage: "Failed to create task" }))
+  const message = "Failed to create task"
+  return expectBody(http.post("/tasks", data, timed({ schema: taskSchema, errorMessage: message })), message)
 }
 
 export function updateTask(id: string, data: Partial<Task>): Promise<Task> {
-  return http.put(`/tasks/${id}`, data, timed({ schema: taskSchema, errorMessage: "Failed to update task" }))
+  const message = "Failed to update task"
+  return expectBody(
+    http.put(`/tasks/${id}`, data, timed({ schema: taskSchema, errorMessage: message })),
+    message
+  )
 }
 
 export function patchTaskStatus(
@@ -37,10 +50,14 @@ export function patchTaskStatus(
   status: Task["status"],
   position?: number
 ): Promise<Task> {
-  return http.patch(
-    `/tasks/${id}/status`,
-    { status, position },
-    timed({ schema: taskSchema, errorMessage: "Failed to update task status" })
+  const message = "Failed to update task status"
+  return expectBody(
+    http.patch(
+      `/tasks/${id}/status`,
+      { status, position },
+      timed({ schema: taskSchema, errorMessage: message })
+    ),
+    message
   )
 }
 
@@ -54,12 +71,17 @@ export async function deleteTask(id: string): Promise<void> {
 }
 
 export function fetchStats(): Promise<TaskStats> {
-  return http.get("/tasks/stats", timed({ schema: taskStatsSchema, errorMessage: "Failed to fetch stats" }))
+  const message = "Failed to fetch stats"
+  return expectBody(
+    http.get("/tasks/stats", timed({ schema: taskStatsSchema, errorMessage: message })),
+    message
+  )
 }
 
 export function fetchCompletedHistory(): Promise<Task[]> {
-  return http.get(
-    "/tasks/history",
-    timed({ schema: taskListSchema, errorMessage: "Failed to fetch task history" })
+  const message = "Failed to fetch task history"
+  return expectBody(
+    http.get("/tasks/history", timed({ schema: taskListSchema, errorMessage: message })),
+    message
   )
 }

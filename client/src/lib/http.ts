@@ -7,7 +7,10 @@
  * of re-declaring authHeaders/parseJson.
  *
  * Base URL honors `NEXT_PUBLIC_API_URL` (empty -> relative, so requests go
- * through the Next.js `/api/*` proxy to FastAPI); set it to hit FastAPI directly.
+ * through the Next.js `/api/*` proxy to FastAPI). Leave it empty: `buildUrl`
+ * always prefixes `/api`, which the proxy then strips, so pointing the var at
+ * FastAPI directly 404s the eight routers that mount without an `/api` prefix.
+ * Removing the double prefix is Tier 0 work (PLAN NUMA-116 deferred item).
  */
 import type { ZodType } from "zod"
 
@@ -173,6 +176,21 @@ export async function request<T>(path: string, options: RequestOptions<T> = {}):
   if (!text) return undefined as T
   const data = JSON.parse(text) as T
   return schema ? schema.parse(data) : data
+}
+
+/**
+ * Rejects a body-less 2xx for endpoints that must answer with JSON.
+ *
+ * `request` resolves to `undefined` for a 204, an empty body or a response
+ * without a JSON content-type (a proxy dropping the header is enough), which
+ * would otherwise put `undefined` into React state and crash the next render.
+ * It is opt-in rather than built into `request` because
+ * `checkCalendarTokenHealth` deliberately relies on the undefined-body path.
+ */
+export async function expectBody<T>(pending: Promise<T>, message: string): Promise<T> {
+  const data = await pending
+  if (data === undefined) throw new Error(message)
+  return data
 }
 
 export const http = {

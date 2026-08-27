@@ -2,10 +2,18 @@
 
 import { Square, X } from "lucide-react"
 
-import { AgentMessageContent } from "@/components/agents/AgentMessageContent"
+import { AgentDockShell, AgentMessageContent } from "@/features/agents"
 import { Button } from "@/components/ui/button"
 import type { AgentChatMessage, CalendarEvent } from "../calendar.types"
 import { AgentSuggestions } from "./AgentSuggestions"
+
+/**
+ * Calendar sub-agent dock (NUMA-114 P4 / NUMA-118 P4).
+ *
+ * Keeps its own header, bubbles, busy line and composer: none match the slack
+ * and health docks that share `AgentDockPanel`. Only the frame is shared, and
+ * this is the one dock anchored below the page header rather than bottom-right.
+ */
 
 interface CalendarAgentPanelProps {
   events: CalendarEvent[]
@@ -33,7 +41,7 @@ export function CalendarAgentPanel({
   onClose,
 }: CalendarAgentPanelProps) {
   return (
-    <section className="fixed inset-x-3 bottom-3 top-auto z-40 flex max-h-[70vh] flex-col rounded-2xl border border-border/40 bg-card/95 p-3 shadow-2xl backdrop-blur-md sm:inset-auto sm:right-6 sm:top-24 sm:h-[min(70vh,640px)] sm:w-[min(420px,calc(100vw-3rem))] sm:p-4">
+    <AgentDockShell anchor="top">
       <div className="mb-3 flex items-center justify-between">
         <div className="min-w-0">
           <h2 className="truncate text-base font-semibold text-foreground">Calendar Sub-Agent</h2>
@@ -97,6 +105,6 @@ export function CalendarAgentPanel({
           {sending ? <Square className="h-4 w-4" /> : "Send"}
         </Button>
       </div>
-    </section>
+    </AgentDockShell>
   )
 }

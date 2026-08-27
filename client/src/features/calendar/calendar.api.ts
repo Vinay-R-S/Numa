@@ -17,8 +17,15 @@
  *   200-with-`{ success: false }` agent envelope.
  * - the SSE stream uses `EventSource` directly (no fetch wrapper applies) on
  *   the same relative `/api` proxy path as before.
+ *
+ * `expectBody` guards every endpoint that dereferences its response. `http`
+ * resolves a body-less or non-JSON 2xx to `undefined` (a proxy that drops the
+ * content-type header is enough), which would otherwise surface as an opaque
+ * "cannot read properties of undefined" instead of the endpoint's error.
+ * `checkCalendarTokenHealth` and `sendAgentCommand` are deliberately exempt:
+ * both treat an absent body as a defined fallback value.
  */
-import { ApiError, http } from "@/lib/http"
+import { expectBody, ApiError, http } from "@/lib/http"
 import { getLocalAiEnabled } from "@/lib/aiSettings"
 import {
   agentChatResponseSchema,
@@ -41,21 +48,29 @@ import type {
 const CALENDAR_STREAM_PATH = "/api/calendar/events/stream"
 
 export async function fetchCalendarEvents(opts?: { refresh?: boolean }): Promise<CalendarEvent[]> {
-  const data = await http.get("/calendar/events", {
-    query: opts?.refresh ? { refresh: true } : undefined,
-    cache: "no-store",
-    schema: eventsResponseSchema,
-    errorMessage: "Failed to load events",
-  })
+  const message = "Failed to load events"
+  const data = await expectBody(
+    http.get("/calendar/events", {
+      query: opts?.refresh ? { refresh: true } : undefined,
+      cache: "no-store",
+      schema: eventsResponseSchema,
+      errorMessage: message,
+    }),
+    message
+  )
 
   return data.events.map(toCalendarEvent)
 }
 
 export async function createCalendarEvent(payload: CalendarEventPayload): Promise<CalendarEvent> {
-  const created = await http.post("/calendar/events", payload, {
-    schema: calendarEventDtoSchema,
-    errorMessage: "Failed to create event",
-  })
+  const message = "Failed to create event"
+  const created = await expectBody(
+    http.post("/calendar/events", payload, {
+      schema: calendarEventDtoSchema,
+      errorMessage: message,
+    }),
+    message
+  )
 
   return toCalendarEvent(created)
 }
@@ -64,19 +79,27 @@ export async function updateCalendarEvent(
   eventId: string,
   payload: CalendarEventPayload
 ): Promise<CalendarEvent> {
-  const updated = await http.put(`/calendar/events/${eventId}`, payload, {
-    schema: calendarEventDtoSchema,
-    errorMessage: "Failed to update event",
-  })
+  const message = "Failed to update event"
+  const updated = await expectBody(
+    http.put(`/calendar/events/${eventId}`, payload, {
+      schema: calendarEventDtoSchema,
+      errorMessage: message,
+    }),
+    message
+  )
 
   return toCalendarEvent(updated)
 }
 
 export async function deleteCalendarEvent(eventId: string): Promise<boolean> {
-  const data = await http.del(`/calendar/events/${eventId}`, {
-    schema: deleteResponseSchema,
-    errorMessage: "Failed to delete event",
-  })
+  const message = "Failed to delete event"
+  const data = await expectBody(
+    http.del(`/calendar/events/${eventId}`, {
+      schema: deleteResponseSchema,
+      errorMessage: message,
+    }),
+    message
+  )
 
   return data.success
 }
@@ -91,10 +114,14 @@ function isExpectedWatchFailure(detail: string): boolean {
 
 export async function startCalendarWatch(): Promise<boolean> {
   try {
-    const data = await http.post("/calendar/watch/start", undefined, {
-      schema: watchStartResponseSchema,
-      errorMessage: "Failed to start calendar watch",
-    })
+    const message = "Failed to start calendar watch"
+    const data = await expectBody(
+      http.post("/calendar/watch/start", undefined, {
+        schema: watchStartResponseSchema,
+        errorMessage: message,
+      }),
+      message
+    )
     return data.success
   } catch (error) {
     if (error instanceof ApiError && isExpectedWatchFailure(error.detail)) return false
@@ -103,10 +130,14 @@ export async function startCalendarWatch(): Promise<boolean> {
 }
 
 export async function getGoogleCalendarAuthorizationUrl(): Promise<string> {
-  const data = await http.post("/calendar/oauth/start", undefined, {
-    schema: oauthStartResponseSchema,
-    errorMessage: "Failed to start Google Calendar authorization",
-  })
+  const message = "Failed to start Google Calendar authorization"
+  const data = await expectBody(
+    http.post("/calendar/oauth/start", undefined, {
+      schema: oauthStartResponseSchema,
+      errorMessage: message,
+    }),
+    message
+  )
 
   if (!data.authorization_url) throw new Error("Google authorization URL was not returned")
 
@@ -159,7 +190,12 @@ export async function sendAgentCommand(
     errorMessage: "Agent request failed",
   })
 
+  // Ordered before the envelope check: `http` resolves a body-less or non-JSON
+  // 2xx to `undefined`, which this endpoint answers with the fallback instead
+  // of dereferencing.
+  if (!data) return { response: "No response received." }
+
   if (data.success === false) throw new Error(data.response || "Agent request failed")
 
-  return data ?? { response: "No response received." }
+  return data
 }

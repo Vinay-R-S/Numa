@@ -240,6 +240,9 @@ def _alembic_config():
 
     cfg = Config(str(_SERVER_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(_SERVER_ROOT / "migrations"))
+    # We are embedding Alembic, so env.py must not apply alembic.ini's logging
+    # config: it pins the root logger at WARNING for the rest of the process.
+    cfg.attributes["configure_logger"] = False
     return cfg
 
 
@@ -249,11 +252,26 @@ def init_db(*, raise_on_error: bool = False) -> None:
     Alembic is the single source of schema truth (NUMA-103). On a clean database
     the baseline migration builds the full schema; on an existing database only
     pending migrations run. Idempotent and safe to call on every startup.
+
+    The post-upgrade verification restores the fail-fast the inline-DDL version
+    had: `upgrade head` is a no-op on a database whose revision is already
+    stamped at head, so a schema that was partially restored, manually dropped
+    or `alembic stamp`ed onto an empty database would otherwise boot green and
+    then raise UndefinedTable on every request instead of at startup.
     """
     try:
         from alembic import command
 
         command.upgrade(_alembic_config(), "head")
+
+        missing = verify_required_tables()
+        if missing:
+            raise RuntimeError(
+                "Alembic is at head but required tables are missing: "
+                f"{', '.join(missing)}. The database schema and the migration "
+                "history disagree; resolve before serving traffic."
+            )
+
         log.info("Database schema migrated to Alembic head.")
     except Exception:
         log.exception("Database init (alembic upgrade head) failed")

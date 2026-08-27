@@ -44,12 +44,28 @@ in the feature's `api.ts` (they are intentionally not in the shared client):
 
 ## Migration source map (PLAN 17.5)
 
-| Current | Target |
-|---|---|
-| `components/health/healthApi.ts` | `features/health/health.api.ts` |
-| `components/journal/journalApi.ts` | `features/journal/journal.api.ts` |
-| `components/productivity/productivityApi.ts` | `features/productivity/productivity.api.ts` |
-| `components/agents/masterAgentApi.ts` | `features/agents/masterAgent.api.ts` |
-| `components/agents/slackAgentApi.ts` | `features/slack/slack.api.ts` |
-| `components/calendar/api.ts` | `features/calendar/calendar.api.ts` |
-| `components/tasklist/api.ts` | `features/tasks/tasks.api.ts` |
+Complete as of NUMA-118: every `*Api.ts` now lives in its feature module on
+`lib/http`, and `src/components/` holds only shared UI (`ui/`, `sections/`,
+`tasklist/` layout chrome) plus the top-level page components.
+
+| Was | Now | Landed on |
+|---|---|---|
+| `components/tasklist/api.ts` | `features/tasks/tasks.api.ts` | NUMA-111 |
+| `components/journal/journalApi.ts` | `features/journal/journal.api.ts` | NUMA-112 |
+| `components/calendar/api.ts` | `features/calendar/calendar.api.ts` | NUMA-114 |
+| `components/agents/slackAgentApi.ts` | `features/slack/slack.api.ts` | NUMA-115 |
+| `components/health/healthApi.ts` | `features/health/health.api.ts` | NUMA-116 |
+| `components/productivity/productivityApi.ts` | `features/productivity/productivity.api.ts` | NUMA-117 |
+| `components/agents/masterAgentApi.ts` | `features/agents/masterAgent.api.ts` | NUMA-118 |
+
+## Shared agent surface (NUMA-118)
+
+`features/agents/` owns the master agent and everything the four docks share:
+
+- `useAgentChat` - the chat loop (open/close with Escape, composer, in-flight
+  guard, send with abort, "Generation stopped." on abort, error bubble,
+  suggestion prefill). Feature hooks supply a transcript adapter, the sender and
+  the post-reply refresh; they keep their own public return shape.
+- `AgentDockPanel` - the complete sub-agent dock that slack and health both
+  render. Calendar and the master agent keep their own layouts and share only
+  `AgentDockShell` + `AgentMessageContent`.

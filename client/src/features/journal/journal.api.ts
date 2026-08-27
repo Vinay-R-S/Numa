@@ -6,8 +6,13 @@
  * validated with the feature's zod schemas. The old `NOT_FOUND` sentinel string
  * on a 404 is gone: callers inspect the typed `ApiError` instead, so the
  * backend detail ("No journal entry for <date>") reaches the UI.
+ *
+ * Every endpoint but the delete answers with JSON. `http` resolves a body-less
+ * or non-JSON 2xx to `undefined` (a proxy that drops the content-type header is
+ * enough), which would put `undefined` into React state and crash the next
+ * render, so `expectBody` turns that into the endpoint's error.
  */
-import { http } from "@/lib/http"
+import { expectBody, http } from "@/lib/http"
 import type {
   JournalEntry,
   JournalListResponse,
@@ -20,18 +25,26 @@ import {
 } from "./journal.schema"
 
 export function listJournalEntries(limit = 30, offset = 0): Promise<JournalListResponse> {
-  return http.get("/journal", {
-    query: { limit, offset },
-    schema: journalListResponseSchema,
-    errorMessage: "Failed to fetch journal entries",
-  })
+  const message = "Failed to fetch journal entries"
+  return expectBody(
+    http.get("/journal", {
+      query: { limit, offset },
+      schema: journalListResponseSchema,
+      errorMessage: message,
+    }),
+    message
+  )
 }
 
 export function getJournalEntry(entryDate: string): Promise<JournalEntry> {
-  return http.get(`/journal/${entryDate}`, {
-    schema: journalEntrySchema,
-    errorMessage: "Failed to fetch entry",
-  })
+  const message = "Failed to fetch entry"
+  return expectBody(
+    http.get(`/journal/${entryDate}`, {
+      schema: journalEntrySchema,
+      errorMessage: message,
+    }),
+    message
+  )
 }
 
 export function createJournalEntry(body: {
@@ -41,10 +54,14 @@ export function createJournalEntry(body: {
   entry_date?: string
   tags?: string[]
 }): Promise<JournalEntry> {
-  return http.post("/journal", body, {
-    schema: journalEntrySchema,
-    errorMessage: "Failed to create entry",
-  })
+  const message = "Failed to create entry"
+  return expectBody(
+    http.post("/journal", body, {
+      schema: journalEntrySchema,
+      errorMessage: message,
+    }),
+    message
+  )
 }
 
 export function updateJournalEntry(
@@ -56,10 +73,14 @@ export function updateJournalEntry(
     tags?: string[]
   }
 ): Promise<JournalEntry> {
-  return http.put(`/journal/${entryDate}`, body, {
-    schema: journalEntrySchema,
-    errorMessage: "Failed to update entry",
-  })
+  const message = "Failed to update entry"
+  return expectBody(
+    http.put(`/journal/${entryDate}`, body, {
+      schema: journalEntrySchema,
+      errorMessage: message,
+    }),
+    message
+  )
 }
 
 export function deleteJournalEntry(entryDate: string): Promise<void> {
@@ -67,15 +88,23 @@ export function deleteJournalEntry(entryDate: string): Promise<void> {
 }
 
 export function autoGenerateJournal(): Promise<JournalEntry> {
-  return http.post("/journal/auto-generate", undefined, {
-    schema: journalEntrySchema,
-    errorMessage: "Failed to auto-generate journal",
-  })
+  const message = "Failed to auto-generate journal"
+  return expectBody(
+    http.post("/journal/auto-generate", undefined, {
+      schema: journalEntrySchema,
+      errorMessage: message,
+    }),
+    message
+  )
 }
 
 export function generateDaySummary(entryDate?: string): Promise<JournalSummaryResponse> {
-  return http.post("/journal/summarize", { entry_date: entryDate || null }, {
-    schema: journalSummaryResponseSchema,
-    errorMessage: "Failed to generate summary",
-  })
+  const message = "Failed to generate summary"
+  return expectBody(
+    http.post("/journal/summarize", { entry_date: entryDate || null }, {
+      schema: journalSummaryResponseSchema,
+      errorMessage: message,
+    }),
+    message
+  )
 }

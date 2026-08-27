@@ -42,6 +42,3 @@ export const EMPTY_TODAY_TASKS: DashboardTodayTasks = {
   inprogress: 0,
   pending: 0,
 }
-
-export const MASTER_AGENT_GREETING =
-  "I'm your Master Agent. I can manage Calendar, Tasks, Slack, Health, GitHub, LeetCode, and Journal for you. What would you like to do?"

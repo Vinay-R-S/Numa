@@ -1,8 +1,14 @@
+"use client"
+
 /**
- * Calendar sub-agent chat hook (NUMA-114 P4, PLAN 21.2).
+ * Calendar sub-agent chat hook (NUMA-114 P4 / NUMA-118 P4, PLAN 21.2).
  *
- * Owns the agent dock: open/close, transcript (persisted in the calendar
- * store), send/abort and the Escape-to-close shortcut.
+ * Rebuilt on the shared `useAgentChat`: the dock state, the Escape shortcut,
+ * send/abort and the transcript bookkeeping live there. What stays here is the
+ * store-backed transcript (the calendar keeps its turns in `useCalendarStore`,
+ * whose setter takes an array and whose append is a separate action, which is
+ * why the shared hook takes `replace`/`append` rather than a `setState`), the
+ * awaited event refetch, and this dock's own error wording.
  *
  * Suggestions fill the composer, they do not send. The old code called
  * `setAgentInput(query)` and then fired the previous render's send callback on
@@ -11,89 +17,50 @@
  * would make one click perform an unconfirmed write to the user's real Google
  * Calendar (the "Reschedule <event>" chip drives `modify_event_by_description`),
  * so the user reviews the prefilled text and presses Send.
+ *
+ * The public return shape is unchanged, so `calendar/page.tsx` is untouched.
  */
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback } from "react"
 
+import { useAgentChat } from "@/features/agents"
 import { useCalendarStore } from "@/lib/stores"
 import { sendAgentCommand } from "./calendar.api"
-import { isAbortError } from "./calendar.utils"
+import type { AgentChatMessage, AgentChatResponse } from "./calendar.types"
 
 export function useCalendarAgent() {
   const { agentMessages, setAgentMessages, addAgentMessage, fetchEvents } = useCalendarStore()
 
-  const [agentOpen, setAgentOpen] = useState(false)
-  const [agentInput, setAgentInput] = useState("")
-  const [agentSending, setAgentSending] = useState(false)
-  const [agentError, setAgentError] = useState<string | null>(null)
-  const agentAbortRef = useRef<AbortController | null>(null)
-
-  useEffect(() => {
-    if (!agentOpen) return undefined
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setAgentOpen(false)
-    }
-
-    globalThis.addEventListener("keydown", onKeyDown)
-    return () => globalThis.removeEventListener("keydown", onKeyDown)
-  }, [agentOpen])
-
-  const sendMessage = useCallback(
-    async () => {
-      const query = agentInput.trim()
-      if (!query || agentSending) return
-
-      const controller = new AbortController()
-      agentAbortRef.current = controller
-      const nextHistory = [...agentMessages, { role: "user" as const, content: query }]
-      setAgentMessages(nextHistory)
-      setAgentInput("")
-      setAgentSending(true)
-      setAgentError(null)
-
-      try {
-        const result = await sendAgentCommand(query, nextHistory, controller.signal)
-        addAgentMessage({ role: "assistant", content: result.response })
-
-        if (result.refreshCalendar) await fetchEvents(true)
-      } catch (err) {
-        if (isAbortError(err)) {
-          addAgentMessage({ role: "assistant", content: "Generation stopped." })
-          return
-        }
-        const message = err instanceof Error ? err.message : "Calendar sub-agent request failed"
-        setAgentError(message)
-        addAgentMessage({ role: "assistant", content: `I hit an error: ${message}` })
-      } finally {
-        if (agentAbortRef.current === controller) agentAbortRef.current = null
-        setAgentSending(false)
-      }
+  const onResult = useCallback(
+    async (result: AgentChatResponse) => {
+      if (result.refreshCalendar) await fetchEvents(true)
     },
-    [agentInput, agentSending, agentMessages, setAgentMessages, addAgentMessage, fetchEvents]
+    [fetchEvents]
   )
 
-  const stopMessage = useCallback(() => {
-    agentAbortRef.current?.abort()
-  }, [])
-
-  // Prefill only: the user reviews the command and presses Send.
-  const selectSuggestion = useCallback((query: string) => setAgentInput(query), [])
-
-  const toggleAgent = useCallback(() => setAgentOpen((open) => !open), [])
-  const closeAgent = useCallback(() => setAgentOpen(false), [])
+  const chat = useAgentChat<AgentChatMessage, AgentChatResponse>({
+    transcript: {
+      messages: agentMessages,
+      replace: setAgentMessages,
+      append: addAgentMessage,
+    },
+    send: sendAgentCommand,
+    onResult,
+    errorFallback: "Calendar sub-agent request failed",
+    errorPrefix: "I hit an error: ",
+  })
 
   return {
-    agentOpen,
-    agentInput,
-    agentSending,
-    agentError,
-    agentMessages,
-    setAgentInput,
-    toggleAgent,
-    closeAgent,
-    sendMessage,
-    stopMessage,
-    selectSuggestion,
+    agentOpen: chat.open,
+    agentInput: chat.input,
+    agentSending: chat.sending,
+    agentError: chat.error,
+    agentMessages: chat.messages,
+    setAgentInput: chat.setInput,
+    toggleAgent: chat.toggleAgent,
+    closeAgent: chat.closeAgent,
+    sendMessage: chat.sendMessage,
+    stopMessage: chat.stopMessage,
+    selectSuggestion: chat.selectSuggestion,
   }
 }
 
