@@ -26,7 +26,9 @@
  * both treat an absent body as a defined fallback value.
  */
 import { expectBody, ApiError, http } from "@/lib/http"
-import { getLocalAiEnabled } from "@/lib/aiSettings"
+// Deep import of the leaf storage module: the settings barrel would pull the
+// whole settings UI into this bundle for one localStorage read.
+import { getLocalAiEnabled } from "@/features/settings/settings.storage"
 import {
   agentChatResponseSchema,
   calendarEventDtoSchema,

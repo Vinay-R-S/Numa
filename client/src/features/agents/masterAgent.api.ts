@@ -15,7 +15,9 @@
  *   non-JSON 2xx into the endpoint's error instead of resolving `undefined`.
  */
 import { expectBody, http } from "@/lib/http"
-import { getLocalAiEnabled } from "@/lib/aiSettings"
+// Deep import of the leaf storage module: the settings barrel would pull the
+// whole settings UI into this bundle for one localStorage read.
+import { getLocalAiEnabled } from "@/features/settings/settings.storage"
 import { masterAgentFetchLatestSchema, masterAgentResponseSchema } from "./agents.schema"
 import type {
   FetchLatestOptions,
