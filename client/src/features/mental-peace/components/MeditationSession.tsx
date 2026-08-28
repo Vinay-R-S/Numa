@@ -1,14 +1,16 @@
 "use client"
 
-import React from "react"
 import Image from "next/image"
 import { CheckCircle2 } from "lucide-react"
+import { yogaPoses } from "../data"
 import { MeditationTimer } from "./MeditationTimer"
 import { MusicPlayer } from "./MusicPlayer"
-import { yogaPoses } from "../yogaData"
+
+const MEDITATION_POSTURE_ID = "thunderbolt"
+const VISIBLE_INSTRUCTIONS = 4
 
 export function MeditationSession() {
-  const posture = yogaPoses.thunderbolt
+  const posture = yogaPoses[MEDITATION_POSTURE_ID]
 
   return (
     <div className="h-full overflow-hidden bg-background px-2 py-4 sm:px-4">
@@ -38,7 +40,7 @@ export function MeditationSession() {
                 {posture.sanskritName} ({posture.pronunciation})
               </p>
               <div className="mt-4 space-y-2">
-                {posture.instructions.slice(0, 4).map((instruction) => (
+                {posture.instructions.slice(0, VISIBLE_INSTRUCTIONS).map((instruction) => (
                   <div key={instruction} className="flex gap-2 text-sm text-muted-foreground">
                     <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-foreground" />
                     <span>{instruction}</span>

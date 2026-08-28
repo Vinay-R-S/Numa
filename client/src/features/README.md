@@ -46,7 +46,10 @@ in the feature's `api.ts` (they are intentionally not in the shared client):
 
 Complete as of NUMA-118: every `*Api.ts` now lives in its feature module on
 `lib/http`, and `src/components/` holds only shared UI (`ui/`, `sections/`,
-`tasklist/` layout chrome) plus the top-level page components.
+`tasklist/` layout chrome) plus the top-level page components. Two API files the
+table below never listed followed later: `lib/aiSettings.ts` ->
+`features/settings/settings.api.ts` (NUMA-119) and the raw audio-library fetches
+-> `features/mental-peace/mentalPeace.api.ts` (NUMA-120).
 
 | Was | Now | Landed on |
 |---|---|---|
@@ -69,3 +72,11 @@ Complete as of NUMA-118: every `*Api.ts` now lives in its feature module on
 - `AgentDockPanel` - the complete sub-agent dock that slack and health both
   render. Calendar and the master agent keep their own layouts and share only
   `AgentDockShell` + `AgentMessageContent`.
+
+## Static data (NUMA-120)
+
+`features/mental-peace/data/` holds the yoga pose database and the mood
+sequences. Data modules export content only: no React, no fetching, and nothing
+imported back from the feature except its types, so a screen can pull one pose
+without dragging in the session hooks. Feature `<feature>.constants.ts` stays for tuning values
+(intervals, presets, bounds); `data/` is for content.
