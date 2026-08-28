@@ -1,25 +1,25 @@
 "use client"
 
-import React, { useState } from "react"
+import { useState } from "react"
 import { ChevronDown } from "lucide-react"
-import { MoodType, moodConfig } from "../yogaData"
+import { moodConfig } from "../data"
 import { MeditationTimer } from "./MeditationTimer"
 import { MusicPlayer } from "./MusicPlayer"
 import { YogaSection } from "./YogaSection"
+import type { MoodType } from "../mentalPeace.types"
 
-interface DashboardProps {
+interface SessionDashboardProps {
   mood: MoodType
   onBeginSession: () => void
 }
 
-export function Dashboard({ mood, onBeginSession }: DashboardProps) {
+export function SessionDashboard({ mood, onBeginSession }: SessionDashboardProps) {
   const [showWhyPoses, setShowWhyPoses] = useState(false)
   const config = moodConfig[mood]
 
   return (
     <div className="h-full overflow-hidden bg-background p-3 sm:p-4 lg:p-5">
       <div className="flex h-full w-full flex-col">
-        {/* Header */}
         <div className="mb-4 shrink-0">
           <h1 className="text-xl font-bold text-foreground sm:text-2xl">
             Your Session
@@ -49,7 +49,6 @@ export function Dashboard({ mood, onBeginSession }: DashboardProps) {
 
         <div className="mb-4 h-px w-full shrink-0 bg-border/40" />
 
-        {/* Main layout */}
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden sm:gap-5 lg:flex-row">
           <div className="lg:w-auto">
             <MusicPlayer />

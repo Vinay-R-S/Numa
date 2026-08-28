@@ -1,20 +1,19 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import { Loader2 } from "lucide-react"
-import { MoodType, moodConfig } from "../yogaData"
+import { moodConfig } from "../data"
+import {
+  PREPARING_DURATION_MS,
+  PREPARING_MESSAGES,
+  PREPARING_MESSAGE_INTERVAL_MS,
+} from "../mentalPeace.constants"
+import type { MoodType } from "../mentalPeace.types"
 
 interface PreparingSessionProps {
   mood: MoodType
   onComplete: () => void
 }
-
-const preparingMessages = [
-  "Preparing your space...",
-  "Selecting poses for your mood...",
-  "Creating your flow...",
-  "Almost ready...",
-]
 
 export function PreparingSession({ mood, onComplete }: PreparingSessionProps) {
   const [messageIndex, setMessageIndex] = useState(0)
@@ -22,12 +21,10 @@ export function PreparingSession({ mood, onComplete }: PreparingSessionProps) {
 
   useEffect(() => {
     const messageInterval = setInterval(() => {
-      setMessageIndex((prev) => (prev + 1) % preparingMessages.length)
-    }, 700)
+      setMessageIndex((prev) => (prev + 1) % PREPARING_MESSAGES.length)
+    }, PREPARING_MESSAGE_INTERVAL_MS)
 
-    const completeTimeout = setTimeout(() => {
-      onComplete()
-    }, 2800)
+    const completeTimeout = setTimeout(onComplete, PREPARING_DURATION_MS)
 
     return () => {
       clearInterval(messageInterval)
@@ -48,7 +45,7 @@ export function PreparingSession({ mood, onComplete }: PreparingSessionProps) {
         </p>
 
         <p className="mt-6 text-sm text-muted-foreground">
-          {preparingMessages[messageIndex]}
+          {PREPARING_MESSAGES[messageIndex]}
         </p>
       </div>
     </div>

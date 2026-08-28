@@ -1,0 +1,31 @@
+/**
+ * Mental peace API (NUMA-120 P4, PLAN 17.5 / 21.2 / 22.2).
+ *
+ * Replaces the two raw `fetch("/api/audio-library/ensure")` calls the page and
+ * the music player each ran inline. The soundscape files themselves stay plain
+ * `<audio src>` URLs: they are streamed by the browser, not fetched as JSON.
+ *
+ * Behavior carried over: a 200 answering `{ ok: false }` means some file could
+ * not be downloaded, which the player surfaces as an error, so the check stays
+ * here rather than in the hook (PLAN features/README migration notes).
+ */
+import { expectBody, http } from "@/lib/http"
+import { audioLibraryEnsureSchema } from "./mentalPeace.schema"
+import type { AudioLibraryEnsureResult } from "./mentalPeace.types"
+
+export const AUDIO_PREPARE_ERROR = "Unable to prepare local audio"
+export const AUDIO_PARTIAL_ERROR = "Some audio files could not be downloaded"
+
+export async function ensureAudioLibrary(): Promise<AudioLibraryEnsureResult> {
+  const result = await expectBody(
+    http.post<AudioLibraryEnsureResult>("/audio-library/ensure", undefined, {
+      schema: audioLibraryEnsureSchema,
+      errorMessage: AUDIO_PREPARE_ERROR,
+    }),
+    AUDIO_PREPARE_ERROR
+  )
+
+  if (!result.ok) throw new Error(AUDIO_PARTIAL_ERROR)
+
+  return result
+}

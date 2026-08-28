@@ -1,37 +1,36 @@
 "use client"
 
-import React, { useState } from "react"
+import { useState } from "react"
 import { Heart, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { REFLECTION_PROMPTS } from "../mentalPeace.constants"
 
 interface ReflectionCardProps {
   onComplete: () => void
 }
 
-const reflectionPrompts = [
-  "How does your body feel right now?",
-  "What thoughts came up during your practice?",
-  "What are you grateful for in this moment?",
-  "Is there anything you want to let go of?",
-]
-
+/**
+ * Post-practice reflection prompts. Not mounted by any stage today; kept as the
+ * feature's own component (NUMA-120 moved it, it is not new) so wiring it into
+ * the flow stays a one-line change.
+ */
 export function ReflectionCard({ onComplete }: ReflectionCardProps) {
   const [currentPrompt, setCurrentPrompt] = useState(0)
   const [reflection, setReflection] = useState("")
 
   const handleNext = () => {
-    if (currentPrompt < reflectionPrompts.length - 1) {
-      setCurrentPrompt(currentPrompt + 1)
-      setReflection("")
-    } else {
+    if (currentPrompt >= REFLECTION_PROMPTS.length - 1) {
       onComplete()
+      return
     }
+
+    setCurrentPrompt(currentPrompt + 1)
+    setReflection("")
   }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-3 sm:px-6">
       <div className="w-full max-w-lg">
-        {/* Header */}
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border/40 bg-card/40">
             <Sparkles className="h-7 w-7 text-primary" />
@@ -44,30 +43,22 @@ export function ReflectionCard({ onComplete }: ReflectionCardProps) {
           </p>
         </div>
 
-        {/* Reflection card */}
         <div className="mb-6 rounded-2xl border border-border/40 bg-card/40 p-4 sm:p-6">
-          {/* Progress dots */}
           <div className="mb-6 flex justify-center gap-2">
-            {reflectionPrompts.map((_, i) => (
+            {REFLECTION_PROMPTS.map((prompt, i) => (
               <div
-                key={i}
+                key={prompt}
                 className={`h-2 w-2 rounded-full transition-colors ${
-                  i === currentPrompt
-                    ? "bg-primary"
-                    : i < currentPrompt
-                      ? "bg-primary/50"
-                      : "bg-border/40"
+                  i === currentPrompt ? "bg-primary" : i < currentPrompt ? "bg-primary/50" : "bg-border/40"
                 }`}
               />
             ))}
           </div>
 
-          {/* Prompt */}
           <h3 className="mb-6 text-center text-lg font-medium text-foreground">
-            {reflectionPrompts[currentPrompt]}
+            {REFLECTION_PROMPTS[currentPrompt]}
           </h3>
 
-          {/* Text area */}
           <textarea
             value={reflection}
             onChange={(e) => setReflection(e.target.value)}
@@ -76,20 +67,12 @@ export function ReflectionCard({ onComplete }: ReflectionCardProps) {
           />
         </div>
 
-        {/* Actions */}
         <div className="flex gap-3 sm:gap-4">
-          <Button
-            variant="outline"
-            onClick={onComplete}
-            className="flex-1"
-          >
+          <Button variant="outline" onClick={onComplete} className="flex-1">
             Skip Reflection
           </Button>
-          <Button
-            onClick={handleNext}
-            className="flex-1 gap-2"
-          >
-            {currentPrompt < reflectionPrompts.length - 1 ? (
+          <Button onClick={handleNext} className="flex-1 gap-2">
+            {currentPrompt < REFLECTION_PROMPTS.length - 1 ? (
               "Next"
             ) : (
               <>
