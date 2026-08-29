@@ -29,13 +29,39 @@ from src.core.scheduler import start_periodic_sync_scheduler
 
 log = logging.getLogger(__name__)
 
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
+# Origins never carry a trailing slash, so a FRONTEND_URL written with one would
+# silently never match.
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
 
-# In production set FRONTEND_URL to your exact origin.
-# During local dev we match any HTTP/HTTPS origin via regex so any device on
-# the network can connect. allow_origin_regex echoes the real origin back
-# (unlike "*") which lets allow_credentials work correctly.
-IS_DEV = not FRONTEND_URL
+# The environment is declared, not inferred (NUMA-127 P6, PLAN 8). `IS_DEV = not
+# FRONTEND_URL` conflated "which origin is allowed" with "which environment is
+# this", and got both wrong: a deploy that forgot FRONTEND_URL silently opened
+# the API to every origin on the internet, while a developer following
+# .env.example - which sets FRONTEND_URL - never got the LAN regex the comment
+# promised. Defaulting to production means a missing NUMA_ENV fails closed.
+NUMA_ENV = os.environ.get("NUMA_ENV", "production").strip().lower()
+IS_DEV = NUMA_ENV == "development"
+
+# Loopback and the RFC1918 ranges only, so a phone on the same wifi still reaches
+# the dev server while the old `https?://.*` no longer matches any site anywhere.
+# Starlette fullmatches this, and the anchors keep it correct if that ever changes.
+DEV_ORIGIN_REGEX = (
+    r"^https?://("
+    r"localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\]|"
+    r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+    r"192\.168\.\d{1,3}\.\d{1,3}|"
+    r"172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+    r")(:\d+)?$"
+)
+
+CORS_ORIGINS = [FRONTEND_URL] if FRONTEND_URL else []
+
+if not IS_DEV and not CORS_ORIGINS:
+    log.error(
+        "FRONTEND_URL is unset and NUMA_ENV is not 'development'. Refusing every "
+        "cross-origin browser request. Set FRONTEND_URL to the deployed origin, "
+        "or NUMA_ENV=development for local work."
+    )
 
 
 @asynccontextmanager
@@ -56,9 +82,12 @@ IMAGE_ASSETS_ROOT = SERVER_ROOT / "assets" / "images"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL] if not IS_DEV else [],
-    allow_origin_regex=r"https?://.*" if IS_DEV else None,
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_origin_regex=DEV_ORIGIN_REGEX if IS_DEV else None,
+    # Auth is a Bearer header read from localStorage, never a cookie, so the
+    # browser has no credentials to send here. Keeping this off means an allowed
+    # origin still cannot ride a logged-in session (NUMA-127).
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     # WWW-Authenticate is not CORS-safelisted, so a cross-origin client cannot
