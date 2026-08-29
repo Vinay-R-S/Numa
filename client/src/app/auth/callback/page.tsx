@@ -8,6 +8,7 @@ import {
   hasIntegrationBootstrapPending,
   runIntegrationBootstrap,
 } from "@/lib/bootstrapIntegrations";
+import { storeToken } from "@/lib/session";
 
 /**
  * OAuth Callback Page
@@ -74,7 +75,7 @@ export default function AuthCallbackPage() {
           return;
         }
 
-        localStorage.setItem("numa_token", json.access_token);
+        storeToken(json.access_token);
 
         if (hasIntegrationBootstrapPending()) {
           const result = await runIntegrationBootstrap(json.access_token);

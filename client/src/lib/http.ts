@@ -11,21 +11,31 @@
  * always prefixes `/api`, which the proxy then strips, so pointing the var at
  * FastAPI directly 404s the eight routers that mount without an `/api` prefix.
  * Removing the double prefix is Tier 0 work (PLAN NUMA-116 deferred item).
+ *
+ * A 401 is ambiguous in this app (NUMA-126): the backend uses it both for a
+ * dead session and for "this integration is not connected" (calendar). Only the
+ * first carries `WWW-Authenticate: Bearer`, which is what `isAuthFailure`
+ * reads, so ending the session on a 401 never signs a user out over an
+ * unconnected Google Calendar.
  */
 import type { ZodType } from "zod"
 
+import { endSession, getToken } from "./session"
+
 const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL || ""
-const TOKEN_KEY = "numa_token"
 
 export class ApiError extends Error {
   readonly status: number
   readonly detail: string
+  /** 401 from the JWT dependency, as opposed to a domain 401 like "not connected". */
+  readonly isAuthFailure: boolean
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, isAuthFailure = false) {
     super(detail)
     this.name = "ApiError"
     this.status = status
     this.detail = detail
+    this.isAuthFailure = isAuthFailure
   }
 }
 
@@ -44,11 +54,6 @@ export interface RequestOptions<T> {
   timeoutMs?: number
   /** Message thrown when `timeoutMs` elapses. Caller-abort still throws AbortError. */
   timeoutMessage?: string
-}
-
-export function getAuthToken(): string | null {
-  if (typeof window === "undefined") return null
-  return localStorage.getItem(TOKEN_KEY)
 }
 
 export function isAbortError(error: unknown): boolean {
@@ -145,7 +150,7 @@ export async function request<T>(path: string, options: RequestOptions<T> = {}):
     timeoutMs,
     timeoutMessage,
   } = options
-  const token = getAuthToken()
+  const token = getToken()
 
   const finalHeaders = new Headers(headers)
   if (token && !finalHeaders.has("Authorization")) finalHeaders.set("Authorization", `Bearer ${token}`)
@@ -166,7 +171,16 @@ export async function request<T>(path: string, options: RequestOptions<T> = {}):
 
   if (!res.ok) {
     const fallback = errorMessage || res.statusText || `Request failed (${res.status})`
-    throw new ApiError(res.status, await extractDetail(res, fallback))
+    const authFailure =
+      res.status === 401 &&
+      (res.headers.get("www-authenticate") || "").toLowerCase().includes("bearer")
+    const detail = await extractDetail(res, fallback)
+
+    // The token is gone or no longer accepted: drop it and send the user to
+    // sign in rather than leaving them on a page that can only keep failing.
+    if (authFailure) endSession()
+
+    throw new ApiError(res.status, detail, authFailure)
   }
 
   if (res.status === 204) return undefined as T

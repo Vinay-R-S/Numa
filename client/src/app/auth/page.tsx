@@ -8,6 +8,7 @@ import { ArrowLeft, Mail, Lock, User, Eye, EyeOff, Check, X } from "lucide-react
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { markIntegrationBootstrapPending } from "@/lib/bootstrapIntegrations";
+import { storeToken } from "@/lib/session"
 
 type Mode = "signin" | "signup";
 
@@ -77,7 +78,7 @@ export default function AuthPage() {
       }
 
       // Store JWT and redirect (works for both sign-in and sign-up)
-      localStorage.setItem("numa_token", data.access_token);
+      storeToken(data.access_token);
       router.push("/home");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong.");

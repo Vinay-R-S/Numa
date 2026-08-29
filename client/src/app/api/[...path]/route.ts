@@ -51,7 +51,16 @@ async function handler(
   const resHeaders = new Headers()
   const resCt = upstream.headers.get("content-type")
   if (resCt) resHeaders.set("content-type", resCt)
-  for (const headerName of ["accept-ranges", "content-range", "content-length", "cache-control"]) {
+  // www-authenticate distinguishes a dead session from a domain 401 such as
+  // "calendar not connected" (NUMA-126); lib/http reads it to decide whether to
+  // sign the user out, so it must survive the proxy hop.
+  for (const headerName of [
+    "accept-ranges",
+    "content-range",
+    "content-length",
+    "cache-control",
+    "www-authenticate",
+  ]) {
     const headerValue = upstream.headers.get(headerName)
     if (headerValue) resHeaders.set(headerName, headerValue)
   }

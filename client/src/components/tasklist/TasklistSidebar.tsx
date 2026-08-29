@@ -21,6 +21,7 @@ import {
   BookOpen,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { clearToken } from "@/lib/session"
 
 type NavItem = {
   href: string
@@ -55,7 +56,7 @@ export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: Taskl
   const isExpanded = locked || hovered
 
   const handleSignOut = () => {
-    localStorage.removeItem("numa_token")
+    clearToken()
     window.location.href = "/auth"
   }
 

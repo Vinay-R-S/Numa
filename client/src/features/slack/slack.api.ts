@@ -21,7 +21,8 @@
  *   enough), which would put `undefined` into React state and crash the page on
  *   the next render, so `expectBody` turns that into the endpoint's error.
  */
-import { expectBody, getAuthToken, http } from "@/lib/http"
+import { expectBody, http } from "@/lib/http"
+import { hasValidToken } from "@/lib/session"
 import {
   slackChannelListSchema,
   slackChatResponseSchema,
@@ -122,7 +123,7 @@ export function sendSlackMessage(
 }
 
 export async function connectSlack(): Promise<void> {
-  if (!getAuthToken()) {
+  if (!hasValidToken()) {
     globalThis.location.href = "/auth"
     return
   }
