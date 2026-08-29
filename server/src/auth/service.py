@@ -71,7 +71,12 @@ def _upsert_profile(user_id: str, full_name: str | None) -> None:
 # ── Auth operations ───────────────────────────────────────────────────────────
 
 def sign_up(email: str, password: str, full_name: Optional[str] = None) -> dict:
-    """Register a new user via Supabase and return our JWT + user info."""
+    """Register a new user via Supabase and return our JWT + user info.
+
+    Only a confirmed sign-up (one Supabase answers with a session) gets a token;
+    everything else is told to confirm first, which is also the answer an already
+    registered address gets, so this does not leak which addresses exist.
+    """
     response = supabase.auth.sign_up(
         {
             "email": email,
@@ -85,6 +90,18 @@ def sign_up(email: str, password: str, full_name: Optional[str] = None) -> dict:
     user = response.user
     display_name = (user.user_metadata or {}).get("full_name")
     _upsert_profile(str(user.id), display_name)
+
+    # Supabase returns a user with no session when the address still has to be
+    # confirmed, and an obfuscated placeholder user when the address is already
+    # registered. Minting our JWT off `response.user` alone therefore proved
+    # nothing about who owns the address - and since NUMA-125 keys admin access
+    # on the email claim, that let anyone claim an allowlisted address by
+    # signing up with it first. No session, no token (NUMA-125 P6, PLAN 8).
+    if response.session is None:
+        raise ValueError(
+            "Check your email to confirm your account, then sign in."
+        )
+
     token = create_jwt(
         str(user.id),
         user.email,

@@ -4,10 +4,19 @@ AI Settings Router - HTTP only (NUMA-119 P5, PLAN 2.1).
 Provider validation, encryption and the integration-key `.env` handling live in
 `AISettingsService`; this module parses the request, delegates, and maps the
 domain errors to status codes.
+
+Two different scopes share this router (NUMA-125 P6, PLAN 8). The bare
+`/ai-settings` routes are per-user and stay open to every signed-in user: that
+is the BYOK path, where each user picks a provider/model and stores their own
+encrypted API key. `/integration-keys` is server-wide - it rewrites the server
+`.env` and mutates `os.environ` for every user at once - so the write side takes
+`require_admin`. The read side stays authenticated-only: it answers with one
+boolean per key plus non-secret values (file paths, the LeetCode username), so
+gating it would break the panel for non-admins without hiding a secret.
 """
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth.dependencies import get_current_user
+from ..auth.dependencies import get_current_user, require_admin
 from .schemas import AISettingsResponse, AISettingsUpdate, ProvidersListResponse
 from .service import (
     AISettingsError,
@@ -76,8 +85,8 @@ def get_integration_keys(
 @router.put("/integration-keys")
 def update_integration_keys(
     body: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_admin),
     service: AISettingsService = Depends(get_ai_settings_service),
 ):
-    """Update integration keys in the server .env file."""
+    """Update integration keys in the server .env file. Admin only."""
     return service.update_integration_keys(body)
