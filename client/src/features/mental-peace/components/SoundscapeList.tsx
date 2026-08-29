@@ -1,21 +1,70 @@
 "use client"
 
-import { SOUNDSCAPES } from "../mentalPeace.constants"
+import { SOUNDSCAPE_PLACEHOLDER_COUNT } from "../mentalPeace.constants"
 import type { Soundscape } from "../mentalPeace.types"
 
 interface SoundscapeListProps {
+  soundscapes: Soundscape[]
   activeId: string | null
   isPlaying: boolean
   isPreparing: boolean
   onSelect: (soundscape: Soundscape) => void
+  onRetry: () => void
 }
 
 const EQUALIZER_BARS = [1, 2, 3]
+const PLACEHOLDER_ROWS = Array.from({ length: SOUNDSCAPE_PLACEHOLDER_COUNT }, (_, index) => index)
 
-export function SoundscapeList({ activeId, isPlaying, isPreparing, onSelect }: SoundscapeListProps) {
+/** Same geometry as a real row, so the list does not resize when it arrives. */
+function SoundscapePlaceholder() {
+  return (
+    <div className="w-full rounded-lg border border-border/40 bg-card/20 p-2.5">
+      <div className="space-y-1.5">
+        <div className="h-3 w-2/5 animate-pulse rounded bg-muted-foreground/20" />
+        <div className="h-2 w-3/5 animate-pulse rounded bg-muted-foreground/10" />
+      </div>
+    </div>
+  )
+}
+
+export function SoundscapeList({
+  soundscapes,
+  activeId,
+  isPlaying,
+  isPreparing,
+  onSelect,
+  onRetry,
+}: SoundscapeListProps) {
+  // The catalog comes from the audio-library call (NUMA-124). Skeletons belong
+  // to the in-flight request only: a settled request with no tracks is a
+  // failure, and pulsing at the user forever would hide that.
+  if (isPreparing) {
+    return (
+      <div className="space-y-1.5">
+        {PLACEHOLDER_ROWS.map((row) => (
+          <SoundscapePlaceholder key={row} />
+        ))}
+      </div>
+    )
+  }
+
+  if (soundscapes.length === 0) {
+    return (
+      <div className="rounded-lg border border-border/40 bg-card/20 p-2.5 text-center">
+        <p className="text-[10px] text-muted-foreground">No soundscapes available</p>
+        <button
+          onClick={onRetry}
+          className="mt-1.5 text-[10px] font-medium text-primary underline-offset-2 hover:underline"
+        >
+          Try again
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-1.5">
-      {SOUNDSCAPES.map((soundscape) => {
+      {soundscapes.map((soundscape) => {
         const isActive = activeId === soundscape.id
 
         return (

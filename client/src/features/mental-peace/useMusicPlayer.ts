@@ -6,15 +6,29 @@
  * Everything `MusicPlayer` held inline: the audio-library prepare call, the
  * selected soundscape, transport state, volume/loop/mute and seeking. The
  * component keeps the `<audio>` element and passes its ref in.
+ *
+ * The track list comes from the prepare call too (NUMA-124, PLAN 10). It used
+ * to be the `SOUNDSCAPES` constant, a second copy of the server catalog; the
+ * `ensure` response already carries every track. Because the list now depends
+ * on a request, the failure path has to be recoverable: `retryPrepare` re-runs
+ * it, so an expired token or a backend blip no longer leaves a player that can
+ * never list a track again.
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { RefObject } from "react"
-import { AUDIO_PARTIAL_ERROR, AUDIO_PREPARE_ERROR, ensureAudioLibrary } from "./mentalPeace.api"
+import {
+  AUDIO_PARTIAL_ERROR,
+  AUDIO_PREPARE_ERROR,
+  AudioLibraryPartialError,
+  ensureAudioLibrary,
+} from "./mentalPeace.api"
 import { DEFAULT_PLAYER_VOLUME } from "./mentalPeace.constants"
+import { toSoundscapes } from "./mentalPeace.transforms"
 import type { Soundscape } from "./mentalPeace.types"
 
 export interface UseMusicPlayerReturn {
   audioRef: RefObject<HTMLAudioElement | null>
+  soundscapes: Soundscape[]
   activeSoundscape: Soundscape | null
   isPlaying: boolean
   isMuted: boolean
@@ -25,6 +39,7 @@ export interface UseMusicPlayerReturn {
   displayDuration: number
   progress: number
   audioError: string | null
+  retryPrepare: () => void
   selectSoundscape: (soundscape: Soundscape) => void
   togglePlay: () => void
   toggleLoop: () => void
@@ -35,6 +50,7 @@ export interface UseMusicPlayerReturn {
 }
 
 export function useMusicPlayer(): UseMusicPlayerReturn {
+  const [soundscapes, setSoundscapes] = useState<Soundscape[]>([])
   const [activeSoundscape, setActiveSoundscape] = useState<Soundscape | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
@@ -44,6 +60,7 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
   const [duration, setDuration] = useState(0)
   const [isPreparing, setIsPreparing] = useState(true)
   const [audioError, setAudioError] = useState<string | null>(null)
+  const [prepareAttempt, setPrepareAttempt] = useState(0)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const autoPlayPendingRef = useRef(false)
@@ -55,13 +72,19 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
       setIsPreparing(true)
       setAudioError(null)
       try {
-        await ensureAudioLibrary()
+        const library = await ensureAudioLibrary()
+        if (!cancelled) setSoundscapes(toSoundscapes(library.items))
       } catch (err) {
         // Only the partial-download message is meant for this banner: an
         // ApiError carries the proxy's detail (internal backend address and
         // all) and a schema mismatch carries a ZodError dump.
-        const partial = err instanceof Error && err.message === AUDIO_PARTIAL_ERROR
-        if (!cancelled) setAudioError(partial ? AUDIO_PARTIAL_ERROR : AUDIO_PREPARE_ERROR)
+        if (cancelled) return
+
+        const partial = err instanceof AudioLibraryPartialError
+        // A partial failure still describes every track, so the list renders
+        // and the unready ones report themselves when played.
+        if (partial) setSoundscapes(toSoundscapes(err.result.items))
+        setAudioError(partial ? AUDIO_PARTIAL_ERROR : AUDIO_PREPARE_ERROR)
       } finally {
         if (!cancelled) setIsPreparing(false)
       }
@@ -72,7 +95,9 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [prepareAttempt])
+
+  const retryPrepare = useCallback(() => setPrepareAttempt((attempt) => attempt + 1), [])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -223,6 +248,7 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
 
   return {
     audioRef,
+    soundscapes,
     activeSoundscape,
     isPlaying,
     isMuted,
@@ -233,6 +259,7 @@ export function useMusicPlayer(): UseMusicPlayerReturn {
     displayDuration,
     progress,
     audioError,
+    retryPrepare,
     selectSoundscape,
     togglePlay,
     toggleLoop,

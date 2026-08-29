@@ -405,7 +405,7 @@ Numa/
 |   |-- src/
 |   |   |-- ai_settings/           # LLM provider config
 |   |   |-- api/                   # External API helpers
-|   |   |-- audio_library/         # Audio library routes
+|   |   |-- audio_library/         # Soundscape catalog + local downloads
 |   |   |-- auth/                  # Authentication and JWT helpers
 |   |   |-- calendar/              # Google Calendar service
 |   |   |-- calendar_agent/        # Calendar sub-agent
