@@ -26,6 +26,8 @@ from src.dashboard.router import router as dashboard_router
 from src.audio_library.router import router as audio_library_router
 from src.core.db import init_db
 from src.core.scheduler import start_periodic_sync_scheduler
+from src.core.security import verify_encryption_key
+from src.ai_settings.repository import ai_settings_repository
 
 log = logging.getLogger(__name__)
 
@@ -64,11 +66,21 @@ if not IS_DEV and not CORS_ORIGINS:
     )
 
 
+def _check_encryption_key() -> None:
+    """Fail the boot rather than a request (NUMA-128 P6, PLAN 8).
+
+    A malformed key used to surface as a 500 from the settings page on the first
+    save, and a missing one silently produced ciphertext nothing could read back.
+    """
+    verify_encryption_key(encrypted_rows_exist=ai_settings_repository.encrypted_key_count() > 0)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, lambda: init_db(raise_on_error=True))
+    await loop.run_in_executor(None, _check_encryption_key)
 
     import threading
     threading.Thread(target=start_periodic_sync_scheduler, daemon=True).start()
