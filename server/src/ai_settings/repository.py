@@ -8,6 +8,18 @@ _RETURNING = "RETURNING provider, model_id, encrypted_api_key, ollama_base_url, 
 
 
 class AISettingsRepository(BaseRepository):
+    def encrypted_key_count(self) -> int:
+        """Stored ciphertexts. The boot check fails closed when these exist
+        without a key to read them (NUMA-128, PLAN 8)."""
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM public.user_ai_settings "
+                "WHERE encrypted_api_key IS NOT NULL AND encrypted_api_key <> ''"
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
     def get(self, user_id: str) -> Optional[Dict]:
         with get_db() as conn:
             cur = conn.cursor()

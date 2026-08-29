@@ -10,11 +10,8 @@ from __future__ import annotations
 import os
 
 from ..core.base import BaseService
-from ..core.llm_factory import (
-    PROVIDER_MODELS,
-    encrypt_api_key,
-    get_available_providers,
-)
+from ..core.llm_factory import PROVIDER_MODELS, get_available_providers
+from ..core.security import EncryptionKeyError, encrypt_api_key
 from .constants import ENV_FILE_PATH, INTEGRATION_KEYS, NON_SECRET_KEYS
 from .repository import AISettingsRepository, ai_settings_repository
 from .schemas import (
@@ -68,7 +65,12 @@ class AISettingsService(BaseService):
 
         encrypted = None
         if body.api_key and body.api_key.strip():
-            encrypted = encrypt_api_key(body.api_key.strip())
+            try:
+                encrypted = encrypt_api_key(body.api_key.strip())
+            except EncryptionKeyError as exc:
+                # Was an unhandled ValueError from Fernet, so saving a key
+                # answered a bare 500 with no hint of the cause (NUMA-128).
+                raise AISettingsSaveError(f"Cannot store the API key: {exc}") from exc
 
         try:
             result = self.repository.upsert(

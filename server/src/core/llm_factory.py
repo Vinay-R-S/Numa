@@ -20,7 +20,14 @@ import logging
 import os
 from typing import Optional
 
-from cryptography.fernet import Fernet
+# The cipher moved to core.security on NUMA-128 (PLAN 5.1 / 8), which is where
+# security.py always said it belonged. Re-exported so callers importing it from
+# here - ai_settings did until this branch - keep working.
+from .security import (  # noqa: F401  re-exported for existing import paths
+    EncryptionKeyError,
+    decrypt_api_key,
+    encrypt_api_key,
+)
 
 log = logging.getLogger(__name__)
 
@@ -142,38 +149,6 @@ def _provider_api_keys(provider: str, api_key: Optional[str]) -> list[str]:
     return _get_env_api_keys(provider)
 
 
-def _get_encryption_key() -> bytes:
-    """Derive or retrieve the Fernet key for API-key encryption."""
-    raw = os.getenv("NUMA_ENCRYPTION_KEY", "").strip()
-    if raw:
-        return raw.encode()
-    from cryptography.fernet import Fernet as _F
-    key = _F.generate_key()
-    log.warning(
-        "NUMA_ENCRYPTION_KEY not set - generated ephemeral key. "
-        "Set it in .env to persist encrypted API keys across restarts."
-    )
-    return key
-
-
-_fernet: Optional[Fernet] = None
-
-
-def _get_fernet() -> Fernet:
-    global _fernet
-    if _fernet is None:
-        _fernet = Fernet(_get_encryption_key())
-    return _fernet
-
-
-def encrypt_api_key(plain: str) -> str:
-    return _get_fernet().encrypt(plain.encode()).decode()
-
-
-def decrypt_api_key(token: str) -> str:
-    return _get_fernet().decrypt(token.encode()).decode()
-
-
 def _load_user_settings(user_id: str) -> Optional[dict]:
     """Fetch the active AI settings row for a user."""
     try:
@@ -230,6 +205,11 @@ def _resolve_provider_and_model(
             if settings.get("encrypted_api_key"):
                 try:
                     api_key = decrypt_api_key(settings["encrypted_api_key"])
+                except EncryptionKeyError as exc:
+                    # A configuration fault, not a bad row: every user is
+                    # affected and the shared env key is about to be used in
+                    # place of theirs, so say so at error level.
+                    log.error("Cannot decrypt stored API keys: %s", exc)
                 except Exception:
                     log.warning("Failed to decrypt API key for user %s", user_id)
             ollama_base_url = settings.get("ollama_base_url")
