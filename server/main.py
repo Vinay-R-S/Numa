@@ -61,6 +61,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # WWW-Authenticate is not CORS-safelisted, so a cross-origin client cannot
+    # read it unless it is exposed. lib/http uses it to tell a dead session from
+    # a domain 401 (NUMA-126); without this the check silently returns false the
+    # day the client stops going through the Next proxy.
+    expose_headers=["WWW-Authenticate"],
 )
 
 

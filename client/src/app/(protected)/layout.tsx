@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { AppShell } from "@/components/tasklist/AppShell"
 import { supabase } from "@/lib/supabase"
 import { hasIntegrationBootstrapPending, runIntegrationBootstrap } from "@/lib/bootstrapIntegrations"
+import { clearToken, getToken, isTokenExpired, storeToken } from "@/lib/session"
 
 export default function ProtectedLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -22,12 +23,19 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
     }
 
     const ensureSession = async () => {
-      const token = localStorage.getItem("numa_token")
-      if (token) {
+      const token = getToken()
+      if (token && !isTokenExpired(token)) {
         if (!cancelled) setCheckingAuth(false)
         void maybeRunBootstrap(token)
         return
       }
+
+      // Presence used to be the whole check, so an expired token rendered every
+      // protected page against a backend that answered 401 (NUMA-126). Drop it
+      // and fall through: the Supabase session usually outlives our 7-day JWT,
+      // in which case the exchange below issues a fresh one and the user never
+      // sees the sign-in screen.
+      if (token) clearToken()
 
       const { data } = await supabase.auth.getSession()
       const supabaseToken = data.session?.access_token
@@ -48,7 +56,7 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
           return
         }
 
-        localStorage.setItem("numa_token", json.access_token)
+        storeToken(json.access_token)
         if (!cancelled) setCheckingAuth(false)
         void maybeRunBootstrap(json.access_token)
       } catch {

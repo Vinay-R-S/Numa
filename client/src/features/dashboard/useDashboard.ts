@@ -8,22 +8,20 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useRouter } from "next/navigation"
 import { ApiError } from "@/lib/http"
 import { useDashboardStore } from "@/lib/stores"
 import { fetchLatestAgentData } from "@/features/agents"
 import { fetchCurrentUser } from "./dashboard.api"
 import { EMPTY_TASKS, EMPTY_TODAY_TASKS } from "./dashboard.constants"
 import type { DashboardUser } from "./dashboard.types"
+import { getToken } from "@/lib/session"
 
-const TOKEN_KEY = "numa_token"
 /** Minimum spinner time so a cached refresh still reads as an action. */
 const REFRESH_MIN_MS = 500
 /** Sync is queued server-side; re-poll the aggregate as results land. */
 const SYNC_REFRESH_DELAYS_MS = [5000, 15000, 30000]
 
 export function useDashboard() {
-  const router = useRouter()
   const { stats, statsLoading, fetchStats: loadStats } = useDashboardStore()
 
   const [user, setUser] = useState<DashboardUser | null>(null)
@@ -33,17 +31,17 @@ export function useDashboard() {
   const syncRefreshTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
 
   useEffect(() => {
-    if (!localStorage.getItem(TOKEN_KEY)) return
+    if (!getToken()) return
 
     fetchCurrentUser()
       .then(setUser)
       .catch((err: unknown) => {
-        if (err instanceof ApiError && err.status === 401) {
-          localStorage.removeItem(TOKEN_KEY)
-          router.replace("/auth")
-        }
+        // An auth 401 is already handled: lib/http clears the token and
+        // navigates to /auth (NUMA-126). Anything else is not fatal to the
+        // page, so the dashboard renders without the user header.
+        if (!(err instanceof ApiError)) throw err
       })
-  }, [router])
+  }, [])
 
   useEffect(() => {
     loadStats()

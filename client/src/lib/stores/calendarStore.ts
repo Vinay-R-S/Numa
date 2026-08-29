@@ -74,7 +74,9 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     } catch (err) {
       // A 401 from /calendar/events means the Google token is missing or expired:
       // not an error, just not connected. Let the UI show the reconnect prompt.
-      if (err instanceof ApiError && err.status === 401) {
+      // `isAuthFailure` excludes the other 401 on this route - a dead Numa
+      // session - which lib/http has already signed the user out for (NUMA-126).
+      if (err instanceof ApiError && err.status === 401 && !err.isAuthFailure) {
         set({ calendarConnected: false, events: [] })
       } else {
         set({ error: err instanceof Error ? err.message : "Failed to load calendar events" })
