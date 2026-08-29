@@ -76,6 +76,7 @@ export interface AudioLibraryItem {
   id: string
   kind: string
   label: string
+  description: string
   filename: string
   duration_seconds: number
   url: string

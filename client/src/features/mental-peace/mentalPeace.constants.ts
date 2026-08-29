@@ -3,11 +3,12 @@
  *
  * The magic numbers the session screens carried inline: stage ids, the mood
  * picker copy, the preparing-screen cadence, guided-session hold timings, the
- * soundscape catalog, the meditation presets and the breath cycle.
+ * meditation presets and the breath cycle. The soundscape catalog left on
+ * NUMA-124: the player builds it from `/audio-library/ensure`.
  */
 import { Angry, Annoyed, Bed, Frown, Meh, PersonStanding } from "lucide-react"
 import { moodConfig } from "./data"
-import type { BreathPhase, BreathPhaseConfig, MoodOption, MoodType, Soundscape, TimerPreset } from "./mentalPeace.types"
+import type { BreathPhase, BreathPhaseConfig, MoodOption, MoodType, TimerPreset } from "./mentalPeace.types"
 
 export const SESSION_STAGES = {
   ENTRY: 0,
@@ -56,43 +57,12 @@ export const INSTRUCTION_STEP_SECONDS = 6
 export const YOGA_FLOW_AUDIO_SRC = "/api/audio/yoga-flow.ogg"
 export const YOGA_FLOW_VOLUME = 0.28
 
-export const SOUNDSCAPES: Soundscape[] = [
-  {
-    id: "rain-thunder-birds",
-    name: "Rain and Birds",
-    description: "Rainfall with soft thunder and birds",
-    src: "/api/audio/rain-thunder-birds.ogg",
-    fallbackDuration: 134,
-  },
-  {
-    id: "forest-ambience",
-    name: "Forest Ambience",
-    description: "Forest wind, birds, and insects",
-    src: "/api/audio/forest-ambience.ogg",
-    fallbackDuration: 123,
-  },
-  {
-    id: "ocean-waves",
-    name: "Ocean Waves",
-    description: "Waves rolling over small stones",
-    src: "/api/audio/ocean-waves.ogg",
-    fallbackDuration: 120,
-  },
-  {
-    id: "water-on-rocks",
-    name: "Water on Rocks",
-    description: "Shore water breaking on rocks",
-    src: "/api/audio/water-on-rocks.ogg",
-    fallbackDuration: 155,
-  },
-  {
-    id: "yoga-flow",
-    name: "Yoga Flow",
-    description: "Layered forest and water ambience",
-    src: "/api/audio/yoga-flow.ogg",
-    fallbackDuration: 123,
-  },
-]
+/**
+ * Placeholder rows drawn while the audio-library call is in flight. The catalog
+ * itself lives on the server (NUMA-124, PLAN 10); this is only how tall the
+ * list reserves, so it never has to match the real count exactly.
+ */
+export const SOUNDSCAPE_PLACEHOLDER_COUNT = 5
 
 export const DEFAULT_PLAYER_VOLUME = 0.5
 export const SEEK_STEP_SECONDS = 10

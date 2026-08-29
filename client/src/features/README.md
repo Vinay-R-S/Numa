@@ -73,6 +73,21 @@ table below never listed followed later: `lib/aiSettings.ts` ->
   render. Calendar and the master agent keep their own layouts and share only
   `AgentDockShell` + `AgentMessageContent`.
 
+## Server-owned catalogs (NUMA-124)
+
+A list the backend already publishes is fetched, not restated. `features/mental-peace`
+used to carry a `SOUNDSCAPES` constant repeating the id, label, description,
+filename and duration of `server/src/audio_library/constants.AUDIO_LIBRARY`; the
+player now maps the `/audio-library/ensure` items through
+`mentalPeace.transforms.ts`, the first `<feature>.transforms.ts` in the tree.
+Rules of thumb when a catalog moves server-side:
+
+- Map the DTO in `<feature>.transforms.ts`, never inline in the hook or component.
+- Reserve the layout while the request is in flight (`SoundscapeList` draws
+  placeholder rows with a real row's geometry) rather than collapsing the panel.
+- If a partial failure still carries the list, throw a typed error holding the
+  payload so the caller can render it. See `AudioLibraryPartialError`.
+
 ## Static data (NUMA-120)
 
 `features/mental-peace/data/` holds the yoga pose database and the mood

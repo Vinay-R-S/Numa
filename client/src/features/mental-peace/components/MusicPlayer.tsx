@@ -10,6 +10,7 @@ import { VolumeSlider } from "./VolumeSlider"
 export function MusicPlayer() {
   const {
     audioRef,
+    soundscapes,
     activeSoundscape,
     isPlaying,
     isMuted,
@@ -20,6 +21,7 @@ export function MusicPlayer() {
     displayDuration,
     progress,
     audioError,
+    retryPrepare,
     selectSoundscape,
     togglePlay,
     toggleLoop,
@@ -80,10 +82,12 @@ export function MusicPlayer() {
         )}
 
         <SoundscapeList
+          soundscapes={soundscapes}
           activeId={activeSoundscape?.id ?? null}
           isPlaying={isPlaying}
           isPreparing={isPreparing}
           onSelect={selectSoundscape}
+          onRetry={retryPrepare}
         />
       </div>
     </div>
