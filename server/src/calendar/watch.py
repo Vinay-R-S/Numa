@@ -1,10 +1,21 @@
-"""Google Calendar push-notification channel (NUMA-114 P4, PLAN 16.1 / 18).
+"""Google Calendar push-notification channel (NUMA-114 P4, NUMA-131 P6,
+PLAN 16.1 / 18 / 8).
 
 Owns the watch channel state, the webhook validation and the SSE version feed
 that the frontend subscribes to. Moved out of `router.py` so the HTTP layer
 holds no Google API calls and no module state.
+
+`/calendar/webhooks/google-calendar` has no JWT - Google calls it - so the
+channel token is its authentication. NUMA-131 made that check mandatory. It used
+to run only `if WATCH_WEBHOOK_TOKEN`, and when that variable was unset (it is
+undocumented, and unset everywhere in this repo) `start_watch` registered the
+channel with a throwaway `uuid4` that nothing ever compared. Every guard in the
+handler was conditional, so all three collapsed together and any anonymous POST
+bumped the version, making every connected browser refetch the month from the
+Google Calendar API.
 """
 import asyncio
+import hmac
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -12,7 +23,7 @@ from datetime import datetime
 
 from fastapi import HTTPException
 
-from .config import GOOGLE_WEBHOOK_BASE_URL, WATCH_WEBHOOK_TOKEN
+from .config import GOOGLE_WEBHOOK_BASE_URL, WATCH_WEBHOOK_TOKEN, WEBHOOK_TOKEN_ENV
 from .google_auth import get_calendar_service
 
 log = logging.getLogger(__name__)
@@ -25,8 +36,15 @@ watch_state: dict[str, str | None] = {
     "resource_id": None,
     "expiration": None,
     "last_message_number": None,
+    # The token this process registered with Google. Never leaves the server:
+    # `get_watch_state` builds its response field by field and does not read it.
+    "token": None,
 }
 watch_version = 0
+
+#: Set once the per-process-token warning has been logged. The calendar page
+#: registers a watch on every mount, so this would otherwise repeat per visit.
+_ephemeral_token_logged = False
 
 
 def _touch_watch_version() -> None:
@@ -64,6 +82,8 @@ def start_watch(user_id: str | None) -> dict:
     Returns an inactive result (no exception) when no public callback base URL
     is configured, which is the normal local/dev case.
     """
+    global _ephemeral_token_logged
+
     callback_base = GOOGLE_WEBHOOK_BASE_URL.strip()
     if not callback_base:
         return {"success": False, "channel_id": None, "resource_id": None, "expiration": None}
@@ -71,6 +91,15 @@ def start_watch(user_id: str | None) -> dict:
     callback_url = f"{callback_base.rstrip('/')}{WEBHOOK_PATH}"
     channel_id = str(uuid.uuid4())
     token = WATCH_WEBHOOK_TOKEN or str(uuid.uuid4())
+    if not WATCH_WEBHOOK_TOKEN and not _ephemeral_token_logged:
+        _ephemeral_token_logged = True
+        log.warning(
+            "%s is not set; this watch uses a per-process token, so notifications "
+            "are refused after a restart until the calendar page registers a new "
+            "channel, and refused outright when another worker receives them. Set "
+            "it to a fixed secret in production.",
+            WEBHOOK_TOKEN_ENV,
+        )
 
     service = get_calendar_service(user_id=user_id)
     response = (
@@ -92,6 +121,9 @@ def start_watch(user_id: str | None) -> dict:
     watch_state["resource_id"] = response.get("resourceId")
     watch_state["expiration"] = expiration
     watch_state["last_message_number"] = None
+    # Registering the token without keeping it was the NUMA-131 bug: the handler
+    # had nothing to compare against and waved the notification through.
+    watch_state["token"] = token
 
     return {
         "success": True,
@@ -105,10 +137,26 @@ def handle_webhook_notification(
     channel_id: str | None,
     resource_id: str | None,
     message_number: str | None,
-    token: str,
+    token: str | None,
 ) -> None:
-    """Validate a Google push notification and bump the SSE version."""
-    if WATCH_WEBHOOK_TOKEN and token != WATCH_WEBHOOK_TOKEN:
+    """Validate a Google push notification and bump the SSE version.
+
+    The token is mandatory: a notification that cannot be matched against a token
+    this process registered, or against the configured one, is refused. The
+    channel and resource ids stay conditional on being known, so a configured
+    fixed token still verifies notifications for a channel registered before a
+    restart.
+    """
+    expected_token = WATCH_WEBHOOK_TOKEN or watch_state.get("token") or ""
+    if not expected_token:
+        log.warning(
+            "Calendar webhook refused: no watch is registered and %s is unset",
+            WEBHOOK_TOKEN_ENV,
+        )
+        raise HTTPException(status_code=401, detail="Invalid webhook token")
+
+    if not hmac.compare_digest((token or "").encode("utf-8"), expected_token.encode("utf-8")):
+        log.warning("Calendar webhook refused: token mismatch")
         raise HTTPException(status_code=401, detail="Invalid webhook token")
 
     if watch_state.get("channel_id") and channel_id != watch_state.get("channel_id"):
