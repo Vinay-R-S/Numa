@@ -10,7 +10,7 @@ POST /health-agent/sync/google-fit - Sync today's Google Fit data to Supabase
 POST /health-agent/sync/strava     - Sync today's Strava data to Supabase
 POST /health-agent/sync/all        - Sync the recent window from both providers
 POST /health-agent/chat            - Invoke Health sub-agent (LangGraph)
-POST /health-agent/internal/purge  - Manual purge of old snapshots (internal)
+POST /health-agent/internal/purge  - Manual purge of old snapshots (admin-only)
 
 Storage
 -------
@@ -30,7 +30,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..auth.dependencies import get_current_user
+from ..auth.dependencies import get_current_user, require_admin
 from ..core.errors import AppError
 from .schemas import (
     HealthChatRequest,
@@ -140,6 +140,15 @@ def health_chat(
 
 
 @router.post("/internal/purge", include_in_schema=False)
-def purge_old_snapshots(service: HealthService = Depends(get_health_service)):
-    """Called by the APScheduler daily 8 AM job."""
+def purge_old_snapshots(
+    current_user: dict = Depends(require_admin),
+    service: HealthService = Depends(get_health_service),
+):
+    """Operator-triggered purge, admin-only (NUMA-130 P6, PLAN 8).
+
+    The daily 8 AM APScheduler job does not come through here: it calls
+    `purge_old_health_snapshots()` in-process from `core/scheduler.py`. This route
+    is the manual trigger, and it deletes every user's snapshots older than the
+    window, so it takes the same gate as the other server-wide operations.
+    """
     return service.purge_old_snapshots()
