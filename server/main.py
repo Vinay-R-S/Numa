@@ -27,6 +27,7 @@ from src.audio_library.router import router as audio_library_router
 from src.core.db import init_db
 from src.core.scheduler import start_periodic_sync_scheduler
 from src.core.security import verify_encryption_key
+from src.slack_agent.security import verify_signing_secret
 from src.ai_settings.repository import ai_settings_repository
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, lambda: init_db(raise_on_error=True))
     await loop.run_in_executor(None, _check_encryption_key)
+    verify_signing_secret()
 
     import threading
     threading.Thread(target=start_periodic_sync_scheduler, daemon=True).start()

@@ -22,7 +22,7 @@ from .errors import (
     _temporary_unavailable_detail,
     _log_dependency_exception,
 )
-from .security import _verify_slack_signature
+from .security import MISSING_SECRET_MESSAGE, signing_secret_configured, verify_slack_signature
 from .client import _cache_workspace_user_names, _resolve_channel_name
 from .persistence import (
     _get_or_create_channel,
@@ -165,13 +165,28 @@ async def handle_slack_events(request: Request):
     Receives Slack events via the Events API.
     Uses HMAC-SHA256 signature verification to confirm authenticity.
     Responds within 3 seconds as required by Slack's API contract.
+
+    This is the only route in the app without a JWT dependency, so the signature
+    is the whole of its authentication: an unverifiable request is refused, never
+    trusted (NUMA-129 P6, PLAN 8).
     """
     body_bytes = await request.body()
 
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     signature = request.headers.get("X-Slack-Signature", "")
 
-    if not _verify_slack_signature(body_bytes, timestamp, signature):
+    # 503, not 403, when the secret is unset: the request may be perfectly valid
+    # and the server is the one that cannot check it. The log names the variable
+    # and how to fix it; the response does not, since this caller is
+    # unauthenticated.
+    if not signing_secret_configured():
+        log.error("Slack event refused: %s", MISSING_SECRET_MESSAGE)
+        raise HTTPException(
+            status_code=503,
+            detail="Slack signature verification is not configured",
+        )
+
+    if not verify_slack_signature(body_bytes, timestamp, signature):
         raise HTTPException(status_code=403, detail="Invalid Slack signature")
 
     try:
