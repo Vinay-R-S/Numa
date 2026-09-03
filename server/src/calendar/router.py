@@ -36,10 +36,12 @@ from .schemas import (
     EventsResponse,
     OAuthStartResponse,
     OAuthStatusResponse,
+    StreamTokenResponse,
     WatchStartResponse,
     WatchStateResponse,
 )
 from .service import CalendarService, calendar_service
+from .stream_auth import STREAM_TOKEN_TTL_SECONDS, build_stream_token, decode_stream_token
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
@@ -117,8 +119,8 @@ def oauth_callback(
         return oauth_redirect("error", "Missing OAuth code/state")
 
     try:
-        complete_authorization(state, code)
-        watch._touch_watch_version()
+        owner_id = complete_authorization(state, code)
+        watch._touch_watch_version(owner_id)
         return oauth_redirect("connected")
     except HTTPException as exc:
         return oauth_redirect("error", str(exc.detail))
@@ -157,7 +159,7 @@ def create_event(
 ):
     try:
         created = service.create_event_from_payload(payload, user_id=_optional_user_id(current_user))
-        watch._touch_watch_version()
+        watch._touch_watch_version(_optional_user_id(current_user))
         return CalendarEvent(**created)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -176,7 +178,7 @@ def update_event(
         updated = service.update_event_from_payload(
             event_id, payload, user_id=_optional_user_id(current_user)
         )
-        watch._touch_watch_version()
+        watch._touch_watch_version(_optional_user_id(current_user))
         return CalendarEvent(**updated)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -192,7 +194,7 @@ def delete_event(
 ):
     try:
         service.delete_event_by_id(event_id, user_id=_optional_user_id(current_user))
-        watch._touch_watch_version()
+        watch._touch_watch_version(_optional_user_id(current_user))
         return DeleteResponse(success=True)
     except Exception as exc:
         raise _http_error(exc, "Failed to delete event") from exc
@@ -225,10 +227,25 @@ async def google_calendar_webhook(request: Request):
     return {"ok": True}
 
 
+@router.post("/events/stream/token", response_model=StreamTokenResponse)
+def issue_stream_token(current_user: dict = Depends(get_current_user)):
+    """Mint the short-lived token the SSE stream needs (NUMA-132 P6, PLAN 8).
+
+    `EventSource` cannot send an Authorization header, so the stream reads its
+    credential from the query string. This route is the authenticated half: the
+    session token stays in the header where it belongs, and what reaches the URL
+    is a two-minute token that opens a stream and nothing else.
+    """
+    return StreamTokenResponse(
+        token=build_stream_token(_optional_user_id(current_user)),
+        expires_in=STREAM_TOKEN_TTL_SECONDS,
+    )
+
+
 @router.get("/events/stream")
-async def stream_event_updates():
+async def stream_event_updates(token: str = Query("", description="Stream token from /events/stream/token")):
     return StreamingResponse(
-        watch.stream_calendar_updates(),
+        watch.stream_calendar_updates(decode_stream_token(token)),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )

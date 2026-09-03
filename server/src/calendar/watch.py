@@ -1,4 +1,4 @@
-"""Google Calendar push-notification channel (NUMA-114 P4, NUMA-131 P6,
+"""Google Calendar push-notification channel (NUMA-114 P4, NUMA-131/132 P6,
 PLAN 16.1 / 18 / 8).
 
 Owns the watch channel state, the webhook validation and the SSE version feed
@@ -13,10 +13,17 @@ channel with a throwaway `uuid4` that nothing ever compared. Every guard in the
 handler was conditional, so all three collapsed together and any anonymous POST
 bumped the version, making every connected browser refetch the month from the
 Google Calendar API.
+
+The version feed is per user since NUMA-132. One global counter meant any user
+creating an event woke every other user's tab into a full month refetch against
+the Google API - the scoping half the NUMA-114 note deferred. Each bump now names
+the user whose calendar moved: the acting user for a local mutation, and for a
+push notification the user whose channel `start_watch` registered.
 """
 import asyncio
 import hmac
 import logging
+import threading
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
@@ -39,21 +46,38 @@ watch_state: dict[str, str | None] = {
     # The token this process registered with Google. Never leaves the server:
     # `get_watch_state` builds its response field by field and does not read it.
     "token": None,
+    # Whose calendar this channel watches, so a push notification bumps that
+    # user's version rather than everyone's.
+    "user_id": None,
 }
-watch_version = 0
+
+#: Per-user version counters. A token with no `sub` claim keys on "", which keeps
+#: it out of every real user's bucket; such callers share that one bucket, which
+#: costs nothing because `create_jwt` always sets `sub`.
+watch_versions: dict[str, int] = {}
+
+#: Sync routes run in a threadpool, so `+= 1` on a shared dict is not atomic.
+_version_lock = threading.Lock()
 
 #: Set once the per-process-token warning has been logged. The calendar page
 #: registers a watch on every mount, so this would otherwise repeat per visit.
 _ephemeral_token_logged = False
 
 
-def _touch_watch_version() -> None:
-    global watch_version
-    watch_version += 1
+def _version_key(user_id: str | None) -> str:
+    return user_id or ""
 
 
-def current_watch_version() -> int:
-    return watch_version
+def _touch_watch_version(user_id: str | None) -> None:
+    """Bump one user's feed. The parameter is required: a bump with no owner is
+    the bug NUMA-132 fixed, not a default worth keeping."""
+    key = _version_key(user_id)
+    with _version_lock:
+        watch_versions[key] = watch_versions.get(key, 0) + 1
+
+
+def current_watch_version(user_id: str | None) -> int:
+    return watch_versions.get(_version_key(user_id), 0)
 
 
 def _parse_google_expiration(expiration_ms: str | None) -> str | None:
@@ -124,6 +148,7 @@ def start_watch(user_id: str | None) -> dict:
     # Registering the token without keeping it was the NUMA-131 bug: the handler
     # had nothing to compare against and waved the notification through.
     watch_state["token"] = token
+    watch_state["user_id"] = user_id
 
     return {
         "success": True,
@@ -167,22 +192,22 @@ def handle_webhook_notification(
 
     if message_number and message_number != watch_state.get("last_message_number"):
         watch_state["last_message_number"] = message_number
-        _touch_watch_version()
+        _touch_watch_version(watch_state.get("user_id"))
 
 
-async def stream_calendar_updates() -> AsyncGenerator[str, None]:
+async def stream_calendar_updates(user_id: str | None) -> AsyncGenerator[str, None]:
     """
-    SSE feed: emits a `calendar-updated` frame whenever the version moves.
+    SSE feed for one user: emits `calendar-updated` when their version moves.
 
     Frames use real newlines. The previous implementation escaped them
     (`\\n` in the source), so every frame was one physical line, EventSource
     never saw a frame terminator, and the client listener never fired.
     """
-    local_version = current_watch_version()
+    local_version = current_watch_version(user_id)
 
     while True:
-        if local_version != current_watch_version():
-            local_version = current_watch_version()
+        if local_version != current_watch_version(user_id):
+            local_version = current_watch_version(user_id)
             yield f'event: calendar-updated\ndata: {{"version": {local_version}}}\n\n'
 
         yield "event: keepalive\ndata: ping\n\n"

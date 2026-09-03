@@ -45,6 +45,11 @@ class WatchStateResponse(BaseModel):
     expiration: Optional[str] = None
 
 
+class StreamTokenResponse(BaseModel):
+    token: str
+    expires_in: int
+
+
 class OAuthStartResponse(BaseModel):
     authorization_url: str
 

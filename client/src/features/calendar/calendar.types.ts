@@ -53,6 +53,11 @@ export interface WatchStartResponse {
   expiration?: string | null
 }
 
+export interface StreamTokenResponse {
+  token: string
+  expires_in: number
+}
+
 export interface OAuthStartResponse {
   authorization_url: string
 }

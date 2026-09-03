@@ -35,6 +35,7 @@ import {
   deleteResponseSchema,
   eventsResponseSchema,
   oauthStartResponseSchema,
+  streamTokenResponseSchema,
   tokenHealthSchema,
   watchStartResponseSchema,
 } from "./calendar.schema"
@@ -48,6 +49,9 @@ import type {
 } from "./calendar.types"
 
 const CALENDAR_STREAM_PATH = "/api/calendar/events/stream"
+
+/** Reconnect pause after a dropped stream or a failed token fetch. */
+const SSE_RECONNECT_DELAY_MS = 5000
 
 export async function fetchCalendarEvents(opts?: { refresh?: boolean }): Promise<CalendarEvent[]> {
   const message = "Failed to load events"
@@ -167,15 +171,81 @@ export async function checkCalendarTokenHealth(): Promise<TokenHealthResult> {
   }
 }
 
+async function fetchStreamToken(): Promise<string> {
+  const message = "Failed to authorize the calendar stream"
+  const data = await expectBody(
+    http.post("/calendar/events/stream/token", undefined, {
+      schema: streamTokenResponseSchema,
+      errorMessage: message,
+    }),
+    message
+  )
+  return data.token
+}
+
+/**
+ * Subscribe to this user's calendar updates (NUMA-132).
+ *
+ * `EventSource` cannot send the Authorization header, so the stream is opened
+ * with a short-lived stream token fetched over the authenticated `http` client.
+ * The browser's own retry would reuse a token that has since expired, so an
+ * error closes the source and reconnects with a fresh one instead.
+ *
+ * Stays synchronous for callers: the unsubscribe function is returned
+ * immediately and the first connection is established in the background.
+ */
 export function subscribeToCalendarUpdates(onUpdate: () => void): () => void {
-  const source = new EventSource(CALENDAR_STREAM_PATH)
+  let source: EventSource | null = null
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
+  let closed = false
+
   const handleUpdate = () => onUpdate()
 
-  source.addEventListener("calendar-updated", handleUpdate as EventListener)
+  const detach = () => {
+    if (!source) return
+    source.removeEventListener("calendar-updated", handleUpdate as EventListener)
+    source.onerror = null
+    source.close()
+    source = null
+  }
+
+  const scheduleReconnect = () => {
+    if (closed || retryTimer) return
+    retryTimer = setTimeout(() => {
+      retryTimer = null
+      void connect()
+    }, SSE_RECONNECT_DELAY_MS)
+  }
+
+  const connect = async () => {
+    if (closed) return
+
+    let token: string
+    try {
+      token = await fetchStreamToken()
+    } catch {
+      scheduleReconnect()
+      return
+    }
+
+    if (closed) return
+
+    const next = new EventSource(`${CALENDAR_STREAM_PATH}?token=${encodeURIComponent(token)}`)
+    source = next
+    next.addEventListener("calendar-updated", handleUpdate as EventListener)
+    next.onerror = () => {
+      detach()
+      scheduleReconnect()
+    }
+  }
+
+  void connect()
 
   return () => {
-    source.removeEventListener("calendar-updated", handleUpdate as EventListener)
-    source.close()
+    closed = true
+    if (retryTimer) clearTimeout(retryTimer)
+    retryTimer = null
+    detach()
   }
 }
 
