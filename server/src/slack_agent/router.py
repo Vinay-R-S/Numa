@@ -23,7 +23,10 @@ GET  /slack/callback         - OAuth callback; saves token to slack_auth table
 Security
 --------
 - /slack/events uses HMAC-SHA256 signature verification (industry standard)
-  as documented at https://api.slack.com/authentication/verifying-requests-from-slack
+  as documented at https://api.slack.com/authentication/verifying-requests-from-slack.
+  It fails closed (NUMA-129): an unsigned, stale or unverifiable request is
+  refused, and a missing SLACK_SIGNING_SECRET fails the boot when Slack is
+  configured rather than leaving the webhook open.
 - All other endpoints require a valid NUMA JWT via Depends(get_current_user)
 """
 from __future__ import annotations

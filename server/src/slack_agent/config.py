@@ -9,8 +9,11 @@ from urllib.parse import urlencode
 from fastapi import HTTPException
 
 
+SIGNING_SECRET_ENV = "SLACK_SIGNING_SECRET"
+
+
 def _signing_secret() -> str:
-    return os.getenv("SLACK_SIGNING_SECRET", "").strip()
+    return os.getenv(SIGNING_SECRET_ENV, "").strip()
 
 def _client_id() -> str:
     return os.getenv("SLACK_CLIENT_ID", "").strip()
@@ -26,6 +29,16 @@ def _frontend_url() -> str:
 
 def _bot_token() -> str:
     return os.getenv("SLACK_BOT_TOKEN", "").strip()
+
+
+def slack_is_configured() -> bool:
+    """Whether this install talks to Slack at all (NUMA-129 P6, PLAN 8).
+
+    Credentials, not the signing secret: `security.verify_signing_secret` asks
+    this to decide whether a missing secret is a fresh install or a live
+    integration whose webhook would go unverified.
+    """
+    return bool(_client_id() or _client_secret() or _bot_token())
 
 
 DEFAULT_SLACK_BOT_SCOPES = [
