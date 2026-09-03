@@ -17,6 +17,7 @@ import type {
   DeleteResponse,
   EventsResponse,
   OAuthStartResponse,
+  StreamTokenResponse,
   TokenHealthResult,
   WatchStartResponse,
 } from "./calendar.types"
@@ -49,6 +50,11 @@ export const watchStartResponseSchema: z.ZodType<WatchStartResponse> = z.object(
   channel_id: z.string().nullish(),
   resource_id: z.string().nullish(),
   expiration: z.string().nullish(),
+})
+
+export const streamTokenResponseSchema: z.ZodType<StreamTokenResponse> = z.object({
+  token: z.string().min(1),
+  expires_in: z.number(),
 })
 
 export const oauthStartResponseSchema: z.ZodType<OAuthStartResponse> = z.object({

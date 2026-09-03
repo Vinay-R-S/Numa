@@ -43,16 +43,34 @@ ADMIN_REQUIRED_DETAIL = "Admin access is required to change server-wide settings
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> dict:
-    """FastAPI dependency - validates Bearer JWT and returns its payload."""
+    """FastAPI dependency - validates Bearer JWT and returns its payload.
+
+    A token carrying a `scope` claim is refused (NUMA-132 P6, PLAN 8). Session
+    tokens from `create_jwt` have no scope; the scoped ones are minted for a
+    single job and travel through places a session token never should - the
+    Google OAuth state goes out in a redirect URL, and the calendar stream token
+    goes in a query string. Without this check either of them was a full session
+    token for every protected route until it expired.
+    """
     try:
         payload = verify_jwt(credentials.credentials)
-        return payload
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    scope = payload.get("scope")
+    if scope:
+        log.warning("Scoped token presented as a session token (scope=%s, user %s)", scope, payload.get("sub"))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return payload
 
 
 def admin_emails() -> frozenset[str]:
