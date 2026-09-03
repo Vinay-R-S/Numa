@@ -19,6 +19,7 @@ GET  /slack/status           - Check Slack connection status (JWT-protected)
 GET  /slack/connect          - Initiate Slack OAuth flow
 GET  /slack/connect-url      - Return the Slack OAuth authorization URL
 GET  /slack/callback         - OAuth callback; saves token to slack_auth table
+POST /slack/internal/purge-old-messages - Manual purge of old messages (admin-only)
 
 Security
 --------
@@ -27,6 +28,9 @@ Security
   It fails closed (NUMA-129): an unsigned, stale or unverifiable request is
   refused, and a missing SLACK_SIGNING_SECRET fails the boot when Slack is
   configured rather than leaving the webhook open.
+- /slack/internal/purge-old-messages deletes every user's Slack rows and
+  vectors outside the retention window, so it takes Depends(require_admin)
+  (NUMA-130). Being hidden from the schema was never access control.
 - All other endpoints require a valid NUMA JWT via Depends(get_current_user)
 """
 from __future__ import annotations
@@ -37,7 +41,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
-from ..auth.dependencies import get_current_user
+from ..auth.dependencies import get_current_user, require_admin
 from ..core.errors import AppError
 from .client import _resolve_slack_user_name  # noqa: F401  re-exported
 from .config import (  # noqa: F401  re-exported
@@ -211,11 +215,20 @@ async def slack_callback(code: str = Query(...), state: str = Query("")):
     return RedirectResponse(url=redirect_url, status_code=302)
 
 
-# ── 8. Manual purge endpoint (admin / scheduler) ──────────────────────────────
+# ── 8. Manual purge endpoint (admin-only) ─────────────────────────────────────
 
 @router.post("/internal/purge-old-messages",
              include_in_schema=False,
-             summary="Purge Slack messages older than 7 days from Qdrant")
-def purge_old_slack_messages(service: SlackService = Depends(get_slack_service)):
-    """Called by the APScheduler nightly job. Also deletes old DB rows."""
+             summary="Purge Slack messages older than 7 days (admin-only)")
+def purge_old_slack_messages(
+    current_user: dict = Depends(require_admin),
+    service: SlackService = Depends(get_slack_service),
+):
+    """Operator-triggered purge, admin-only (NUMA-130 P6, PLAN 8).
+
+    The scheduled purge does not come through here: `core/data_sync.py` calls
+    `slack_service.purge_old_messages()` in-process. This route is the manual
+    trigger, and it drops every user's Slack vectors and rows outside the 7-day
+    window, so it takes the same gate as the other server-wide operations.
+    """
     return service.purge_old_messages()
