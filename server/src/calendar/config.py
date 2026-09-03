@@ -5,7 +5,12 @@ Values are resolved at import time, exactly as before.
 """
 import os
 
-WATCH_WEBHOOK_TOKEN = os.getenv("WATCH_WEBHOOK_TOKEN", "")
+WEBHOOK_TOKEN_ENV = "WATCH_WEBHOOK_TOKEN"
+
+#: Shared secret Google echoes back as X-Goog-Channel-Token. Optional: when it is
+#: unset each watch registers a per-process token instead (NUMA-131). Set it in
+#: production so notifications survive a restart and match across workers.
+WATCH_WEBHOOK_TOKEN = os.getenv(WEBHOOK_TOKEN_ENV, "")
 GOOGLE_WEBHOOK_BASE_URL = os.getenv("GOOGLE_WEBHOOK_BASE_URL", "")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "")
