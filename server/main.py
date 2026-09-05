@@ -10,6 +10,14 @@ from dotenv import load_dotenv
 SERVER_ROOT = Path(__file__).resolve().parent
 load_dotenv(SERVER_ROOT / ".env")
 
+# Before the first router import, so the boot lines below and anything a module
+# logs while importing already go through the redaction filter (NUMA-134 P6,
+# PLAN 8). uvicorn has configured its own loggers by this point, which is why
+# configure_logging() also hardens the ones that already exist.
+from src.core.logging import configure_logging
+
+configure_logging()
+
 from src.auth.router import router as auth_router
 from src.auth.dependencies import get_current_user
 from src.tasks.router import router as tasks_router

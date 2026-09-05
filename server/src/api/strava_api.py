@@ -21,10 +21,16 @@ Usage:
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 import json
+import logging
 import os
 import time
 
 import requests
+
+# `print` wrote straight to stdout, so nothing this module said passed the
+# redaction filter, and the bodies below come from the OAuth token endpoint
+# (NUMA-134 P6, PLAN 8).
+log = logging.getLogger(__name__)
 
 
 def _clean_secret(value: Optional[str]) -> Optional[str]:
@@ -209,11 +215,11 @@ class StravaAPI:
                 self._save_token(data)
                 return self._access_token
             else:
-                print(f"Token refresh failed: {response.status_code} - {response.text}")
+                log.error("Strava token refresh failed: HTTP %s", response.status_code)
                 return None
                 
         except requests.RequestException as e:
-            print(f"Token refresh request failed: {e}")
+            log.error("Strava token refresh request failed: %s", e)
             return None
     
     def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Optional[Dict]:
@@ -257,14 +263,17 @@ class StravaAPI:
                 )
                 if response.status_code == 200:
                     return response.json()
-                print(f"API request failed: {response.status_code} - {response.text}")
+                log.warning(
+                    "Strava request to %s failed after retry: HTTP %s",
+                    endpoint, response.status_code,
+                )
                 return None
             else:
-                print(f"API request failed: {response.status_code} - {response.text}")
+                log.warning("Strava request to %s failed: HTTP %s", endpoint, response.status_code)
                 return None
                 
         except requests.RequestException as e:
-            print(f"API request failed: {e}")
+            log.warning("Strava request to %s failed: %s", endpoint, e)
             return None
     
     def _normalize_activity(self, activity: Dict) -> Dict[str, Any]:
