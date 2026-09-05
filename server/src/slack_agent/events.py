@@ -14,6 +14,7 @@ from typing import Optional
 
 import httpx
 from fastapi import HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from .config import _bot_token
@@ -164,11 +165,20 @@ async def handle_slack_events(request: Request):
     """
     Receives Slack events via the Events API.
     Uses HMAC-SHA256 signature verification to confirm authenticity.
-    Responds within 3 seconds as required by Slack's API contract.
+    Slack requires an answer within 3 seconds; the @mention path runs an LLM
+    before answering, so that is a requirement this route can still miss and a
+    finding of its own, not a promise this docstring gets to make.
 
     This is the only route in the app without a JWT dependency, so the signature
     is the whole of its authentication: an unverifiable request is refused, never
     trusted (NUMA-129 P6, PLAN 8).
+
+    Reading the body and checking the signature are the only parts that belong
+    on the event loop. Everything after that is synchronous - the database, a
+    blocking Slack SDK call, and an LLM round trip for @mentions - and it used to
+    run inline in this `async def`, so one webhook blocked every other request in
+    the process for as long as it took (NUMA-136 P6, PLAN 7). It runs in a worker
+    thread now.
     """
     body_bytes = await request.body()
 
@@ -199,47 +209,57 @@ async def handle_slack_events(request: Request):
         return JSONResponse({"challenge": payload.get("challenge", "")})
 
     # ── Handle event callbacks ─────────────────────────────────────────────────
-    event = payload.get("event", {})
-    event_type = event.get("type", "")
-
-    if event_type == "message":
-        subtype = event.get("subtype")
-        if subtype == "message_deleted":
-            previous = event.get("previous_message") if isinstance(event.get("previous_message"), dict) else {}
-            _delete_slack_message_by_ts(
-                ts=event.get("deleted_ts") or previous.get("ts") or event.get("ts"),
-                slack_user_id=previous.get("user") or event.get("user"),
-            )
-            return Response(status_code=200)
-
-        if subtype == "message_changed":
-            message = event.get("message") if isinstance(event.get("message"), dict) else {}
-            channel_id = event.get("channel") or message.get("channel") or ""
-            channel_name = _resolve_channel_name(channel_id, payload.get("team_id")) if channel_id else None
-            _update_slack_message(event, channel_name)
-            return Response(status_code=200)
-
-        # Skip bot messages and unsupported message subtypes
-        if event.get("bot_id") or subtype in ("bot_message",):
-            return Response(status_code=200)
-
-        # Propagate team_id from outer envelope if missing in event
-        if not event.get("team"):
-            event["team"] = payload.get("team_id", "")
-
-        # Try to resolve channel name (best-effort)
-        channel_id   = event.get("channel", "")
-        channel_name = _resolve_channel_name(channel_id, payload.get("team_id")) if channel_id else None
-
-        # Persist + ingest
-        _save_slack_message(event, channel_name)
-
-        # Run task-extraction agent for @mentions or broadcasts
-        text = event.get("text", "")
-        if any(m in text for m in ("<@", "<!channel>", "<!here>", "<!everyone>")):
-            _run_agent_task_extraction(text, event.get("ts"), payload.get("team_id"))
-
+    # Every branch below answered 200, so awaiting the work off-loop keeps both
+    # the status and the ordering the caller saw before.
+    await run_in_threadpool(_handle_event_payload, payload)
     return Response(status_code=200)
+
+
+def _handle_event_payload(payload: dict) -> None:
+    """The blocking half of the webhook: database, Slack SDK, task extraction.
+
+    Runs in a worker thread. Every path returns None; the route answers 200
+    regardless, as it did when this was inline.
+    """
+    event = payload.get("event", {})
+    if event.get("type", "") != "message":
+        return
+
+    subtype = event.get("subtype")
+    if subtype == "message_deleted":
+        previous = event.get("previous_message") if isinstance(event.get("previous_message"), dict) else {}
+        _delete_slack_message_by_ts(
+            ts=event.get("deleted_ts") or previous.get("ts") or event.get("ts"),
+            slack_user_id=previous.get("user") or event.get("user"),
+        )
+        return
+
+    if subtype == "message_changed":
+        message = event.get("message") if isinstance(event.get("message"), dict) else {}
+        channel_id = event.get("channel") or message.get("channel") or ""
+        channel_name = _resolve_channel_name(channel_id, payload.get("team_id")) if channel_id else None
+        _update_slack_message(event, channel_name)
+        return
+
+    # Skip bot messages and unsupported message subtypes
+    if event.get("bot_id") or subtype in ("bot_message",):
+        return
+
+    # Propagate team_id from outer envelope if missing in event
+    if not event.get("team"):
+        event["team"] = payload.get("team_id", "")
+
+    # Try to resolve channel name (best-effort)
+    channel_id   = event.get("channel", "")
+    channel_name = _resolve_channel_name(channel_id, payload.get("team_id")) if channel_id else None
+
+    # Persist + ingest
+    _save_slack_message(event, channel_name)
+
+    # Run task-extraction agent for @mentions or broadcasts
+    text = event.get("text", "")
+    if any(m in text for m in ("<@", "<!channel>", "<!here>", "<!everyone>")):
+        _run_agent_task_extraction(text, event.get("ts"), payload.get("team_id"))
 
 
 def _run_agent_task_extraction(text: str, ts: Optional[str], team_id: Optional[str]):

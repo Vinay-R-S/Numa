@@ -56,14 +56,33 @@ class SlackRepository(BaseRepository):
                         )
                         conn.commit()
                     return str(channel_id)
+                # DO NOTHING, not a bare INSERT: `slack_id` is UNIQUE, and two
+                # callers can now reach this at once, since NUMA-136 moved the
+                # webhook off the event loop that used to serialise it. The
+                # loser of that race used to raise a UniqueViolation, which the
+                # caller turned into None and stored a message with no channel;
+                # it re-reads the winner's row instead. No update semantics
+                # change: those all live in the SELECT branch above.
                 cur.execute(
                     "INSERT INTO public.slack_channels (slack_id, name, team_id, is_private) "
-                    "VALUES (%s, %s, %s, %s) RETURNING id",
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (slack_id) DO NOTHING RETURNING id",
                     (slack_id, name, team_id, is_private),
                 )
-                new_id = str(cur.fetchone()[0])
+                row = cur.fetchone()
                 conn.commit()
-                return new_id
+                if row:
+                    return str(row[0])
+
+                cur.execute(
+                    "SELECT id FROM public.slack_channels WHERE slack_id = %s LIMIT 1",
+                    (slack_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise RuntimeError(
+                        f"slack_channels row for {slack_id} disappeared after a conflict"
+                    )
+                return str(row[0])
             except Exception:
                 conn.rollback()
                 raise
