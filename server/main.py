@@ -32,7 +32,7 @@ from src.github_agent.router import router as github_router
 from src.leetcode.router import router as leetcode_router
 from src.dashboard.router import router as dashboard_router
 from src.audio_library.router import router as audio_library_router
-from src.core.db import init_db
+from src.core.db import close_pool, init_db
 from src.core.scheduler import start_periodic_sync_scheduler
 from src.core.security import verify_encryption_key
 from src.slack_agent.security import verify_signing_secret
@@ -94,7 +94,12 @@ async def lifespan(app: FastAPI):
 
     import threading
     threading.Thread(target=start_periodic_sync_scheduler, daemon=True).start()
-    yield
+    try:
+        yield
+    finally:
+        # The pool outlived the app: shutdown left its connections open for the
+        # server to time out (NUMA-135 P6, PLAN 7).
+        await loop.run_in_executor(None, close_pool)
 
 
 app = FastAPI(title="Numa API", version="1.0.0", lifespan=lifespan)

@@ -2,6 +2,7 @@
 Database access: connection pool, get_db() context manager, and the init_db()
 entrypoint. Schema DDL lives entirely in Alembic migrations (NUMA-103).
 """
+import asyncio
 import os
 import logging
 import threading
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import psycopg2
-from psycopg2.pool import ThreadedConnectionPool
+from psycopg2.pool import PoolError, ThreadedConnectionPool
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -32,6 +33,16 @@ _pool_lock = threading.Lock()
 
 _DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "2"))
 _DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
+
+# Callers queue for a connection instead of failing on the spot (NUMA-135 P6,
+# PLAN 7). Nearly every route in this app is a sync `def`, so Starlette runs it
+# in anyio's threadpool, which holds 40 workers by default - four times the
+# pool. psycopg2's getconn does not wait: the 11th concurrent request raised
+# `PoolError: connection pool exhausted`, nothing catches it, and the caller got
+# a 500 while ten perfectly healthy connections were a few milliseconds from
+# being free. The semaphore turns that into a bounded wait.
+_DB_POOL_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "10"))
+_pool_slots: Optional[threading.BoundedSemaphore] = None
 
 
 def _parse_database_url():
@@ -66,7 +77,7 @@ def _parse_database_url():
 
 def _get_pool() -> ThreadedConnectionPool:
     """Return the process-wide connection pool, creating it on first call."""
-    global _pool
+    global _pool, _pool_slots
     if _pool is not None and not _pool.closed:
         return _pool
 
@@ -81,9 +92,12 @@ def _get_pool() -> ThreadedConnectionPool:
             maxconn=_DB_POOL_MAX,
             **params,
         )
+        # Recreated with the pool, so a pool rebuilt after a close does not
+        # inherit slots that were counted against the old one.
+        _pool_slots = threading.BoundedSemaphore(_DB_POOL_MAX)
         log.info(
-            "✓ Database connection pool created (min=%d, max=%d, host=%s)",
-            _DB_POOL_MIN, _DB_POOL_MAX, params["host"],
+            "✓ Database connection pool created (min=%d, max=%d, wait=%.1fs, host=%s)",
+            _DB_POOL_MIN, _DB_POOL_MAX, _DB_POOL_TIMEOUT, params["host"],
         )
         return _pool
 
@@ -95,28 +109,43 @@ class _PooledConnection:
     with all existing code that does ``conn = _get_conn(); ... conn.close()``.
     """
 
-    def __init__(self, real_conn, pool: ThreadedConnectionPool):
+    def __init__(self, real_conn, pool: ThreadedConnectionPool, slot=None):
         object.__setattr__(self, "_conn", real_conn)
         object.__setattr__(self, "_pool", pool)
+        object.__setattr__(self, "_slot", slot)
         object.__setattr__(self, "_returned", False)
 
     def close(self):
         """Return connection to pool instead of closing it."""
-        if not self._returned:
-            self._returned = True
-            try:
-                # Reset connection state before returning to pool
-                if not self._conn.closed:
-                    self._conn.rollback()
+        if self._returned:
+            return
+
+        self._returned = True
+        try:
+            # Reset connection state before returning to pool
+            if not self._conn.closed:
+                self._conn.rollback()
+            # psycopg2 refuses putconn on a closed pool, and a request still in
+            # flight when close_pool() ran is the normal way to get here: its
+            # connection is already closed, so there is nothing to hand back.
+            if not self._pool.closed:
                 self._pool.putconn(self._conn)
-            except Exception:
-                pass
+        except Exception:
+            # Swallowed but no longer silent: a connection that cannot be
+            # handed back is a pool slot gone for the life of the process, and
+            # the old bare `pass` made that invisible.
+            log.warning("Failed to return a connection to the pool", exc_info=True)
+        finally:
+            # Always, even when putconn failed: the slot counts callers, not
+            # connections, and holding it back would shrink the pool twice.
+            if self._slot is not None:
+                self._slot.release()
 
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
     def __setattr__(self, name, value):
-        if name in {"_conn", "_pool", "_returned"}:
+        if name in {"_conn", "_pool", "_slot", "_returned"}:
             object.__setattr__(self, name, value)
         else:
             setattr(self._conn, name, value)
@@ -128,6 +157,22 @@ class _PooledConnection:
         self.close()
 
 
+def _acquire_timeout() -> float:
+    """How long this caller may wait for a free connection.
+
+    Zero on the event loop. Sync routes run in a worker thread, where a wait
+    costs that one request; an `async def` route that touches the DB inline
+    (`/slack/events` does, through `_delete_slack_message_by_ts`) would block
+    the loop, so a queue there stalls every request in the process rather than
+    the one that has to wait. Those callers keep the old fail-fast behaviour.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _DB_POOL_TIMEOUT
+    return 0.0
+
+
 def _get_conn():
     """
     Get a database connection from the pool.
@@ -135,10 +180,34 @@ def _get_conn():
     The returned connection is wrapped so that calling ``.close()`` returns
     it to the pool rather than destroying it.  This makes this function a
     drop-in replacement for the old raw ``psycopg2.connect()`` call.
+
+    Waits up to ``DB_POOL_TIMEOUT`` seconds for a free slot rather than
+    failing the moment the pool is full (NUMA-135).
     """
     pool = _get_pool()
-    real_conn = pool.getconn()
-    return _PooledConnection(real_conn, pool)
+    slot = _pool_slots
+    timeout = _acquire_timeout()
+    if slot is not None and not slot.acquire(timeout=timeout):
+        waited = (
+            f"Timed out after {timeout:.1f}s waiting for a database connection"
+            if timeout
+            else "No database connection free, and this caller runs on the event "
+                 "loop, where waiting would stall every other request"
+        )
+        raise PoolError(
+            f"{waited}; all {_DB_POOL_MAX} are in use. Raise DB_POOL_MAX, or "
+            f"look for a caller holding one too long."
+        )
+
+    try:
+        real_conn = pool.getconn()
+    except Exception:
+        # The slot is only meaningful while a connection is held.
+        if slot is not None:
+            slot.release()
+        raise
+
+    return _PooledConnection(real_conn, pool, slot)
 
 
 def _put_conn(conn) -> None:
@@ -168,6 +237,30 @@ def get_db():
         yield conn
     finally:
         conn.close()
+
+
+def close_pool() -> None:
+    """Close every pooled connection. Called from the lifespan shutdown.
+
+    Nothing closed the pool before, so a restart left its sockets for Postgres
+    to time out - which on a small connection allowance is the difference
+    between restarting cleanly and restarting into "too many clients".
+    Idempotent, and `_get_pool()` rebuilds on the next call if one comes.
+    """
+    global _pool, _pool_slots
+    with _pool_lock:
+        pool = _pool
+        _pool = None
+        _pool_slots = None
+
+    if pool is None or pool.closed:
+        return
+
+    try:
+        pool.closeall()
+        log.info("Database connection pool closed.")
+    except Exception:
+        log.warning("Failed to close the database connection pool", exc_info=True)
 
 
 def row_to_dict(cursor, row) -> dict:
