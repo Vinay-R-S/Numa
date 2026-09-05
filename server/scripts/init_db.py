@@ -8,10 +8,11 @@ if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
 from src.core.db import init_db, verify_required_tables  # noqa: E402
+from src.core.logging import configure_logging  # noqa: E402
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    configure_logging(logging.INFO)
     init_db(raise_on_error=True)
     missing = verify_required_tables()
     if missing:
