@@ -254,7 +254,8 @@ def _insert_task_from_slack(
         try:
             due = due_date if isinstance(due_date, datetime) else datetime.fromisoformat(str(due_date).replace("Z", "+00:00"))
         except Exception:
-            pass
+            # The task is still created, just without the date the model meant.
+            log.debug("Unparseable due date from the Slack agent: %r", due_date)
 
     normalized_title = _normalize_text(title)
     if not normalized_title:
@@ -285,7 +286,7 @@ def _insert_task_from_slack(
             from ..tasks import service as task_service
             task_service.store_task_snapshot(task)
         except Exception:
-            pass
+            log.debug("Task snapshot store failed for the Slack task", exc_info=True)
     return task
 
 

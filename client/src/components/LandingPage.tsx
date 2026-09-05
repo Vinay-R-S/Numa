@@ -1,10 +1,22 @@
 "use client";
-import { LaserFlow } from "./LaserFlow";
+import dynamic from "next/dynamic";
 import ContentBox from "./ContentBox";
 import Navbar from "./Navbar";
 import localFont from "next/font/local";
 import { motion, useScroll, useTransform } from "framer-motion";
 import { useRef, useState, useEffect } from "react";
+
+// LaserFlow is a 628-LOC WebGL shader that only ever renders on desktop, yet a
+// static import put it in the landing chunk for every visitor, mobile included
+// (NUMA-140 P6, PLAN 9). Loading it on demand means the phone never downloads
+// it and the desktop parses it after the page is interactive. `ssr: false`
+// because it needs a canvas and a GL context, neither of which exists on the
+// server; the placeholder is null so the layout is unchanged while it loads,
+// exactly as it was before the beam painted its first frame.
+const LaserFlow = dynamic(
+  () => import("./LaserFlow").then((mod) => mod.LaserFlow),
+  { ssr: false, loading: () => null },
+);
 
 const gcEpic = localFont({
   src: "../../assets/gc-epic-pro-demo/GCEpicProDemo-ExtraBold.ttf",

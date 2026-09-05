@@ -2,6 +2,7 @@
 
 Extracted verbatim from calendar/service.py; service.py re-exports these names.
 """
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -9,6 +10,8 @@ from ..memory import memory_service
 from ..tasks import service as task_service
 from .datetime_utils import TIMEZONE, _to_local, _iso_to_datetime, _event_datetime_bounds
 from .google_client import _run_parallel_best_effort
+
+log = logging.getLogger(__name__)
 
 
 def _upsert_calendar_event_memory(user_id: Optional[str], event: Dict) -> None:
@@ -122,7 +125,7 @@ def _sync_calendar_event_to_task(user_id: Optional[str], event: Dict) -> None:
         try:
             reminder_at = _to_local(_iso_to_datetime(start_dt_raw)) - timedelta(minutes=15)
         except Exception:
-            pass
+            log.debug("Could not derive a reminder time from %r", start_dt_raw, exc_info=True)
 
     _run_parallel_best_effort(
         lambda: task_service.upsert_calendar_event_task(

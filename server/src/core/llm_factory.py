@@ -31,6 +31,44 @@ from .security import (  # noqa: F401  re-exported for existing import paths
 
 log = logging.getLogger(__name__)
 
+# Every provider call used to have no deadline (NUMA-139 P6, PLAN 9). A hung
+# socket to Groq or Ollama held a worker thread and its pooled DB connection for
+# as long as the peer kept the TCP session open, and the caller waiting on it -
+# an agent route, the day planner, the Slack webhook's background task - waited
+# with it. langchain's own default is no timeout, so this has to be passed.
+# Read at call time, not import time, so a deployment can change it without a
+# code change.
+_DEFAULT_LLM_TIMEOUT = 60.0
+
+# Ollama gets its own, much longer default. The others are hosted APIs that
+# answer in seconds; Ollama is a local model that may have to be paged off disk
+# before it emits a first token, and the value reaches httpx as a *read*
+# timeout, so for a non-streaming call it bounds the whole generation. A 60s
+# deadline would turn a slow-but-working 7B-on-CPU answer into a ReadTimeout.
+_DEFAULT_OLLAMA_TIMEOUT = 300.0
+
+
+def _timeout_from_env(name: str, default: float) -> float:
+    raw = os.getenv(name, "")
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    # Zero or negative means "no deadline" to httpx, which is the bug this
+    # closes; treat it as unset rather than honouring it.
+    return value if value > 0 else default
+
+
+def _llm_timeout() -> float:
+    """Per-request deadline for a hosted provider call, in seconds."""
+    return _timeout_from_env("LLM_TIMEOUT_SECONDS", _DEFAULT_LLM_TIMEOUT)
+
+
+def _ollama_timeout() -> float:
+    """Per-request deadline for a local Ollama call, in seconds."""
+    return _timeout_from_env("OLLAMA_TIMEOUT_SECONDS", _DEFAULT_OLLAMA_TIMEOUT)
+
+
 SUPPORTED_PROVIDERS = ("groq", "openai", "anthropic", "gemini", "ollama")
 
 PROVIDER_MODELS: dict[str, list[str]] = {
@@ -258,13 +296,17 @@ def get_llm(
     final_key = api_key or resolved_key
     final_temp = temperature if temperature is not None else (resolved_temp if resolved_temp is not None else 0.1)
     final_ollama_url = ollama_base_url or resolved_ollama_url
+    timeout = _llm_timeout()
 
     if p == "groq":
         from langchain_groq import ChatGroq
         keys = _provider_api_keys(p, final_key)
         if not keys:
             raise RuntimeError("GROQ_API_KEY is not configured")
-        llms = [ChatGroq(model=m, temperature=final_temp, api_key=key) for key in keys]
+        llms = [
+            ChatGroq(model=m, temperature=final_temp, api_key=key, timeout=timeout)
+            for key in keys
+        ]
         return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
 
     if p == "openai":
@@ -272,7 +314,10 @@ def get_llm(
         keys = _provider_api_keys(p, final_key)
         if not keys:
             raise RuntimeError("OPENAI_API_KEY is not configured")
-        llms = [ChatOpenAI(model=m, temperature=final_temp, api_key=key) for key in keys]
+        llms = [
+            ChatOpenAI(model=m, temperature=final_temp, api_key=key, timeout=timeout)
+            for key in keys
+        ]
         return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
 
     if p == "anthropic":
@@ -280,7 +325,10 @@ def get_llm(
         keys = _provider_api_keys(p, final_key)
         if not keys:
             raise RuntimeError("ANTHROPIC_API_KEY is not configured")
-        llms = [ChatAnthropic(model=m, temperature=final_temp, api_key=key) for key in keys]
+        llms = [
+            ChatAnthropic(model=m, temperature=final_temp, api_key=key, timeout=timeout)
+            for key in keys
+        ]
         return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
 
     if p == "gemini":
@@ -289,7 +337,9 @@ def get_llm(
         if not keys:
             raise RuntimeError("GOOGLE_API_KEY is not configured")
         llms = [
-            ChatGoogleGenerativeAI(model=m, temperature=final_temp, google_api_key=key)
+            ChatGoogleGenerativeAI(
+                model=m, temperature=final_temp, google_api_key=key, timeout=timeout,
+            )
             for key in keys
         ]
         return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
@@ -297,7 +347,12 @@ def get_llm(
     if p == "ollama":
         from langchain_ollama import ChatOllama
         base = final_ollama_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        return ChatOllama(model=m, temperature=final_temp, base_url=base)
+        return ChatOllama(
+            model=m, temperature=final_temp, base_url=base,
+            # ChatOllama has no timeout field of its own; this reaches the
+            # underlying ollama client, which passes it to httpx.
+            client_kwargs={"timeout": _ollama_timeout()},
+        )
 
     raise ValueError(f"Unsupported provider: {p}")
 
