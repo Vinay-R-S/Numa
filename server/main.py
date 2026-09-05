@@ -33,6 +33,7 @@ from src.leetcode.router import router as leetcode_router
 from src.dashboard.router import router as dashboard_router
 from src.audio_library.router import router as audio_library_router
 from src.core.db import close_pool, init_db
+from src.core.errors import register_exception_handlers
 from src.core.scheduler import start_periodic_sync_scheduler
 from src.core.security import verify_encryption_key
 from src.slack_agent.security import verify_signing_secret
@@ -103,6 +104,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Numa API", version="1.0.0", lifespan=lifespan)
+
+# Services raise the typed errors from `core.errors`; routers catch them and
+# re-raise as HTTPException, but a route that forgets leaks an AppError to
+# Starlette, which answers a bare 500 and loses both the status the error
+# carried and its message (NUMA-138 P6, PLAN 7). Registering the handler makes
+# the `{detail}` envelope the outcome whether or not the router remembered.
+register_exception_handlers(app)
 AUDIO_ROOT = SERVER_ROOT / "audio"
 AUDIO_ROOT.mkdir(parents=True, exist_ok=True)
 IMAGE_ASSETS_ROOT = SERVER_ROOT / "assets" / "images"

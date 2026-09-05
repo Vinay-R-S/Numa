@@ -1,12 +1,17 @@
 """Application error hierarchy and FastAPI handlers (NUMA-102).
 
-Additive: not yet registered on the app. Call register_exception_handlers(app)
-to emit the {detail} envelope once features adopt these errors (PLAN 5.1, 7).
+Registered on the app in `main.py` (NUMA-138 P6, PLAN 7), so any AppError that
+reaches the ASGI layer becomes its own status and `{detail}` rather than a bare
+500. Routers that already catch AppError and re-raise HTTPException keep working
+unchanged; this is the floor under the ones that do not (PLAN 5.1, 7).
 """
+import logging
 from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+log = logging.getLogger(__name__)
 
 
 class AppError(Exception):
@@ -49,4 +54,11 @@ class UpstreamError(AppError):
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
+        # A 4xx is the caller's problem and says so in the response; a 5xx is
+        # ours, and before this handler existed uvicorn logged its traceback.
+        # Answering tidily without logging would have bought the envelope by
+        # losing the cause - `AppError(f"DB error: {exc}") from exc` would reach
+        # the client and leave nothing in the log at all.
+        if exc.status_code >= 500:
+            log.exception("%s %s failed: %s", request.method, request.url.path, exc.detail)
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})

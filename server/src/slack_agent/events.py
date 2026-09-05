@@ -14,8 +14,8 @@ from typing import Optional
 
 import httpx
 from fastapi import HTTPException, Request, Response
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask
 
 from .config import _bot_token
 from .errors import (
@@ -165,9 +165,6 @@ async def handle_slack_events(request: Request):
     """
     Receives Slack events via the Events API.
     Uses HMAC-SHA256 signature verification to confirm authenticity.
-    Slack requires an answer within 3 seconds; the @mention path runs an LLM
-    before answering, so that is a requirement this route can still miss and a
-    finding of its own, not a promise this docstring gets to make.
 
     This is the only route in the app without a JWT dependency, so the signature
     is the whole of its authentication: an unverifiable request is refused, never
@@ -177,8 +174,16 @@ async def handle_slack_events(request: Request):
     on the event loop. Everything after that is synchronous - the database, a
     blocking Slack SDK call, and an LLM round trip for @mentions - and it used to
     run inline in this `async def`, so one webhook blocked every other request in
-    the process for as long as it took (NUMA-136 P6, PLAN 7). It runs in a worker
-    thread now.
+    the process for as long as it took (NUMA-136 P6, PLAN 7).
+
+    The ack now goes out before that work starts (NUMA-137 P6, PLAN 7). Slack
+    gives a webhook 3 seconds and retries up to three times when it does not
+    answer in time, and the @mention path runs a model, which does not fit in
+    three seconds. Every retry re-ran the whole handler: three LLM calls billed
+    for one message, and a task whose title was whatever the last answer said.
+    The signature check still decides 403 and 503 before anything is accepted;
+    what moves behind the ack is only what happens to an event already proven to
+    be Slack's.
     """
     body_bytes = await request.body()
 
@@ -208,11 +213,35 @@ async def handle_slack_events(request: Request):
     if payload.get("type") == "url_verification":
         return JSONResponse({"challenge": payload.get("challenge", "")})
 
+    # A retry means the previous delivery was not acked in time, which after this
+    # change should not happen; say so once rather than leaving it invisible.
+    retry_num = request.headers.get("X-Slack-Retry-Num")
+    if retry_num:
+        log.warning(
+            "Slack redelivered an event (attempt %s, reason %s)",
+            retry_num, request.headers.get("X-Slack-Retry-Reason", "unknown"),
+        )
+
     # ── Handle event callbacks ─────────────────────────────────────────────────
-    # Every branch below answered 200, so awaiting the work off-loop keeps both
-    # the status and the ordering the caller saw before.
-    await run_in_threadpool(_handle_event_payload, payload)
-    return Response(status_code=200)
+    # Answer first, work after. Starlette runs the background task once the
+    # response is on the wire, and a sync task there goes to the same worker
+    # threadpool NUMA-136 moved this into.
+    return Response(status_code=200, background=BackgroundTask(_process_event, payload))
+
+
+def _process_event(payload: dict) -> None:
+    """Run the handler after the ack, turning a failure into a log line.
+
+    Nothing is left to return a status to: the 200 has already gone out, so an
+    exception here would be an unhandled error in a background task. It used to
+    become a 500, which made Slack redeliver the event; the log is what replaces
+    that, because a redelivery of a message that was already stored is not a
+    recovery, it is the same work billed twice.
+    """
+    try:
+        _handle_event_payload(payload)
+    except Exception:
+        log.exception("Slack event processing failed after the ack")
 
 
 def _handle_event_payload(payload: dict) -> None:

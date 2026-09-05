@@ -641,7 +641,9 @@ def _delete_cal_event_cleanup(
         event    = service.events().get(calendarId=google_cal_id, eventId=google_event_id).execute()
         ical_uid = str(event.get("iCalUID") or "").strip() or None
     except Exception:
-        pass
+        # Best-effort: without the iCalUID the cleanup falls back to the
+        # google_event_id, which is why this does not raise.
+        log.debug("Could not resolve iCalUID for %s", google_event_id, exc_info=True)
 
     resolved_calendar_ids = list(dict.fromkeys([cid for cid in resolved_calendar_ids if cid]))
 

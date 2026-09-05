@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -6,11 +7,17 @@ from ..memory import memory_service
 from .repository import task_repository
 
 
+log = logging.getLogger(__name__)
+
 GCAL_SOURCE_NAME = "Google Calendar"
 GCAL_SOURCE_LOGO = "google-calendar"
 
 
 def _store_task_snapshot(task: Dict) -> None:
+    # Bound before the try so the handler below can name it whatever failed and
+    # whenever it failed. A handler whose only job is to not raise must not
+    # itself evaluate anything that can.
+    task_id = ""
     try:
         user_id = str(task.get("user_id") or "").strip()
         task_id = str(task.get("id") or "").strip()
@@ -52,7 +59,9 @@ def _store_task_snapshot(task: Dict) -> None:
             },
         )
     except Exception:
-        # Memory ingest is best-effort and must not break task writes.
+        # Memory ingest is best-effort and must not break task writes, but
+        # best-effort is not the same as invisible (NUMA-141 P6, PLAN 7).
+        log.debug("Task snapshot ingest failed for task %r", task_id, exc_info=True)
         return
 
 
@@ -74,6 +83,7 @@ def delete_task_snapshot(user_id: str, task_id: str) -> None:
                 stable_key=str(task_id),
             )
     except Exception:
+        log.debug("Task snapshot delete failed for task %s", task_id, exc_info=True)
         return
 
 

@@ -157,7 +157,7 @@ def _delete_slack_message_by_ts(ts: str, slack_user_id: Optional[str] = None) ->
             for task_id in task_ids:
                 task_service.delete_task_snapshot(user_id, task_id)
         except Exception:
-            pass
+            log.debug("Task snapshot cleanup failed for ts %s", ts, exc_info=True)
 
 
 def _update_slack_message(event: dict, channel_name: Optional[str] = None) -> None:

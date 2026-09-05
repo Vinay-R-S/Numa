@@ -1,6 +1,7 @@
 """
 Journal Router - CRUD endpoints + AI summary generation.
 """
+import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +18,8 @@ from .schemas import (
 )
 
 # Mounted at both /journal and /api/journal (main.py alias).
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/journal", tags=["journal"])
 
 
@@ -178,6 +181,9 @@ def summarize_day(
     try:
         journal_repository.set_summary(user_id, target_date, summary)
     except Exception:
-        pass
+        # The summary still goes back in the response, so the caller sees a
+        # success it will not find again on the next load. Never silent
+        # (NUMA-141 P6, PLAN 7).
+        log.warning("Failed to persist the daily summary for %s", target_date, exc_info=True)
 
     return JournalSummaryResponse(summary=summary, entry_date=target_date)
