@@ -110,7 +110,17 @@ def fetch_latest_for_user(user_id: str) -> Dict:
     try:
         from src.github_agent.sync import fetch_and_store_github_stats_for_user
 
-        result["github"] = fetch_and_store_github_stats_for_user(user_id)
+        github_result = fetch_and_store_github_stats_for_user(user_id)
+        # "Not connected" is not a sync failure, exactly as the calendar, Slack
+        # and health branches already treat it. Left as ok=False, every user
+        # without a linked GitHub made the aggregate permanently False, so the
+        # scheduler's `ok=%s` log line was never a usable alarm
+        # (NUMA-142 P6 review).
+        if not github_result.get("ok") and _is_not_connected_error(
+            Exception(str(github_result.get("detail") or ""))
+        ):
+            github_result = {"ok": True, "detail": github_result.get("detail")}
+        result["github"] = github_result
     except Exception as exc:
         _log_sync_exception("GitHub sync failed for user %s: %s", exc, user_id)
         detail = _dependency_unavailable_detail("GitHub") if _is_transient_dependency_error(exc) else str(exc)
@@ -160,10 +170,14 @@ def fetch_latest_for_users(user_ids: Optional[Iterable[str]] = None) -> Dict:
         slack_purge = {"ok": False, "message": detail}
 
     return {
+        # All four domains, one default. Health was missing entirely, so a
+        # failed health sync reported the whole run ok, and github defaulted to
+        # True where its siblings defaulted to False (NUMA-142 P6, PLAN 7).
         "ok": all(
-            item.get("calendar", {}).get("ok", False)
-            and item.get("slack", {}).get("ok", False)
-            and item.get("github", {}).get("ok", True)
+            all(
+                item.get(domain, {}).get("ok", False)
+                for domain in ("calendar", "slack", "health", "github")
+            )
             for item in results
         ),
         "scope": "selected_users" if user_ids is not None else "all_connected_users",

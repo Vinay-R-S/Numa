@@ -35,9 +35,9 @@ export function clampToBounds(value: string | number, bounds: Bounds): number {
   return parseBoundedInput(value, bounds.min, bounds.max, bounds.fallback)
 }
 
-export function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback
-}
+// Defined once in `lib/utils`; re-exported so this feature's call sites keep
+// importing it from their own module (NUMA-142 P6, PLAN 10).
+export { errorMessage } from "@/lib/utils"
 
 export function calendarStatusLabel(
   checking: boolean,

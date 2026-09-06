@@ -10,33 +10,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { useCalendarStore } from "@/lib/stores"
 import { getGoogleCalendarAuthorizationUrl, startCalendarWatch, subscribeToCalendarUpdates } from "./calendar.api"
-import { SSE_RELOAD_DEBOUNCE_MS, TIMELINE_SETTINGS_KEY } from "./calendar.constants"
+import { SSE_RELOAD_DEBOUNCE_MS } from "./calendar.constants"
+import { readTimelineSettings } from "./calendar.settings"
 import { eventsForDay, filterEventsByQuery } from "./calendar.utils"
 import type { CalendarEvent, CalendarEventPayload, TimelineSettings } from "./calendar.types"
 
-function readTimelineSettings(): TimelineSettings {
-  try {
-    const raw = localStorage.getItem(TIMELINE_SETTINGS_KEY)
-    return raw ? (JSON.parse(raw) as TimelineSettings) : {}
-  } catch {
-    return {}
-  }
-}
-
 export function useCalendar() {
-  const {
-    events,
-    loading,
-    error,
-    calendarConnected,
-    fetchEvents,
-    createEvent,
-    updateEvent,
-    deleteEvent,
-    clearError,
-  } = useCalendarStore()
+  // Selector per slice, not the whole store: subscribing to the store object
+  // re-rendered the month grid on every agent message (NUMA-142 P6, PLAN 9).
+  const events = useCalendarStore((state) => state.events)
+  const loading = useCalendarStore((state) => state.loading)
+  const error = useCalendarStore((state) => state.error)
+  const calendarConnected = useCalendarStore((state) => state.calendarConnected)
+  const fetchEvents = useCalendarStore((state) => state.fetchEvents)
+  const createEvent = useCalendarStore((state) => state.createEvent)
+  const updateEvent = useCalendarStore((state) => state.updateEvent)
+  const deleteEvent = useCalendarStore((state) => state.deleteEvent)
 
   const [connectingGoogle, setConnectingGoogle] = useState(false)
+  const [connectError, setConnectError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [refreshingEvents, setRefreshingEvents] = useState(false)
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null)
@@ -100,14 +92,20 @@ export function useCalendar() {
 
   const handleConnectGoogleCalendar = useCallback(async () => {
     setConnectingGoogle(true)
+    setConnectError(null)
     try {
       const authorizationUrl = await getGoogleCalendarAuthorizationUrl()
       globalThis.location.assign(authorizationUrl)
-    } catch {
-      clearError()
+    } catch (err) {
+      // This cleared the store's unrelated event-loading error and showed the
+      // user nothing, so a failed connect looked like a button that did not
+      // work (NUMA-142 P6, PLAN 7).
+      setConnectError(
+        err instanceof Error ? err.message : "Could not start Google Calendar authorization"
+      )
       setConnectingGoogle(false)
     }
-  }, [clearError])
+  }, [])
 
   const handleRefreshEvents = useCallback(async () => {
     if (refreshingEvents) return
@@ -115,6 +113,11 @@ export function useCalendar() {
     setRefreshingEvents(true)
     try {
       await fetchEvents(true)
+      // A successful load clears the connect failure. It was only ever reset
+      // inside the connect handler, so one failed attempt masked the store's
+      // own error for the rest of the session with no way to dismiss it
+      // (NUMA-142 P6 review).
+      setConnectError(null)
     } finally {
       setRefreshingEvents(false)
     }
@@ -128,7 +131,8 @@ export function useCalendar() {
     filteredEvents,
     todayEvents,
     loading,
-    error,
+    // The store's own error, or the connect failure this hook owns.
+    error: connectError ?? error,
     calendarConnected,
     connectingGoogle,
     refreshingEvents,

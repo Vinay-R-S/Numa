@@ -384,14 +384,17 @@ npm run dev
 Numa/
 |-- .github/
 |   `-- workflows/
-|       `-- ci.yml                 # GitHub Actions CI suites
+|       `-- ci.yml                 # Secret scan, unit tests, legacy suites
 |-- client/                        # Next.js frontend
 |   |-- assets/                    # Frontend image and font assets
 |   |-- public/                    # Static public assets
 |   |-- src/
 |   |   |-- app/                   # Next.js app router pages and API proxy
-|   |   |-- components/            # Shared UI and feature components
-|   |   `-- lib/                   # Utilities, stores, Supabase, settings
+|   |   |-- components/            # Shared UI components
+|   |   |-- features/              # One self-contained module per feature:
+|   |   |                          #   <feature>.api.ts, .types.ts, .schema.ts,
+|   |   |                          #   use<Feature>.ts, components/
+|   |   `-- lib/                   # http, session, stores, supabase, validation
 |   |-- Dockerfile                 # Client container definition
 |   |-- package.json
 |   |-- package-lock.json
@@ -400,9 +403,13 @@ Numa/
 |-- server/                        # FastAPI backend
 |   |-- assets/                    # Backend image assets
 |   |-- audio/                     # Audio files served by backend
-|   |-- migrations/                # Alembic migrations
+|   |-- migrations/                # Alembic migrations (the only source of DDL)
 |   |-- scripts/                   # Backend utility scripts
 |   |-- src/
+|   |   |-- core/                  # Cross-cutting: db, config, errors, logging,
+|   |   |                          #   security, oauth_state, timezones,
+|   |   |                          #   scheduler, embedder, llm_factory,
+|   |   |                          #   rate_limiter, data_sync, base classes
 |   |   |-- ai_settings/           # LLM provider config
 |   |   |-- api/                   # External API helpers
 |   |   |-- audio_library/         # Soundscape catalog + local downloads
@@ -418,13 +425,7 @@ Numa/
 |   |   |-- memory/                # Qdrant semantic memory
 |   |   |-- slack_agent/           # Slack integration and sub-agent
 |   |   |-- tasks/                 # Task CRUD and analytics
-|   |   |-- context_assembler.py
-|   |   |-- data_planner.py
-|   |   |-- data_sync.py
-|   |   |-- db.py
-|   |   |-- embedder.py
-|   |   |-- llm_factory.py
-|   |   `-- rate_limiter.py
+|   |   `-- *.py                   # Compatibility shims re-exporting src/core/
 |   |-- Dockerfile                 # Server container definition
 |   |-- alembic.ini
 |   |-- getNgrok.py
@@ -436,12 +437,37 @@ Numa/
 |   |-- clean_cache.py             # Remove Python cache artifacts
 |   |-- normalize_dashes.py        # Replace em/en dashes with hyphens
 |   `-- docker-run.ps1             # Build and run Docker containers
-|-- tests/                         # Isolated pytest test suites
+|-- tests/                         # See tests/README.md
+|   |-- unit/                      # Imports the app; mirrors server/src/
+|   |-- legacy/                    # Self-contained fixtures; imports nothing
+|   `-- secret_checks/             # Environment wiring, env-gated
 |-- docker-compose.yml             # Client, server, and ngrok services
 |-- pytest.ini
 |-- README.md
 `-- .gitignore
 ```
+
+Each backend feature follows the same shape, so a file's job is predictable
+from its name:
+
+| File            | Holds                                                    |
+| --------------- | -------------------------------------------------------- |
+| `router.py`     | HTTP only: parse, call the service, map errors to status |
+| `service.py`    | Business logic and orchestration; owns transactions      |
+| `repository.py` | SQL for one aggregate; no business rules                 |
+| `schemas.py`    | Pydantic request and response models                     |
+| `*_client.py`   | Wrappers around a third-party API                        |
+
+## Testing
+
+```bash
+pytest tests            # everything
+pytest tests/unit       # the suite that imports the application
+```
+
+`tests/unit/` needs `server/requirements.txt` installed; `tests/legacy/` needs
+only pytest. `tests/README.md` explains why the split exists and where a new
+test belongs.
 
 ## Docker Setup
 

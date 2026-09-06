@@ -19,7 +19,7 @@ from src.core.logging import configure_logging
 configure_logging()
 
 from src.auth.router import router as auth_router
-from src.auth.dependencies import get_current_user
+from src.auth.dependencies import get_current_user, require_admin
 from src.tasks.router import router as tasks_router
 from src.calendar.router import router as calendar_router
 from src.calendar_agent.router import router as calendar_agent_router
@@ -34,7 +34,7 @@ from src.dashboard.router import router as dashboard_router
 from src.audio_library.router import router as audio_library_router
 from src.core.db import close_pool, init_db
 from src.core.errors import register_exception_handlers
-from src.core.scheduler import start_periodic_sync_scheduler
+from src.core.scheduler import start_periodic_sync_scheduler, stop_periodic_sync_scheduler
 from src.core.security import verify_encryption_key
 from src.slack_agent.security import verify_signing_secret
 from src.ai_settings.repository import ai_settings_repository
@@ -93,11 +93,19 @@ async def lifespan(app: FastAPI):
     await loop.run_in_executor(None, _check_encryption_key)
     verify_signing_secret()
 
-    import threading
-    threading.Thread(target=start_periodic_sync_scheduler, daemon=True).start()
+    # In the executor, not on a throwaway daemon thread. `BackgroundScheduler`
+    # starts its own thread and returns immediately, so the wrapper bought
+    # nothing and cost us both the handle and the traceback.
+    scheduler = await loop.run_in_executor(None, start_periodic_sync_scheduler)
     try:
         yield
     finally:
+        # Order matters. A job still firing after the pool closed called
+        # `_get_pool()`, found None, and opened a fresh pool against Postgres
+        # after shutdown - the "too many clients" failure close_pool() exists to
+        # prevent, once per reload (NUMA-142 P6, PLAN 7).
+        await loop.run_in_executor(None, stop_periodic_sync_scheduler, scheduler)
+
         # The pool outlived the app: shutdown left its connections open for the
         # server to time out (NUMA-135 P6, PLAN 7).
         await loop.run_in_executor(None, close_pool)
@@ -177,7 +185,24 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    """Basic health + Qdrant/memory status check."""
+    """Unauthenticated liveness probe.
+
+    It used to return the Qdrant host, the absolute embedding cache path and the
+    embedder's raw failure string to anyone who asked. Infrastructure that polls
+    this only needs the verdict; the diagnostics moved behind the admin gate
+    (NUMA-142 P6, PLAN 8).
+    """
+    from src.memory.service import memory_service
+
+    return {
+        "status": "ok",
+        "vector_memory": {"enabled": memory_service.enabled},
+    }
+
+
+@app.get("/health/details", include_in_schema=False)
+def health_details(_: dict = Depends(require_admin)):
+    """Full diagnostics: admin-only, since it names hosts, paths and failures."""
     from src.memory.service import memory_service
 
     mem_status: dict = {

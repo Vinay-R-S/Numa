@@ -18,6 +18,7 @@ from ..datetime_utils import (
 from ..google_auth import get_calendar_service
 from ..google_client import (
     fetch_events_across_selected_calendars,
+    _extract_meet_link,
     _parse_calendar_event_id,
 )
 from ..calendars import list_selected_calendars
@@ -104,11 +105,7 @@ def create_calendar_event(
     _persist_mutated_event(user_id, service, created_event)
     _sync_calendar_event_to_task(user_id, created_event)
 
-    meet_link = None
-    for entry in (created_event.get("conferenceData") or {}).get("entryPoints", []):
-        if entry.get("entryPointType") == "video":
-            meet_link = entry.get("uri")
-            break
+    meet_link = _extract_meet_link(created_event)
 
     return {
         "event_id":  created_event.get("id"),
@@ -120,16 +117,26 @@ def create_calendar_event(
     }
 
 
-def delete_calendar_event(event_id: str, user_id: Optional[str] = None) -> Dict:
-    service = get_calendar_service(user_id=user_id)
-    calendar_id, actual_event_id = _parse_calendar_event_id(event_id)
+def _delete_google_event(service, calendar_id: str, event_id: str) -> None:
+    """Delete an event, treating "already gone" as success.
+
+    Google answers 410 for an event someone deleted in the Google UI first; the
+    local cleanup below still has to run. This swallow was copy-pasted at three
+    call sites (NUMA-142 P6, PLAN 10).
+    """
     try:
-        service.events().delete(calendarId=calendar_id, eventId=actual_event_id).execute()
+        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
     except Exception as exc:
         err_str = str(exc)
         if "410" not in err_str and "Resource has been deleted" not in err_str:
             raise
-    _delete_cal_event_cleanup(user_id, calendar_id, actual_event_id)
+
+
+def delete_calendar_event(event_id: str, user_id: Optional[str] = None) -> Dict:
+    service = get_calendar_service(user_id=user_id)
+    calendar_id, actual_event_id = _parse_calendar_event_id(event_id)
+    _delete_google_event(service, calendar_id, actual_event_id)
+    _delete_cal_event_cleanup(user_id, calendar_id, actual_event_id, service=service)
     return {"status": "success", "deleted_event_id": actual_event_id}
 
 
@@ -178,13 +185,8 @@ def delete_event_by_description(query: str, user_id: Optional[str] = None) -> Di
     if len(matches) == 1:
         event   = matches[0]
         service = get_calendar_service(user_id=user_id)
-        try:
-            service.events().delete(calendarId="primary", eventId=event["id"]).execute()
-        except Exception as exc:
-            err_str = str(exc)
-            if "410" not in err_str and "Resource has been deleted" not in err_str:
-                raise
-        _delete_cal_event_cleanup(user_id, "primary", event["id"])
+        _delete_google_event(service, "primary", event["id"])
+        _delete_cal_event_cleanup(user_id, "primary", event["id"], service=service)
         return {
             "status":         "deleted",
             "deleted_summary": event["summary"],

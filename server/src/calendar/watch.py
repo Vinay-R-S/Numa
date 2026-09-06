@@ -19,6 +19,16 @@ creating an event woke every other user's tab into a full month refetch against
 the Google API - the scoping half the NUMA-114 note deferred. Each bump now names
 the user whose calendar moved: the acting user for a local mutation, and for a
 push notification the user whose channel `start_watch` registered.
+
+Channels are a registry keyed by channel id since NUMA-142, not one record.
+Several users hold live channels at once, `/watch/status` answers with the
+caller's own, and registering a new channel stops the one it replaces. A
+notification for a channel this process does not know is refused: the earlier
+note here claimed a configured fixed token still verified a channel registered
+before a restart, but that path skipped both id guards and bumped the
+empty-string version bucket, so the real owner's stream never moved. Surviving a
+restart or a second worker needs the `cal_watch_channels` table, which exists
+with no writer and no column for the token.
 """
 import asyncio
 import hmac
@@ -38,18 +48,26 @@ log = logging.getLogger(__name__)
 WEBHOOK_PATH = "/calendar/webhooks/google-calendar"
 STREAM_POLL_SECONDS = 8
 
-watch_state: dict[str, str | None] = {
-    "channel_id": None,
-    "resource_id": None,
-    "expiration": None,
-    "last_message_number": None,
-    # The token this process registered with Google. Never leaves the server:
-    # `get_watch_state` builds its response field by field and does not read it.
-    "token": None,
-    # Whose calendar this channel watches, so a push notification bumps that
-    # user's version rather than everyone's.
-    "user_id": None,
-}
+#: Registered push channels, keyed by the channel id Google echoes back.
+#: This was a single module-level record, so the second user to open the
+#: calendar overwrote the first user's channel: Google kept pushing on the old
+#: one, every notification was refused with "Unknown channel id", and Google
+#: eventually tore it down. Only one user per process could have a working
+#: channel, and `/watch/status` returned whoever registered last to whoever
+#: asked (NUMA-142 P6, PLAN 7 / 8).
+#:
+#: Each entry holds `resource_id`, `expiration`, `last_message_number`, the
+#: `token` this process registered (never leaves the server), and the `user_id`
+#: whose calendar it watches, so a notification bumps that user's feed alone.
+#:
+#: Still per-process. A channel registered before a restart, or by another
+#: worker, is not in this map and its notifications are refused until the page
+#: registers a new one. Surviving that needs the `cal_watch_channels` table,
+#: which exists but has no writer and no column for the token.
+_watch_channels: dict[str, dict] = {}
+
+#: Guards the registry. Sync routes run in a threadpool.
+_channels_lock = threading.Lock()
 
 #: Per-user version counters. A token with no `sub` claim keys on "", which keeps
 #: it out of every real user's bucket; such callers share that one bucket, which
@@ -90,13 +108,47 @@ def _parse_google_expiration(expiration_ms: str | None) -> str | None:
         return None
 
 
-def get_watch_state() -> dict:
+def _user_channel(user_id: str | None) -> tuple[str | None, dict | None]:
+    """This user's registered channel, or (None, None)."""
+    key = _version_key(user_id)
+    with _channels_lock:
+        for channel_id, entry in _watch_channels.items():
+            if _version_key(entry.get("user_id")) == key:
+                return channel_id, dict(entry)
+    return None, None
+
+
+def get_watch_state(user_id: str | None) -> dict:
+    """The caller's own channel. Takes a user id because it used to answer with
+    the process-global record: whoever registered last, including their channel
+    and resource ids, returned to anyone who asked, and reported `active` to a
+    user who had no channel at all."""
+    channel_id, entry = _user_channel(user_id)
+    if not entry:
+        return {"active": False, "channel_id": None, "resource_id": None, "expiration": None}
+
     return {
-        "active": bool(watch_state.get("channel_id") and watch_state.get("resource_id")),
-        "channel_id": watch_state.get("channel_id"),
-        "resource_id": watch_state.get("resource_id"),
-        "expiration": watch_state.get("expiration"),
+        "active": bool(channel_id and entry.get("resource_id")),
+        "channel_id": channel_id,
+        "resource_id": entry.get("resource_id"),
+        "expiration": entry.get("expiration"),
     }
+
+
+def _stop_channel(service, channel_id: str, resource_id: str | None) -> None:
+    """Ask Google to stop a channel we are about to replace.
+
+    The calendar page registers on every mount, so without this each visit left
+    another live channel pointed at the same webhook. They no longer matched the
+    registry, so every notification they delivered was refused, Google retried
+    each with backoff, and the per-calendar channel quota drained.
+    """
+    if not channel_id or not resource_id:
+        return
+    try:
+        service.channels().stop(body={"id": channel_id, "resourceId": resource_id}).execute()
+    except Exception:
+        log.debug("Could not stop calendar channel %s", channel_id, exc_info=True)
 
 
 def start_watch(user_id: str | None) -> dict:
@@ -126,6 +178,14 @@ def start_watch(user_id: str | None) -> dict:
         )
 
     service = get_calendar_service(user_id=user_id)
+
+    # Replace this user's own channel, and only theirs.
+    previous_id, previous = _user_channel(user_id)
+    if previous_id:
+        _stop_channel(service, previous_id, previous.get("resource_id"))
+        with _channels_lock:
+            _watch_channels.pop(previous_id, None)
+
     response = (
         service.events()
         .watch(
@@ -141,14 +201,18 @@ def start_watch(user_id: str | None) -> dict:
     )
 
     expiration = _parse_google_expiration(response.get("expiration"))
-    watch_state["channel_id"] = response.get("id")
-    watch_state["resource_id"] = response.get("resourceId")
-    watch_state["expiration"] = expiration
-    watch_state["last_message_number"] = None
-    # Registering the token without keeping it was the NUMA-131 bug: the handler
-    # had nothing to compare against and waved the notification through.
-    watch_state["token"] = token
-    watch_state["user_id"] = user_id
+    registered_id = response.get("id") or channel_id
+    with _channels_lock:
+        _watch_channels[registered_id] = {
+            "resource_id": response.get("resourceId"),
+            "expiration": expiration,
+            "last_message_number": None,
+            # Registering the token without keeping it was the NUMA-131 bug: the
+            # handler had nothing to compare against and waved notifications
+            # through.
+            "token": token,
+            "user_id": user_id,
+        }
 
     return {
         "success": True,
@@ -166,16 +230,28 @@ def handle_webhook_notification(
 ) -> None:
     """Validate a Google push notification and bump the SSE version.
 
-    The token is mandatory: a notification that cannot be matched against a token
-    this process registered, or against the configured one, is refused. The
-    channel and resource ids stay conditional on being known, so a configured
-    fixed token still verifies notifications for a channel registered before a
-    restart.
+    The channel id selects which registration to check against, because several
+    users can hold channels at once. The token is then mandatory and compared
+    against the token that channel was registered with.
+
+    A channel this process does not know is refused rather than waved through.
+    Previously an unknown channel skipped both id guards and bumped
+    `_version_key(None)` - the empty-string bucket - so after a restart the
+    real owner's stream never moved and the notification was silently lost. A
+    refused channel is one Google eventually stops, and the calendar page
+    registers a fresh one on its next mount.
     """
-    expected_token = WATCH_WEBHOOK_TOKEN or watch_state.get("token") or ""
+    with _channels_lock:
+        entry = dict(_watch_channels.get(channel_id or "", {}))
+
+    if not entry:
+        log.warning("Calendar webhook refused: unknown channel %r", channel_id)
+        raise HTTPException(status_code=400, detail="Unknown channel id")
+
+    expected_token = entry.get("token") or WATCH_WEBHOOK_TOKEN or ""
     if not expected_token:
         log.warning(
-            "Calendar webhook refused: no watch is registered and %s is unset",
+            "Calendar webhook refused: no token registered for the channel and %s is unset",
             WEBHOOK_TOKEN_ENV,
         )
         raise HTTPException(status_code=401, detail="Invalid webhook token")
@@ -184,15 +260,15 @@ def handle_webhook_notification(
         log.warning("Calendar webhook refused: token mismatch")
         raise HTTPException(status_code=401, detail="Invalid webhook token")
 
-    if watch_state.get("channel_id") and channel_id != watch_state.get("channel_id"):
-        raise HTTPException(status_code=400, detail="Unknown channel id")
-
-    if watch_state.get("resource_id") and resource_id != watch_state.get("resource_id"):
+    if entry.get("resource_id") and resource_id != entry.get("resource_id"):
         raise HTTPException(status_code=400, detail="Unknown resource id")
 
-    if message_number and message_number != watch_state.get("last_message_number"):
-        watch_state["last_message_number"] = message_number
-        _touch_watch_version(watch_state.get("user_id"))
+    if message_number and message_number != entry.get("last_message_number"):
+        with _channels_lock:
+            live = _watch_channels.get(channel_id or "")
+            if live is not None:
+                live["last_message_number"] = message_number
+        _touch_watch_version(entry.get("user_id"))
 
 
 async def stream_calendar_updates(user_id: str | None) -> AsyncGenerator[str, None]:

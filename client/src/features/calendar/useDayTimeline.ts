@@ -74,6 +74,13 @@ export function useDayTimeline({
     const config = waterConfig ?? DEFAULT_WATER_CONFIG
     const items: TimelineItem[] = []
 
+    // An empty window emits nothing. `DISABLED_WATER_CONFIG` is 0..0, and the
+    // inclusive loop below still produced one 00:00 reminder, so turning water
+    // off left a row in the timeline (NUMA-142 P6, PLAN 7). A non-positive step
+    // would not terminate at all; the stored value is validated on read now,
+    // and this is the second line of defence.
+    if (config.endHour <= config.startHour || config.stepMinutes < 1) return items
+
     for (
       let minutes = config.startHour * 60;
       minutes <= config.endHour * 60;
@@ -103,10 +110,19 @@ export function useDayTimeline({
   }, [mealTimes])
 
   const taskItems = useMemo((): TimelineItem[] => {
+    // `toDateParam` is the local calendar day since NUMA-142; `due_date` is an
+    // ISO instant, so it is compared in local time too. Slicing the raw ISO
+    // string compared a UTC day against a local one and showed the wrong day's
+    // tasks near the date boundary (PLAN 7).
     const todayStr = toDateParam(new Date())
 
     return tasks
-      .filter((task) => task.due_date?.slice(0, 10) === todayStr && task.status !== "completed")
+      .filter(
+        (task) =>
+          task.due_date != null &&
+          toDateParam(new Date(task.due_date)) === todayStr &&
+          task.status !== "completed"
+      )
       .map((task) => ({
         id: `task-${task.id}`,
         type: "task",

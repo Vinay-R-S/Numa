@@ -16,11 +16,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 from ..auth.dependencies import get_current_user
-from ..core.errors import AppError
+from ..core.errors import AppError, http_error_from
 from .config import (  # noqa: F401  re-exported for existing import paths
     GITHUB_OAUTH_URL,
     _get_github_config,
-    _oauth_states,
 )
 from .persistence import (  # noqa: F401  re-exported for existing import paths
     _get_github_token,
@@ -51,7 +50,6 @@ __all__ = [
     "GITHUB_OAUTH_URL",
     "_get_github_config",
     "_get_github_token",
-    "_oauth_states",
     "fetch_and_store_github_stats_for_user",
     "get_all_connected_github_user_ids",
 ]
@@ -69,7 +67,10 @@ def _require_user_id(current_user: dict) -> str:
 
 
 def _http_error(exc: AppError) -> HTTPException:
-    return HTTPException(status_code=exc.status_code, detail=exc.detail)
+    # `http_error_from`, not a bare HTTPException: it carries the raiser's
+    # safe-detail decision, which the 5xx redaction otherwise flattens into
+    # "Internal server error" (NUMA-142 P6 review).
+    return http_error_from(exc)
 
 
 @router.get("/connect", response_model=GitHubConnectResponse)

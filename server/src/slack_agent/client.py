@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
+from collections import OrderedDict
 from typing import Optional
 
 import httpx
@@ -18,7 +20,37 @@ from .persistence import _team_bot_token
 
 log = logging.getLogger(__name__)
 
-_slack_user_name_cache: dict[str, tuple[float, str]] = {}
+# Bounded and expiring. This was an unevicted dict that grew with every user of
+# every workspace the process ever saw, and `_cache_workspace_user_names`
+# refilled it in full on every sync tick regardless (NUMA-142 P6, PLAN 9).
+_NAME_CACHE_TTL_SECONDS = 3600
+_NAME_CACHE_MAX = 5000
+_slack_user_name_cache: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
+_name_cache_lock = threading.Lock()
+
+# Last full users.list walk per team, so a sync tick 30 minutes later reuses the
+# names already cached instead of paging the whole workspace again.
+_workspace_refill_at: dict[str, float] = {}
+
+
+def _cached_name(cache_key: str) -> Optional[str]:
+    with _name_cache_lock:
+        entry = _slack_user_name_cache.get(cache_key)
+        if not entry:
+            return None
+        if time.time() - entry[0] >= _NAME_CACHE_TTL_SECONDS:
+            _slack_user_name_cache.pop(cache_key, None)
+            return None
+        _slack_user_name_cache.move_to_end(cache_key)
+        return entry[1]
+
+
+def _remember_name(cache_key: str, name: str) -> None:
+    with _name_cache_lock:
+        _slack_user_name_cache[cache_key] = (time.time(), name)
+        _slack_user_name_cache.move_to_end(cache_key)
+        while len(_slack_user_name_cache) > _NAME_CACHE_MAX:
+            _slack_user_name_cache.popitem(last=False)
 
 
 def _raw_payload_dict(raw_payload) -> dict:
@@ -59,9 +91,9 @@ def _resolve_slack_user_name(team_id: str, slack_user_id: str, raw_payload=None)
         return None
 
     cache_key = f"{team_id}:{slack_user_id}"
-    cached = _slack_user_name_cache.get(cache_key)
-    if cached and time.time() - cached[0] < 3600:
-        return cached[1]
+    cached = _cached_name(cache_key)
+    if cached:
+        return cached
 
     token = _team_bot_token(team_id) or _bot_token()
     if not token:
@@ -87,7 +119,7 @@ def _resolve_slack_user_name(team_id: str, slack_user_id: str, raw_payload=None)
         ):
             if isinstance(value, str) and value.strip():
                 name = value.strip()
-                _slack_user_name_cache[cache_key] = (time.time(), name)
+                _remember_name(cache_key, name)
                 return name
     except Exception as exc:
         log.info("Slack user name lookup skipped for %s: %s", slack_user_id, exc)
@@ -97,6 +129,10 @@ def _resolve_slack_user_name(team_id: str, slack_user_id: str, raw_payload=None)
 
 def _cache_workspace_user_names(client: httpx.Client, token: str, team_id: str) -> None:
     if not token or not team_id:
+        return
+
+    last_refill = _workspace_refill_at.get(team_id, 0.0)
+    if time.time() - last_refill < _NAME_CACHE_TTL_SECONDS:
         return
 
     cursor = ""
@@ -125,11 +161,12 @@ def _cache_workspace_user_names(client: httpx.Client, token: str, team_id: str) 
                 member.get("name"),
             ):
                 if isinstance(value, str) and value.strip():
-                    _slack_user_name_cache[f"{team_id}:{slack_user_id}"] = (time.time(), value.strip())
+                    _remember_name(f"{team_id}:{slack_user_id}", value.strip())
                     break
 
         cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
         if not cursor:
+            _workspace_refill_at[team_id] = time.time()
             return
 
 

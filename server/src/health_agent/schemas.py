@@ -25,6 +25,10 @@ class HealthChatResponse(BaseModel):
     success: bool = True
     delegated_to: Optional[str] = None
     refresh_health: bool = False
+    # Set when the sub-agent wrote through the shared task tools; the master
+    # agent maps it to refreshTasks and the direct route can use it too
+    # (NUMA-142 P6 review).
+    refresh_tasks: bool = False
 
 
 # ── Snapshot data ─────────────────────────────────────────────────────────────

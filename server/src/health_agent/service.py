@@ -38,9 +38,15 @@ from .sync import (
     sync_health_for_user,
     sync_strava_for_user,
 )
-from .utils import _bucket_for_api, _empty_intraday_buckets, _intraday_bounds
+from ..core.timezones import user_today
+from .utils import (
+    HEALTH_RETENTION_DAYS,
+    _bucket_for_api,
+    _empty_intraday_buckets,
+    _intraday_bounds,
+)
 
-DEFAULT_SNAPSHOT_DAYS = 8
+DEFAULT_SNAPSHOT_DAYS = HEALTH_RETENTION_DAYS
 INTRADAY_BUCKET_MINUTES = 60
 INTRADAY_SOURCE = "google_fit"
 
@@ -86,7 +92,7 @@ class HealthService(BaseService):
         self.user_timezone = user_timezone or _get_user_timezone
         self.chat_agent = chat_agent or run_health_agent_chat
 
-    # ── Status ───────────────────────────────────────────────────────────────
+    # Status
 
     def get_status(self, user_id: Optional[str]) -> Dict:
         """Provider config plus today's snapshot counts.
@@ -95,7 +101,8 @@ class HealthService(BaseService):
         the route did before.
         """
         snapshots = self.read_snapshots(user_id, days=DEFAULT_SNAPSHOT_DAYS) if user_id else []
-        today = date.today()
+        # The user's today, matching how snapshot_date is written (NUMA-142 P6).
+        today = user_today(user_id)
         return {
             "google_fit_configured": _is_google_fit_configured(),
             "strava_configured": _is_strava_configured(),
@@ -103,7 +110,7 @@ class HealthService(BaseService):
             "total_snapshots": len(snapshots),
         }
 
-    # ── Snapshots ────────────────────────────────────────────────────────────
+    # Snapshots
 
     def list_snapshots(
         self,
@@ -126,7 +133,7 @@ class HealthService(BaseService):
         dto.update({key: row.get(key) for key in _SNAPSHOT_METRIC_KEYS})
         return dto
 
-    # ── Intraday ─────────────────────────────────────────────────────────────
+    # Intraday
 
     def get_intraday(
         self,
@@ -178,7 +185,7 @@ class HealthService(BaseService):
             "updated_at": row.get("updated_at"),
         }
 
-    # ── Sync ─────────────────────────────────────────────────────────────────
+    # Sync
 
     def sync_google_fit(self, user_id: str, target_date: Optional[date] = None) -> Dict:
         return self.sync_google_fit_api(user_id, target_date=target_date)
@@ -187,9 +194,15 @@ class HealthService(BaseService):
         return self.sync_strava_api(user_id, target_date=target_date)
 
     def sync_all(self, user_id: str) -> Dict:
-        return self.sync_all_api(user_id)
+        """A user asking for a sync gets the full retention window.
 
-    # ── Chat ─────────────────────────────────────────────────────────────────
+        Left to the default, a manual sync inherited the scheduler's throttled
+        two-day window, so a user who noticed five days of missing steps could
+        not recover them from the UI at all (NUMA-142 P6 review).
+        """
+        return self.sync_all_api(user_id, days=HEALTH_RETENTION_DAYS)
+
+    # Chat
 
     def chat(
         self,
@@ -200,7 +213,7 @@ class HealthService(BaseService):
     ) -> Dict:
         return self.chat_agent(query=query, history=history, user_id=user_id, model=model)
 
-    # ── Maintenance ──────────────────────────────────────────────────────────
+    # Maintenance
 
     def purge_old_snapshots(self) -> Dict:
         """Called by the APScheduler daily 8 AM job."""

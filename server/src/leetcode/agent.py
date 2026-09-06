@@ -152,9 +152,15 @@ def _build_leetcode_graph(user_id: str, model_override: Optional[str] = None):
         response = llm_with_tools.invoke(full)
         return {**state, "messages": [response]}
 
+    mutation_tools = {"create_task", "update_task", "delete_task"}
+
     def call_tools(state: LeetCodeAgentState) -> LeetCodeAgentState:
         last = state["messages"][-1]
         out = []
+        # `mutated` was threaded through every node, never set and never read.
+        # This toolset includes the shared task tools, so it can write, and the
+        # UI had no way to learn about it (NUMA-142 P6, PLAN 7).
+        mutated = bool(state.get("mutated"))
         for tc in getattr(last, "tool_calls", []):
             name, args, tid = tc.get("name"), tc.get("args", {}), tc.get("id")
             if name not in tool_map:
@@ -162,10 +168,12 @@ def _build_leetcode_graph(user_id: str, model_override: Optional[str] = None):
             else:
                 try:
                     result = tool_map[name].invoke(args)
+                    if name in mutation_tools:
+                        mutated = True
                 except Exception as exc:
                     result = f"Error running {name}: {exc}"
             out.append(ToolMessage(content=str(result), tool_call_id=tid))
-        return {**state, "messages": out}
+        return {**state, "messages": out, "mutated": mutated}
 
     def should_continue(state: LeetCodeAgentState):
         last = state["messages"][-1]
@@ -267,12 +275,15 @@ def run_leetcode_agent_chat(
             "response": str(content),
             "success": True,
             "delegated_to": "leetcode-subagent",
+            "mutated": bool(result.get("mutated", False)),
         }
 
     except Exception as exc:
+        # Logged, not returned: this string is a response body (NUMA-142 P6).
         log.error("LeetCode sub-agent error: %s", exc, exc_info=True)
         return {
-            "response": f"LeetCode sub-agent encountered an error: {exc}",
+            "response": "The LeetCode assistant hit an error. Please try again.",
             "success": False,
             "delegated_to": "leetcode-subagent",
+            "mutated": False,
         }

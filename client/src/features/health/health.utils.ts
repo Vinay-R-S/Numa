@@ -7,9 +7,6 @@
 import { SLEEP_STAGE_META } from "./health.constants"
 import type { SleepStage, SleepTimelineSegment } from "./health.types"
 
-// One home for the fetch-abort check: lib/http owns it.
-export { isAbortError } from "@/lib/http"
-
 export function formatNumber(n: number | null | undefined): string {
   if (n == null) return "-"
   return n >= 1000 ? n.toLocaleString() : String(Math.round(n * 10) / 10)
@@ -27,7 +24,12 @@ export function localDateString(date = new Date()): string {
   return `${year}-${month}-${day}`
 }
 
-export function formatCompactValue(value: number, unit: string): string {
+/**
+ * A metric value with its unit. Named apart from `dashboard.utils`'s
+ * `formatCompactValue`, which takes no unit: one name covered two incompatible
+ * functions (NUMA-142 P6, PLAN 10).
+ */
+export function formatMetricValue(value: number, unit: string): string {
   if (unit === "km") return `${value.toFixed(1)} km`
   if (value >= 1000) return `${(value / 1000).toFixed(1)}k`
   return `${Math.round(value).toLocaleString()}`

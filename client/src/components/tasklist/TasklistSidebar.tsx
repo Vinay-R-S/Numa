@@ -21,7 +21,7 @@ import {
   BookOpen,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { clearToken } from "@/lib/session"
+import { endSession } from "@/lib/session"
 
 type NavItem = {
   href: string
@@ -55,10 +55,10 @@ export function TasklistSidebar({ isOpen, locked, onClose, onToggleLock }: Taskl
   const [hovered, setHovered] = useState(false)
   const isExpanded = locked || hovered
 
-  const handleSignOut = () => {
-    clearToken()
-    window.location.href = "/auth"
-  }
+  // endSession, not clearToken plus a redirect: dropping our own token left
+  // the Supabase session alive to be exchanged for a new one on the next page
+  // load (NUMA-142 P6).
+  const handleSignOut = () => { endSession() }
 
   return (
     <aside

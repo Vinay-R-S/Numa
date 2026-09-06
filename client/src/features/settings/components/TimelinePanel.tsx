@@ -16,7 +16,7 @@ export function TimelinePanel({ timeline }: { timeline: UseTimelineSettingsRetur
     <SettingsSection
       icon={Timer}
       title="Timeline Settings"
-      description="Configure the day timeline on the Calendar page — update frequency, water reminders, and meal times."
+      description="Configure the day timeline on the Calendar page: update frequency, water reminders, and meal times."
     >
       <div className="space-y-4 rounded-xl border border-border/40 bg-background/40 p-3 sm:p-4">
         <div>

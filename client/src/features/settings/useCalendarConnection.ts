@@ -16,6 +16,7 @@ import {
   getGoogleCalendarAuthorizationUrl,
 } from "@/features/calendar/calendar.api"
 import type { TokenHealthResult } from "@/features/calendar/calendar.types"
+import { OAUTH_AUTHORIZE_URL_PREFIXES, isAllowedExternalUrl } from "@/lib/externalUrl"
 import { calendarStatusLabel, errorMessage } from "./settings.utils"
 
 export function useCalendarConnection() {
@@ -41,8 +42,9 @@ export function useCalendarConnection() {
   }, [check])
 
   const reconnect = useCallback(async () => {
-    if (health?.reconnect_url) {
-      globalThis.location.href = health.reconnect_url
+    // Checked like every other backend-supplied redirect (NUMA-142 P6, PLAN 8).
+    if (isAllowedExternalUrl(health?.reconnect_url, OAUTH_AUTHORIZE_URL_PREFIXES)) {
+      globalThis.location.href = health.reconnect_url as string
       return
     }
 

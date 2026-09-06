@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
 from datetime import datetime, timedelta, timezone
@@ -6,6 +7,8 @@ from ..auth.dependencies import get_current_user
 from . import service as task_service
 from .repository import task_repository
 from .schemas import TaskCreate, TaskUpdate, TaskStatusUpdate, TaskResponse
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -71,56 +74,60 @@ def update_task(
 
     external_ref = existing_task[0]
 
-    # If this task is linked to a calendar event, sync the changes back
-    if external_ref and external_ref.startswith("gcal:"):
-        try:
-            from ..calendar.service import update_event_from_payload
-            from ..calendar.schemas import CalendarEventUpsert
-
-            # Parse external_ref to get calendar_id and event_id
-            # Format: gcal:calendar_id:event_id or gcal:ical:ical_uid
-            parts = external_ref.split(":", 2)
-            if len(parts) >= 3 and parts[1] != "ical":
-                calendar_id = parts[1]
-                event_id = parts[2]
-                composite_event_id = f"{calendar_id}:{event_id}"
-
-                # Build calendar event payload from task fields
-                title = fields.get("title", existing_task[1])
-                description = fields.get("description", existing_task[2] or "")
-                due_date = fields.get("due_date", existing_task[3])
-
-                if due_date:
-                    from datetime import datetime as dt
-                    if isinstance(due_date, dt):
-                        due_dt = due_date
-                    else:
-                        # Parse string datetime
-                        due_dt = dt.fromisoformat(str(due_date).replace('Z', '+00:00'))
-                    date_str = due_dt.strftime("%Y-%m-%d")
-                    time_str = due_dt.strftime("%H:%M")
-                    end_dt = due_dt + timedelta(hours=1)
-                    end_time_str = end_dt.strftime("%H:%M")
-
-                    # Update the calendar event
-                    calendar_payload = CalendarEventUpsert(
-                        title=title,
-                        date=date_str,
-                        startTime=time_str,
-                        endTime=end_time_str,
-                        description=description or "",
-                    )
-                    update_event_from_payload(composite_event_id, calendar_payload, user_id=user_id)
-        except Exception as e:
-            # Log but don't fail the task update if calendar sync fails
-            import logging
-            logging.warning(f"Failed to sync task update to calendar: {e}")
-
+    # Local write first, outward sync after. Google Calendar used to be mutated
+    # before the row was touched, so a concurrent delete or a failed update left
+    # the user with a 404 or 500 while their calendar event had already been
+    # retitled and rescheduled. Writing locally first is also what makes the
+    # log-and-continue handler below correct rather than lossy
+    # (NUMA-142 P6, PLAN 7).
     task = task_repository.update_partial(task_id, user_id, fields)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
     task_service.store_task_snapshot(task)
+
+    _sync_task_update_to_calendar(user_id, external_ref, task)
     return task
+
+
+def _sync_task_update_to_calendar(user_id: str, external_ref, task: dict) -> None:
+    """Push a committed task change out to its linked Google Calendar event."""
+    if not external_ref or not str(external_ref).startswith("gcal:"):
+        return
+
+    # Format: gcal:calendar_id:event_id or gcal:ical:ical_uid
+    parts = str(external_ref).split(":", 2)
+    if len(parts) < 3 or parts[1] == "ical":
+        return
+
+    due_date = task.get("due_date")
+    if not due_date:
+        return
+
+    try:
+        from ..calendar.service import update_event_from_payload
+        from ..calendar.schemas import CalendarEventUpsert
+
+        due_dt = (
+            due_date
+            if isinstance(due_date, datetime)
+            else datetime.fromisoformat(str(due_date).replace("Z", "+00:00"))
+        )
+        end_dt = due_dt + timedelta(hours=1)
+
+        update_event_from_payload(
+            f"{parts[1]}:{parts[2]}",
+            CalendarEventUpsert(
+                title=task.get("title") or "",
+                date=due_dt.strftime("%Y-%m-%d"),
+                startTime=due_dt.strftime("%H:%M"),
+                endTime=end_dt.strftime("%H:%M"),
+                description=task.get("description") or "",
+            ),
+            user_id=user_id,
+        )
+    except Exception as exc:
+        # Logged, not fatal: the task change is already committed.
+        log.warning("Failed to sync the task update to Google Calendar: %s", exc)
 
 
 # ── Patch status (used by DnD) ─────────────────────────────────────────────────
@@ -152,7 +159,16 @@ def delete_task(task_id: str, current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Task not found.")
 
     external_ref = existing[0]
-    if external_ref and str(external_ref).startswith("gcal:"):
+    is_calendar_task = bool(external_ref and str(external_ref).startswith("gcal:"))
+
+    # The row first, the Google event after: the same inversion as update_task
+    # (NUMA-142 P6, PLAN 7).
+    deleted = task_repository.delete(task_id, user_id)
+    if deleted == 0 and not is_calendar_task:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    task_service.delete_task_snapshot(user_id, task_id)
+
+    if is_calendar_task:
         try:
             from ..calendar.service import delete_event_by_id
 
@@ -160,13 +176,7 @@ def delete_task(task_id: str, current_user: dict = Depends(get_current_user)):
             if len(parts) >= 3 and parts[1] != "ical":
                 delete_event_by_id(f"{parts[1]}:{parts[2]}", user_id=user_id)
         except Exception as exc:
-            import logging
-            logging.warning("Failed to sync task delete to calendar: %s", exc)
-
-    deleted = task_repository.delete(task_id, user_id)
-    if deleted == 0 and not (external_ref and str(external_ref).startswith("gcal:")):
-        raise HTTPException(status_code=404, detail="Task not found.")
-    task_service.delete_task_snapshot(user_id, task_id)
+            log.warning("Failed to sync the task delete to Google Calendar: %s", exc)
 
 
 # ── Stats for analytics ────────────────────────────────────────────────────────

@@ -63,12 +63,25 @@ def connect_github_via_oauth(user_id: str, code: str) -> None:
             GITHUB_USER_URL,
             headers={"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"},
         )
+        # The guard `connect_github_via_token` already has. Without it a 401,
+        # 403, 5xx or rate-limit during the callback stored login "" and id 0,
+        # and /github/status then reported connected with a blank username while
+        # every stats call failed, with no recovery but disconnecting
+        # (NUMA-142 P6, PLAN 7).
+        if user_resp.status_code == 401:
+            raise GitHubConnectError("GitHub rejected the new token")
+        if not user_resp.is_success:
+            raise GitHubConnectError("Could not read the GitHub account for this token")
         gh_user = user_resp.json()
         token_permissions = _token_permissions_from_headers(user_resp.headers, source="oauth")
 
+    login = str(gh_user.get("login") or "").strip()
+    if not login:
+        raise GitHubConnectError("GitHub did not return an account for this token")
+
     github_repository.upsert_auth(
         user_id,
-        gh_user.get("login", ""),
+        login,
         gh_user.get("id", 0),
         access_token,
         scope,

@@ -89,4 +89,9 @@ def update_integration_keys(
     service: AISettingsService = Depends(get_ai_settings_service),
 ):
     """Update integration keys in the server .env file. Admin only."""
-    return service.update_integration_keys(body)
+    try:
+        return service.update_integration_keys(body)
+    except AISettingsSaveError as exc:
+        # A rejected value is the caller's mistake, not a server fault
+        # (NUMA-142 P6, PLAN 8).
+        raise HTTPException(400, str(exc)) from exc

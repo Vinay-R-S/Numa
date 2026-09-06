@@ -21,6 +21,7 @@
  *   enough), which would put `undefined` into React state and crash the page on
  *   the next render, so `expectBody` turns that into the endpoint's error.
  */
+import { SLACK_AUTHORIZE_URL_PREFIX, assertExternalUrl } from "@/lib/externalUrl"
 import { expectBody, http } from "@/lib/http"
 import { hasValidToken } from "@/lib/session"
 import {
@@ -134,7 +135,9 @@ export async function connectSlack(): Promise<void> {
     message
   )
 
-  if (!data.authorization_url) throw new Error("Slack authorization URL was not returned")
-
-  globalThis.location.href = data.authorization_url
+  globalThis.location.href = assertExternalUrl(
+    data.authorization_url,
+    [SLACK_AUTHORIZE_URL_PREFIX],
+    "Slack"
+  )
 }

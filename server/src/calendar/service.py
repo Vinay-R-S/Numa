@@ -316,7 +316,24 @@ class CalendarService(BaseService):
         window_start = today_start - timedelta(days=lookback_days)
         window_end   = today_start + timedelta(days=lookahead_days + 1)
 
-        if user_id:
+        # Only when the whole window is inside the month the cache actually
+        # holds. `_prune_cal_events_outside_month` hard-deletes every row
+        # outside the current month, so on the 2nd a non-empty result for the
+        # 1st-2nd satisfied `if cached:` and the agent answered "no meetings
+        # last week" for a week that was full of them (NUMA-142 P6, PLAN 7).
+        month_start, month_end = _current_month_window()
+        window_cached = month_start <= window_start and window_end <= month_end
+
+        # Deliberately all-or-nothing. Clamping the window to the month and
+        # asking Google only for the remainder looks like it would keep the
+        # cache working near a month boundary, but the Google fallback costs one
+        # round trip per selected calendar whatever the window width, so the
+        # remainder call happens either way and nothing is saved; merging the
+        # two result sets would add dedup and ordering risk on an agent read
+        # path for no fewer API calls. The real fix is to stop pruning
+        # cal_events to a single month (NUMA-142 P6 review).
+
+        if user_id and window_cached:
             cached = self._repository.read_events_between(user_id, window_start, window_end)
             if cached:
                 return cached
@@ -348,9 +365,12 @@ class CalendarService(BaseService):
             .patch(calendarId=calendar_id, eventId=actual_event_id, body=body)
             .execute()
         )
-        updated["_calendar_id"]   = calendar_id
-        updated["_calendar_type"] = "personal"
-        updated.setdefault("_calendar_summary", "Primary")
+        updated["_calendar_id"] = calendar_id
+        # Neither the type nor the summary is asserted here any more. This route
+        # knows which calendar the event is on and nothing else about it, and
+        # the two values it used to invent were written straight over the real
+        # cal_calendars row (NUMA-142 P6). _persist_mutated_event resolves them
+        # from the calendar we already synced.
         updated.setdefault("status", "confirmed")
         self._repository._persist_mutated_event(user_id, service, updated)
         self._sync._sync_calendar_event_to_task(user_id, updated)
@@ -374,8 +394,12 @@ class CalendarService(BaseService):
             else:
                 raise  # Re-raise unexpected errors
 
-        # Always clean up PostgreSQL, tasks, and Qdrant regardless of Google's response
-        self._repository._delete_cal_event_cleanup(user_id, calendar_id, actual_event_id)
+        # Always clean up PostgreSQL, tasks, and Qdrant regardless of Google's response.
+        # The injected service is passed through, so a test that swaps the
+        # factory no longer reaches the real Google API here (NUMA-143 P7).
+        self._repository._delete_cal_event_cleanup(
+            user_id, calendar_id, actual_event_id, service=service,
+        )
 
 
 def _day_bounds(date_str: str) -> Tuple[datetime, datetime]:

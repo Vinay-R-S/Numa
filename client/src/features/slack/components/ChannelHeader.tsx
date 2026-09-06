@@ -1,6 +1,6 @@
 "use client"
 
-import { AtSign, Megaphone } from "lucide-react"
+import { AtSign, Hash, Lock, Megaphone } from "lucide-react"
 
 import {
   Select,
@@ -55,7 +55,11 @@ export function ChannelHeader({
                 <SelectItem value={NO_CHANNEL}>Select a channel</SelectItem>
                 {channels.map((channel) => (
                   <SelectItem key={channel.id} value={channel.slack_id}>
-                    {channel.is_private ? "🔒 " : "# "}{channelDisplayName(channel)}
+                    <span className="flex items-center gap-1.5">
+                      {/* An icon, not an emoji: CLAUDE.md bans emoji in code. */}
+                      {channel.is_private ? <Lock className="h-3 w-3" /> : <Hash className="h-3 w-3" />}
+                      {channelDisplayName(channel)}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>

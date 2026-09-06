@@ -11,9 +11,35 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List
 
 from ..core.base import BaseRepository
-from ..core.db import get_db
+from ..core.db import get_db, row_to_dict
+from ..health_agent.repository import health_repository
 
 log = logging.getLogger(__name__)
+
+
+def _recover(conn, exc: Exception) -> None:
+    """Roll the failed statement back so the next one can run.
+
+    All 18 queries here share one pooled connection with autocommit off. Without
+    this, the first failure left the connection in `InFailedSqlTransaction` and
+    every remaining statement raised "current transaction is aborted" into these
+    same handlers, so one broken query returned an entirely empty dashboard to a
+    user with a full database (NUMA-142 P6, PLAN 7).
+    """
+    log.debug("Dashboard query failed: %s", exc)
+    try:
+        conn.rollback()
+    except Exception:
+        log.debug("Dashboard rollback after a failed query also failed", exc_info=True)
+
+
+def _safe_call(conn, read):
+    """Run a repository read with the same swallow-and-recover contract."""
+    try:
+        return read()
+    except Exception as exc:
+        _recover(conn, exc)
+        return []
 
 
 def _safe_query(conn, sql: str, params: tuple = ()) -> List[dict]:
@@ -21,11 +47,12 @@ def _safe_query(conn, sql: str, params: tuple = ()) -> List[dict]:
         cur = conn.cursor()
         cur.execute(sql, params)
         rows = cur.fetchall()
-        desc = cur.description
+        # `core.db.row_to_dict`, not a fourth hand-rolled copy of it (PLAN 10).
+        mapped = [row_to_dict(cur, row) for row in rows]
         cur.close()
-        return [{col.name: val for col, val in zip(desc, row)} for row in rows]
+        return mapped
     except Exception as exc:
-        log.debug("Dashboard query failed: %s", exc)
+        _recover(conn, exc)
         return []
 
 
@@ -36,7 +63,8 @@ def _safe_scalar(conn, sql: str, params: tuple = (), default=0):
         row = cur.fetchone()
         cur.close()
         return row[0] if row else default
-    except Exception:
+    except Exception as exc:
+        _recover(conn, exc)
         return default
 
 
@@ -47,13 +75,15 @@ def _safe_date_list(conn, sql: str, params: tuple = ()) -> list:
         result = [r[0] for r in cur.fetchall()]
         cur.close()
         return result
-    except Exception:
+    except Exception as exc:
+        _recover(conn, exc)
         return []
 
 
 class DashboardRepository(BaseRepository):
     def fetch_stats_raw(
-        self, user_id: str, today: date, today_start: datetime, now_utc: datetime
+        self, user_id: str, today: date, today_start: datetime, now_utc: datetime,
+        tz_name: str = "UTC",
     ) -> Dict:
         day = timedelta(days=1)
         with get_db() as conn:
@@ -101,10 +131,13 @@ class DashboardRepository(BaseRepository):
             )
             task_completed_dates = _safe_date_list(
                 conn,
-                "SELECT DISTINCT DATE(completed_at) as d FROM public.tasks "
+                # In the user's zone, so the days line up with the `today` the
+                # streak counts back from. A bare DATE() used the database
+                # session's zone (NUMA-142 P6, PLAN 7).
+                "SELECT DISTINCT DATE(completed_at AT TIME ZONE %s) as d FROM public.tasks "
                 "WHERE user_id = %s AND completed_at IS NOT NULL "
                 "ORDER BY d DESC LIMIT 30",
-                (user_id,),
+                (tz_name, user_id),
             )
             recent_tasks = _safe_query(
                 conn,
@@ -138,21 +171,18 @@ class DashboardRepository(BaseRepository):
                 "WHERE user_id = %s AND created_at > NOW() - INTERVAL '7 days'",
                 (user_id,),
             )
-            health_today = _safe_query(
+            # Through HealthRepository, on this batch's own connection, rather
+            # than a fifth copy of the same SQL (NUMA-143 P7, PLAN 10). Wrapped
+            # so one failing health query still cannot empty the dashboard.
+            health_today = _safe_call(
                 conn,
-                "SELECT source, steps, active_minutes, calories, distance_km, sleep_hours, "
-                "       heart_rate_bpm, heart_points "
-                "FROM public.health_snapshots WHERE user_id = %s AND snapshot_date = %s",
-                (user_id, today),
+                lambda: health_repository.day_metrics(user_id, today, conn=conn),
             )
-            health_weekly_rows = _safe_query(
+            health_weekly_rows = _safe_call(
                 conn,
-                "SELECT snapshot_date, steps, calories, distance_km "
-                "FROM public.health_snapshots "
-                "WHERE user_id = %s AND source = 'google_fit' "
-                "  AND snapshot_date >= %s AND snapshot_date <= %s "
-                "ORDER BY snapshot_date",
-                (user_id, today - timedelta(days=6), today),
+                lambda: health_repository.daily_totals_between(
+                    user_id, "google_fit", today - timedelta(days=6), today, conn=conn,
+                ),
             )
             github_row = _safe_query(
                 conn,

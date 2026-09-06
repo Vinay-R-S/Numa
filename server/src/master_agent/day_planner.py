@@ -4,12 +4,15 @@
 Extracted verbatim from master_agent/service.py; service.py re-exports these
 names so existing import paths keep working.
 """
+import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List, Tuple
 
 from ..memory import memory_service
 from ..tasks import service as task_service
 from .common import _format_local_time
+
+log = logging.getLogger(__name__)
 
 
 def _is_plan_my_day_query(query: str) -> bool:
@@ -30,6 +33,7 @@ def _is_plan_my_day_query(query: str) -> bool:
 def _fetch_day_planning_context(user_id: str) -> Dict:
     from ..calendar import service as calendar_service
     from ..db import _get_conn
+    from ..health_agent.repository import health_repository
 
     now = datetime.now(calendar_service.TIMEZONE)
     today = now.date()
@@ -40,6 +44,11 @@ def _fetch_day_planning_context(user_id: str) -> Dict:
         "today": today,
         "now": now,
         "events": [],
+        # Specifically whether the calendar read succeeded. One `except` covers
+        # all five queries, so keying the calendar-write guard on `db_error`
+        # meant a failure in the last one (github_commits) suppressed
+        # scheduling even though the events had loaded fine.
+        "events_ok": False,
         "tasks": [],
         "health": {},
         "slack": [],
@@ -57,7 +66,11 @@ def _fetch_day_planning_context(user_id: str) -> Dict:
             FROM public.cal_events e
             JOIN public.cal_calendars c ON c.id = e.calendar_id
             WHERE e.user_id = %s
-              AND e.start_at >= %s
+              -- Overlap, not "starts today": an on-call block, a conference
+              -- entry or an all-day event that began yesterday still occupies
+              -- this morning, and filtering on start_at alone hid it from the
+              -- free/busy picture the planner writes against (NUMA-142 P6).
+              AND e.end_at > %s
               AND e.start_at < %s
               AND e.deleted_at IS NULL
               AND c.calendar_type IN ('personal', 'shared')
@@ -77,6 +90,8 @@ def _fetch_day_planning_context(user_id: str) -> Dict:
             }
             for row in cur.fetchall()
         ]
+
+        context["events_ok"] = True
 
         cur.execute(
             """
@@ -108,25 +123,22 @@ def _fetch_day_planning_context(user_id: str) -> Dict:
             for row in cur.fetchall()
         ]
 
-        cur.execute(
-            """
-            SELECT steps, active_minutes, calories, distance_km, sleep_hours,
-                   heart_rate_bpm, heart_points
-            FROM public.health_snapshots
-            WHERE user_id = %s AND snapshot_date = %s
-            """,
-            (user_id, today),
-        )
-        health_rows = cur.fetchall()
+        # Through HealthRepository, on the connection this function already
+        # holds (NUMA-143 P7, PLAN 10).
+        health_rows = health_repository.day_metrics(user_id, today, conn=conn)
         if health_rows:
+            def peak(metric: str):
+                return max((row.get(metric) or 0) for row in health_rows)
+
             context["health"] = {
-                "steps": max((row[0] or 0) for row in health_rows),
-                "active_minutes": max((row[1] or 0) for row in health_rows),
-                "calories": max((row[2] or 0) for row in health_rows),
-                "distance_km": max((row[3] or 0) for row in health_rows),
-                "sleep_hours": max((row[4] or 0) for row in health_rows),
-                "heart_rate_bpm": max((row[5] or 0) for row in health_rows),
-                "heart_points": sum((row[6] or 0) for row in health_rows),
+                "steps": peak("steps"),
+                "active_minutes": peak("active_minutes"),
+                "calories": peak("calories"),
+                "distance_km": peak("distance_km"),
+                "sleep_hours": peak("sleep_hours"),
+                "heart_rate_bpm": peak("heart_rate_bpm"),
+                # Summed, not peaked: heart points accumulate across sources.
+                "heart_points": sum((row.get("heart_points") or 0) for row in health_rows),
             }
 
         cur.execute(
@@ -166,7 +178,12 @@ def _fetch_day_planning_context(user_id: str) -> Dict:
 
         cur.close()
     except Exception:
+        # Read by _run_day_planner before it writes anything to the calendar.
+        # It used to be set and never looked at, so a failed events query
+        # produced an empty list, the planner read that as a free day, and it
+        # wrote NUMA Plan blocks over real meetings (NUMA-142 P6, PLAN 7).
         context["db_error"] = "Some planning context could not be loaded."
+        log.warning("Day-planner context load failed for user %s", user_id, exc_info=True)
     finally:
         conn.close()
 
@@ -239,6 +256,8 @@ def _run_day_planner(user_id: str, query: str) -> Dict:
     calendar_results: List[str] = []
     warnings: List[str] = []
 
+    day_start = datetime.combine(today, time.min).replace(tzinfo=now.tzinfo)
+
     for event in events:
         title = str(event.get("title") or "Meeting").strip()
         start = event.get("start_at")
@@ -246,6 +265,12 @@ def _run_day_planner(user_id: str, query: str) -> Dict:
         cal_id = str(event.get("google_cal_id") or "primary")
         event_id = str(event.get("google_event_id") or "").strip()
         if not title or not event_id or not isinstance(start, datetime):
+            continue
+        # The events query is an overlap test, so it now also returns the
+        # on-call block or conference entry that began yesterday. Those belong
+        # in the free/busy picture but not as a task card due and reminding in
+        # the past (NUMA-142 P6 review).
+        if start < day_start:
             continue
         external_ref = task_service.calendar_external_ref(cal_id, event_id)
         desc = f"Calendar event from {event.get('calendar_name') or 'Google Calendar'}."
@@ -331,7 +356,18 @@ def _run_day_planner(user_id: str, query: str) -> Dict:
         }
     )
 
-    slots = _free_slots_for_day(events, now)
+    # An unreadable calendar is not an empty one. With no trustworthy free/busy
+    # picture there are no free slots, so every plan item falls through to the
+    # task-card branch below rather than being written into Google Calendar.
+    if not context.get("events_ok"):
+        warnings.append(
+            "Your calendar could not be read, so nothing was scheduled on it. "
+            "The plan was saved as task cards instead."
+        )
+        slots: List[Tuple[datetime, datetime]] = []
+    else:
+        slots = _free_slots_for_day(events, now)
+
     blocks = _allocate_blocks(slots, [int(item["duration"]) for item in plan_items])
 
     for index, item in enumerate(plan_items):

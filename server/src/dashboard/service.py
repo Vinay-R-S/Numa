@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 from ..core.base import BaseService
+from ..core.timezones import user_timezone
 from .repository import DashboardRepository, dashboard_repository
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -60,10 +61,16 @@ class DashboardService(BaseService):
 
     def get_stats(self, user_id: str) -> dict:
         now_utc = datetime.now(timezone.utc)
-        today = date.today()
-        today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
+        # One definition of the user's day. This paired a server-local `today`
+        # with a UTC midnight and the database session's own `DATE()`, so both
+        # streaks broke for any user not on UTC (NUMA-142 P6, PLAN 7).
+        tz = user_timezone(user_id)
+        today = datetime.now(tz).date()
+        today_start = datetime.combine(today, datetime.min.time(), tzinfo=tz)
 
-        raw = self.repository.fetch_stats_raw(user_id, today, today_start, now_utc)
+        raw = self.repository.fetch_stats_raw(
+            user_id, today, today_start, now_utc, tz_name=str(tz),
+        )
 
         recent_tasks = raw["recent_tasks"]
         _isoformat_in_place(recent_tasks, ("due_date", "created_at"))

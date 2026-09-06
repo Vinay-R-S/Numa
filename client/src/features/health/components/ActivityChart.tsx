@@ -17,7 +17,7 @@ import type {
   HealthSnapshot,
   WeeklyActivityMetric,
 } from "../health.types"
-import { formatCompactValue, formatDateLabel, lastSevenDays, localDateString } from "../health.utils"
+import { formatMetricValue, formatDateLabel, lastSevenDays, localDateString } from "../health.utils"
 
 const CHART_MODES: Array<{ key: ActivityChartMode; label: string }> = [
   { key: "day", label: "Day" },
@@ -73,7 +73,7 @@ export function ActivityChart({
         date: dateKey,
         label: DAY_NAMES[date.getDay()],
         value,
-        displayValue: formatCompactValue(value, activeOption.unit),
+        displayValue: formatMetricValue(value, activeOption.unit),
       }
     })
   }, [snapshots, activeMetric, activeOption.unit, todayKey])
@@ -87,7 +87,7 @@ export function ActivityChart({
           label: bucket.label,
           range: bucket.range_label,
           value,
-          displayValue: formatCompactValue(value, activeOption.unit),
+          displayValue: formatMetricValue(value, activeOption.unit),
         }
       }),
     [intraday, selectedDate, activeMetric, activeOption.unit]
@@ -102,7 +102,7 @@ export function ActivityChart({
       date: selectedDate,
       label: "-",
       value: 0,
-      displayValue: formatCompactValue(0, activeOption.unit),
+      displayValue: formatMetricValue(0, activeOption.unit),
     }
   )
 
@@ -157,7 +157,7 @@ export function ActivityChart({
           <div className="rounded-lg border border-border/30 bg-background/30 px-3 py-2">
             <p className="text-[10px] font-medium uppercase text-muted-foreground/70">Total</p>
             <p className="text-sm font-bold text-foreground tabular-nums">
-              {formatCompactValue(total, activeOption.unit)}
+              {formatMetricValue(total, activeOption.unit)}
             </p>
           </div>
           <div className="rounded-lg border border-border/30 bg-background/30 px-3 py-2">
@@ -191,7 +191,7 @@ export function ActivityChart({
             tickLine={false}
             axisLine={false}
             fontSize={12}
-            tickFormatter={(value) => formatCompactValue(Number(value), activeOption.unit)}
+            tickFormatter={(value) => formatMetricValue(Number(value), activeOption.unit)}
           />
           <ChartTooltip
             cursor={{ stroke: activeOption.color, strokeOpacity: 0.35, strokeWidth: 1 }}
@@ -206,7 +206,7 @@ export function ActivityChart({
                   const date = payloadData?.date
                   return typeof date === "string" ? date : activeOption.label
                 }}
-                formatter={(value) => formatCompactValue(Number(value), activeOption.unit)}
+                formatter={(value) => formatMetricValue(Number(value), activeOption.unit)}
               />
             }
           />

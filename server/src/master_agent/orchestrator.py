@@ -4,11 +4,14 @@ LangGraph build, and chat entrypoint (NUMA-106 P3, PLAN 16.3).
 Extracted verbatim from master_agent/service.py; service.py re-exports these
 names so existing import paths keep working.
 """
+import contextvars
+import logging
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Dict, List, Optional
 
 from ..calendar_agent.service import run_agent_chat
+from ..core.timezones import user_timezone, user_today
 from ..github_agent.service import run_github_agent_chat
 from ..health_agent.service import run_health_agent_chat
 from ..leetcode.service import run_leetcode_agent_chat
@@ -23,6 +26,56 @@ from .common import (
 from .day_planner import _is_plan_my_day_query, _run_day_planner
 from .state import MasterToolState
 from .subagents.task_agent import _task_toolset
+
+
+log = logging.getLogger(__name__)
+
+# Per request, not per compiled graph. `_build_master_graph` is lru_cached on
+# (user_id, model_override), so two concurrent requests from one user shared one
+# tracker dict: B's reset cleared A's flags mid-flight, re-armed the task
+# mutation guard so A's model could create a second task, and overwrote the
+# preloaded context A's delegation tools were about to hand to the sub-agents
+# (NUMA-142 P6, PLAN 7). A ContextVar is per request and per thread, so the
+# cached graph's closures still reach the right one.
+_refresh_ctx: contextvars.ContextVar = contextvars.ContextVar("master_refresh_tracker")
+
+
+def _new_refresh_state() -> dict:
+    return {
+        "refreshCalendar": False,
+        "refreshTasks": False,
+        "refreshSlack": False,
+        "refreshHealth": False,
+        "refreshGithub": False,
+        "refreshJournal": False,
+        "delegated_to": [],
+        "_task_mutation_done": False,
+    }
+
+
+class _RefreshTracker:
+    """Dict-like view of the current request's refresh flags."""
+
+    @staticmethod
+    def _current() -> dict:
+        state = _refresh_ctx.get(None)
+        if state is None:
+            state = _new_refresh_state()
+            _refresh_ctx.set(state)
+        return state
+
+    def __getitem__(self, key):
+        return self._current()[key]
+
+    def __setitem__(self, key, value):
+        self._current()[key] = value
+
+    def get(self, key, default=None):
+        return self._current().get(key, default)
+
+    @staticmethod
+    def reset() -> None:
+        _refresh_ctx.set(_new_refresh_state())
 
 
 MASTER_AGENT_SYSTEM_PROMPT = (
@@ -54,16 +107,7 @@ MASTER_AGENT_SYSTEM_PROMPT = (
 
 def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] = None):
     """Create delegation + task + dashboard tools for the master agent."""
-    refresh = {
-        "refreshCalendar": False,
-        "refreshTasks": False,
-        "refreshSlack": False,
-        "refreshHealth": False,
-        "refreshGithub": False,
-        "refreshJournal": False,
-        "delegated_to": [],
-        "_task_mutation_done": False,
-    }
+    refresh = _RefreshTracker()
 
     @tool_decorator
     def delegate_to_calendar(query: str) -> str:
@@ -81,7 +125,8 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
             refresh["delegated_to"].append("calendar-subagent")
             return result.get("response", "No response from Calendar agent")
         except Exception as exc:
-            return f"Calendar agent error: {exc}"
+            log.warning("Calendar delegation failed: %s", exc, exc_info=True)
+            return "The calendar assistant is unavailable right now."
 
     @tool_decorator
     def delegate_to_slack(query: str) -> str:
@@ -99,7 +144,8 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
             refresh["delegated_to"].append("slack-subagent")
             return result.get("response", "No response from Slack agent")
         except Exception as exc:
-            return f"Slack agent error: {exc}"
+            log.warning("Slack delegation failed: %s", exc, exc_info=True)
+            return "The slack assistant is unavailable right now."
 
     @tool_decorator
     def delegate_to_health(query: str) -> str:
@@ -113,10 +159,13 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
             )
             if result.get("refresh_health"):
                 refresh["refreshHealth"] = True
+            if result.get("refresh_tasks"):
+                refresh["refreshTasks"] = True
             refresh["delegated_to"].append("health-subagent")
             return result.get("response", "No response from Health agent")
         except Exception as exc:
-            return f"Health agent error: {exc}"
+            log.warning("Health delegation failed: %s", exc, exc_info=True)
+            return "The health assistant is unavailable right now."
 
     @tool_decorator
     def delegate_to_journal(query: str) -> str:
@@ -124,12 +173,14 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
         Use for: reading journal entries, getting daily summaries, daily reflections,
         or any journal content questions. For auto-generation use auto_generate_journal."""
         try:
-            from ..journal.service import generate_daily_summary
-            from datetime import date as _date
+            from ..journal.service import SummaryUnavailable, generate_daily_summary
 
             q_lower = query.lower()
             if any(w in q_lower for w in ("summarize", "summary", "wrap up", "recap")):
-                response_text = generate_daily_summary(user_id, _date.today())
+                try:
+                    response_text = generate_daily_summary(user_id, user_today(user_id))
+                except SummaryUnavailable as exc:
+                    return str(exc)
             else:
                 llm = _get_llm(model_override=model_override, user_id=user_id)
                 response_text = _answer_general(
@@ -141,7 +192,8 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
             refresh["delegated_to"].append("journal-subagent")
             return response_text
         except Exception as exc:
-            return f"Journal agent error: {exc}"
+            log.warning("Journal delegation failed: %s", exc, exc_info=True)
+            return "The journal assistant is unavailable right now."
 
     @tool_decorator
     def auto_generate_journal() -> str:
@@ -158,7 +210,8 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
             mood = result.get("mood", "okay")
             return f"Journal generated: '{title}' (mood: {mood})"
         except Exception as exc:
-            return f"Journal generation error: {exc}"
+            log.warning("Journal auto-generation failed: %s", exc, exc_info=True)
+            return "Could not generate the journal entry right now."
 
     @tool_decorator
     def delegate_to_github(query: str) -> str:
@@ -172,10 +225,13 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
             )
             if result.get("refresh_github"):
                 refresh["refreshGithub"] = True
+            if result.get("refresh_tasks"):
+                refresh["refreshTasks"] = True
             refresh["delegated_to"].append("github-subagent")
             return result.get("response", "No response from GitHub agent")
         except Exception as exc:
-            return f"GitHub agent error: {exc}"
+            log.warning("GitHub delegation failed: %s", exc, exc_info=True)
+            return "The github assistant is unavailable right now."
 
     @tool_decorator
     def delegate_to_leetcode(query: str) -> str:
@@ -187,10 +243,13 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
                 query=query, history=[], user_id=user_id, model=model_override,
                 preloaded_context=refresh.get("_preloaded_context"),
             )
+            if result.get("mutated"):
+                refresh["refreshTasks"] = True
             refresh["delegated_to"].append("leetcode-subagent")
             return result.get("response", "No response from LeetCode agent")
         except Exception as exc:
-            return f"LeetCode agent error: {exc}"
+            log.warning("LeetCode delegation failed: %s", exc, exc_info=True)
+            return "The LeetCode assistant is unavailable right now."
 
     @tool_decorator
     def get_dashboard_overview() -> str:
@@ -198,7 +257,14 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
         Use when the user asks for a general overview, status summary, or how their day looks."""
         try:
             from ..db import _get_conn
-            from datetime import date as _date
+            from ..health_agent.repository import health_repository
+
+            # Resolved before the connection is taken. `user_timezone` reads
+            # public.profiles through the same bounded pool, and holding one
+            # slot while queueing for a second is how ten concurrent overviews
+            # deadlock into PoolError (NUMA-142 P6 review).
+            tz = user_timezone(user_id)
+            today = datetime.now(tz).date()
 
             conn = _get_conn()
             lines = ["Dashboard Overview:"]
@@ -218,10 +284,10 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
                 else:
                     lines.append("Tasks: none")
 
-                today = _date.today()
-                start_of_day = datetime.combine(
-                    today, datetime.min.time()
-                ).replace(tzinfo=timezone.utc)
+                # The user's day, and its own zone's midnight. This paired a
+                # server-local date with a UTC tzinfo, so it disagreed with the
+                # day planner by the user's offset (NUMA-142 P6, PLAN 7).
+                start_of_day = datetime.combine(today, datetime.min.time(), tzinfo=tz)
                 end_of_day = start_of_day + timedelta(days=1)
                 cur.execute(
                     "SELECT COUNT(*) FROM public.cal_events "
@@ -232,19 +298,22 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
                 event_count = cur.fetchone()[0]
                 lines.append(f"Today's Calendar Events: {event_count}")
 
-                cur.execute(
-                    "SELECT steps, calories, active_minutes, sleep_hours, heart_rate_bpm, heart_points "
-                    "FROM public.health_snapshots "
-                    "WHERE user_id = %s AND snapshot_date = %s LIMIT 1",
-                    (user_id, today),
-                )
-                health_row = cur.fetchone()
-                if health_row:
-                    steps, cal, active, sleep, heart_rate, heart_points = health_row
+                # Through HealthRepository on this connection (NUMA-143 P7).
+                # Every source for the day, not `LIMIT 1`: a user syncing both
+                # Google Fit and Strava got whichever row Postgres returned
+                # first, so half their day was invisible to the overview.
+                health_rows = health_repository.day_metrics(user_id, today, conn=conn)
+                if health_rows:
+                    def peak(metric: str):
+                        return max((row.get(metric) or 0) for row in health_rows)
+
+                    heart_points = sum(
+                        (row.get("heart_points") or 0) for row in health_rows
+                    )
                     lines.append(
-                        f"Health: {steps or 0:,} steps, {cal or 0:,} kcal, "
-                        f"{active or 0} min active, {sleep or 0}h sleep, "
-                        f"{heart_rate or 0} bpm, {heart_points or 0} heart points"
+                        f"Health: {peak('steps'):,} steps, {peak('calories'):,} kcal, "
+                        f"{peak('active_minutes')} min active, {peak('sleep_hours')}h sleep, "
+                        f"{peak('heart_rate_bpm')} bpm, {heart_points} heart points"
                     )
                 else:
                     lines.append("Health: no data for today")
@@ -255,7 +324,8 @@ def _master_toolset(tool_decorator, user_id: str, model_override: Optional[str] 
 
             return "\n".join(lines)
         except Exception as exc:
-            return f"Dashboard error: {exc}"
+            log.warning("Dashboard overview failed: %s", exc, exc_info=True)
+            return "Could not read the dashboard overview right now."
 
     task_tools = _task_toolset(tool_decorator, user_id)
 
@@ -448,10 +518,9 @@ def run_master_agent_chat(
 
         graph, AIMsg, refresh_tracker = _build_master_graph(user_id, model)
 
-        for k in _empty:
-            refresh_tracker[k] = False
-        refresh_tracker["delegated_to"] = []
-        refresh_tracker["_task_mutation_done"] = False
+        # One fresh state for this request, rather than resetting one shared
+        # with every other in-flight request for the same user.
+        refresh_tracker.reset()
         # Store pre-loaded context so delegation tools can pass it to sub-agents
         refresh_tracker["_preloaded_context"] = semantic_context
 
@@ -492,5 +561,8 @@ def run_master_agent_chat(
             **{k: bool(refresh_tracker.get(k, False)) for k in _empty},
         }
     except Exception as exc:
-        return {"response": f"Error running master agent: {exc}",
+        # Logged, not returned: the message is a response body and the raw text
+        # carries provider hosts and driver detail (NUMA-142 P6, PLAN 8).
+        log.error("Master agent error: %s", exc, exc_info=True)
+        return {"response": "The assistant hit an error. Please try again.",
                 "success": False, "delegated_to": None, **_empty}

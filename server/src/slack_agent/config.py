@@ -3,10 +3,15 @@
 Leaf module: env-based config only. Extracted verbatim from slack_agent/router.py;
 router.py re-exports these names so callers are unaffected.
 """
+import logging
 import os
 from urllib.parse import urlencode
 
 from fastapi import HTTPException
+
+from ..core.oauth_state import issue_state
+
+log = logging.getLogger(__name__)
 
 
 SIGNING_SECRET_ENV = "SLACK_SIGNING_SECRET"
@@ -71,12 +76,41 @@ DEFAULT_SLACK_BOT_SCOPES = [
 ]
 
 
+# Scopes this app calls Slack with directly: reading channels and history for the
+# message list, resolving member names, and posting from the composer. An
+# install without these does not fail at consent, it fails later at the feature,
+# so they are the floor `SLACK_BOT_SCOPES` narrows down to rather than below
+# (NUMA-142 P6 review).
+REQUIRED_SLACK_BOT_SCOPES = [
+    "channels:history",
+    "channels:read",
+    "chat:write",
+    "users:read",
+]
+
+
 def _oauth_scopes() -> str:
+    """The scopes to request: SLACK_BOT_SCOPES when set, the defaults otherwise.
+
+    The configured list used to be unioned with all 26 defaults, so the variable
+    could only ever widen the consent screen and never narrow it - an operator
+    who set it to three read scopes still asked the workspace for every write
+    scope in the list (NUMA-142 P6, PLAN 8). It narrows now, down to the scopes
+    the app itself calls.
+    """
     configured = os.getenv("SLACK_BOT_SCOPES", "").strip()
     scopes = [s.strip() for s in configured.split(",") if s.strip()] if configured else []
-    for scope in DEFAULT_SLACK_BOT_SCOPES:
-        if scope not in scopes:
-            scopes.append(scope)
+    if not scopes:
+        return ",".join(DEFAULT_SLACK_BOT_SCOPES)
+
+    missing = [scope for scope in REQUIRED_SLACK_BOT_SCOPES if scope not in scopes]
+    if missing:
+        log.warning(
+            "SLACK_BOT_SCOPES omits scopes this app calls (%s); adding them to the request",
+            ", ".join(missing),
+        )
+        scopes.extend(missing)
+
     return ",".join(scopes)
 
 
@@ -89,6 +123,9 @@ def _build_slack_authorization_url(user_id: str) -> str:
         "client_id":    cid,
         "scope":        _oauth_scopes(),
         "redirect_uri": _redirect_uri(),
-        "state":        user_id,
+        # Signed, not the bare user id. `state` is this flow's only CSRF token,
+        # and the callback is an unauthenticated GET, so a plaintext id there
+        # let a caller name any account to install into (NUMA-142 P6, PLAN 8).
+        "state":        issue_state(user_id),
     })
     return f"https://slack.com/oauth/v2/authorize?{params}"

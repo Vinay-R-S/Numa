@@ -6,7 +6,7 @@ run the raw SQL and (for writes) rollback+raise on error.
 """
 import json
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..core.base import BaseRepository
 from ..core.db import get_db, row_to_dict
@@ -240,16 +240,40 @@ class SlackRepository(BaseRepository):
         self, user_id, slack_user_id, slack_team_id, channel_uuid, slack_chan_id,
         channel_name, text, ts, thread_ts, message_type, raw_json,
     ) -> None:
+        """Store a message, ordinarily the copy no NUMA user owns.
+
+        Uniqueness moved from `ts` to `(user_id, ts)` (migration 0006), and
+        Postgres counts NULLs as distinct, so an unowned row has to arbitrate on
+        the partial index instead or every redelivery would insert a new row.
+        The owned branch is here for completeness: the only caller passes None,
+        but a future one passing a real id must not silently duplicate.
+        """
+        conflict_target = (
+            "ON CONFLICT (user_id, ts)" if user_id else "ON CONFLICT (ts) WHERE user_id IS NULL"
+        )
         with get_db() as conn:
             cur = conn.cursor()
             try:
+                if not user_id:
+                    # The partial index the unowned branch arbitrates on cannot
+                    # see an owned row, so a redelivery that transiently found
+                    # no NUMA owner would insert a second, unowned copy beside
+                    # them. Reads all filter on user_id, so it was inert but
+                    # accumulating (NUMA-142 P6).
+                    cur.execute(
+                        "SELECT 1 FROM public.slack_messages "
+                        "WHERE ts = %s AND user_id IS NOT NULL LIMIT 1",
+                        (ts,),
+                    )
+                    if cur.fetchone():
+                        conn.commit()
+                        return
                 cur.execute(
                     "INSERT INTO public.slack_messages "
                     "(user_id, slack_user_id, slack_team_id, channel_id, slack_channel_id, "
                     " channel_name, text, ts, thread_ts, message_type, raw_payload) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (ts) DO UPDATE SET "
-                    "    user_id = COALESCE(public.slack_messages.user_id, EXCLUDED.user_id), "
+                    + conflict_target + " DO UPDATE SET "
                     "    slack_team_id = EXCLUDED.slack_team_id, "
                     "    channel_id = COALESCE(public.slack_messages.channel_id, EXCLUDED.channel_id), "
                     "    slack_channel_id = EXCLUDED.slack_channel_id, "
@@ -278,8 +302,10 @@ class SlackRepository(BaseRepository):
                     "(user_id, slack_user_id, slack_team_id, channel_id, slack_channel_id, "
                     " channel_name, text, ts, thread_ts, message_type, raw_payload, created_at) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (ts) DO UPDATE SET "
-                    "    user_id = EXCLUDED.user_id, "
+                    # (user_id, ts), not ts: one row per user per message.
+                    # Arbitrating on ts alone made the second NUMA user in a
+                    # workspace steal the first user's row (NUMA-142 P6).
+                    "ON CONFLICT (user_id, ts) DO UPDATE SET "
                     "    slack_user_id = EXCLUDED.slack_user_id, "
                     "    slack_team_id = EXCLUDED.slack_team_id, "
                     "    channel_id = COALESCE(EXCLUDED.channel_id, public.slack_messages.channel_id), "
@@ -289,13 +315,28 @@ class SlackRepository(BaseRepository):
                     "    thread_ts = EXCLUDED.thread_ts, "
                     "    message_type = EXCLUDED.message_type, "
                     "    raw_payload = EXCLUDED.raw_payload, "
-                    "    created_at = EXCLUDED.created_at",
+                    "    created_at = EXCLUDED.created_at "
+                    # rowcount is 1 for an update too, so every re-sync reported
+                    # each message as newly fetched. xmax is 0 only on a genuine
+                    # insert (NUMA-142 P6).
+                    "RETURNING (xmax = 0) AS inserted",
                     (user_id, slack_user_id, slack_team_id, channel_uuid, slack_chan_id,
                      channel_name, text, ts, thread_ts, message_type, raw_json, created_at),
                 )
-                inserted = cur.rowcount
+                row = cur.fetchone()
+
+                # Migration 0006 moved ownership to (user_id, ts), and the
+                # `ON CONFLICT (user_id, ts)` arbiter cannot see the old
+                # `user_id IS NULL` rows the pre-0006 writer left behind. They
+                # were adopted by the previous upsert and are now orphaned
+                # forever, so an owned write clears the unowned copy of the same
+                # message (NUMA-142 P6 review).
+                cur.execute(
+                    "DELETE FROM public.slack_messages WHERE ts = %s AND user_id IS NULL",
+                    (ts,),
+                )
                 conn.commit()
-                return inserted
+                return 1 if row and row[0] else 0
             except Exception:
                 conn.rollback()
                 raise
@@ -315,18 +356,29 @@ class SlackRepository(BaseRepository):
                 conn.rollback()
                 raise
 
-    def user_id_by_message_ts(self, ts: str) -> Optional[str]:
+    def user_ids_by_message_ts(self, ts: str) -> List[str]:
+        """Every NUMA user holding a copy of this message.
+
+        Was `user_id_by_message_ts`, a `LIMIT 1` that made sense while `ts` was
+        globally unique. Since migration 0006 a message has one row per user, so
+        picking one of them at random left the others' vectors behind.
+        """
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT user_id FROM public.slack_messages WHERE ts = %s LIMIT 1",
+                "SELECT DISTINCT user_id FROM public.slack_messages "
+                "WHERE ts = %s AND user_id IS NOT NULL",
                 (ts,),
             )
-            row = cur.fetchone()
-            return str(row[0]) if row and row[0] else None
+            return [str(r[0]) for r in (cur.fetchall() or []) if r and r[0]]
 
-    def delete_message_and_tasks(self, ts: str) -> list:
-        """Delete the message + any linked slack tasks; return affected task ids."""
+    def delete_message_and_tasks(self, ts: str) -> List[Tuple[str, str]]:
+        """Delete the message rows and linked Slack tasks.
+
+        Returns `(task_id, user_id)` pairs. The user id was already being
+        selected and thrown away, so a shared message deleted both users' task
+        rows but only ever purged one user's vectors (NUMA-142 P6).
+        """
         with get_db() as conn:
             cur = conn.cursor()
             try:
@@ -334,14 +386,17 @@ class SlackRepository(BaseRepository):
                     "SELECT id, user_id FROM public.tasks WHERE external_ref = %s",
                     (f"slack:{ts}",),
                 )
-                task_ids = [str(r[0]) for r in (cur.fetchall() or []) if r and r[0]]
+                task_rows = [
+                    (str(r[0]), str(r[1]))
+                    for r in (cur.fetchall() or []) if r and r[0] and r[1]
+                ]
                 cur.execute("DELETE FROM public.slack_messages WHERE ts = %s", (ts,))
                 cur.execute(
                     "DELETE FROM public.tasks WHERE external_ref = %s",
                     (f"slack:{ts}",),
                 )
                 conn.commit()
-                return task_ids
+                return task_rows
             except Exception:
                 conn.rollback()
                 raise
@@ -449,12 +504,16 @@ class SlackRepository(BaseRepository):
                 row = cur.fetchone()
                 task = row_to_dict(cur, row) if row else {}
                 if task and task.get("id"):
+                    # Legacy duplicates only. `(user_id, external_ref)` is
+                    # unique, so `external_ref = %s AND id <> %s` could never
+                    # match a row; the clause read as if it swept same-ref
+                    # duplicates and swept nothing (NUMA-142 P6).
                     cur.execute(
                         "DELETE FROM public.tasks "
                         "WHERE user_id = %s AND source_name = 'Slack' "
                         "  AND LOWER(title) = LOWER(%s) AND id <> %s "
-                        "  AND (external_ref IS NULL OR external_ref = %s)",
-                        (user_id, title, task["id"], external_ref),
+                        "  AND external_ref IS NULL",
+                        (user_id, title, task["id"]),
                     )
                 conn.commit()
                 return task

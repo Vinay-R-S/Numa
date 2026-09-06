@@ -15,6 +15,7 @@ to raise directly; `router._http_error` maps them back to HTTP.
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Callable, Dict, List, Optional
 
@@ -43,6 +44,8 @@ from .repository import SlackRepository, slack_repository
 CHANNEL_BACKFILL_INTERVAL_SECONDS = 60
 BACKFILL_STAMP_LIMIT = 512
 
+
+log = logging.getLogger(__name__)
 
 class SlackService(BaseService):
     """Slack workspace orchestration behind the /slack routes."""
@@ -202,7 +205,11 @@ class SlackService(BaseService):
         try:
             row = self.repository.send_tokens_for_user(user_id)
         except Exception as exc:
-            raise AppError(f"DB error: {exc}") from exc
+            # The message becomes a response body, and the NUMA-134 redaction
+            # only filters log records, so schema and connection detail used to
+            # reach any authenticated caller (NUMA-142 P6, PLAN 8).
+            log.warning("Slack send lookup failed: %s", exc, exc_info=True)
+            raise AppError("Could not read the Slack connection") from exc
 
         if not row:
             raise AppError("Slack not connected", status_code=400)

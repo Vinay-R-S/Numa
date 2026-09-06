@@ -3,28 +3,30 @@
 Leaf module: stdlib only, no calendar/DB imports. Extracted verbatim from
 calendar/service.py; service.py re-exports these names so callers are unaffected.
 """
-import os
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
+
+from ..core.timezones import default_timezone_name, resolve_timezone
 
 log = logging.getLogger(__name__)
 
-TIMEZONE_NAME = os.getenv("TIMEZONE", "Asia/Kolkata")
+# `default_timezone_name`, not a bare `os.getenv("TIMEZONE", ...)`: a
+# set-but-empty variable (a commented-out value, or a platform that injects an
+# empty var) returned "" rather than the default.
+TIMEZONE_NAME = default_timezone_name()
 
 
 def _resolve_timezone() -> ZoneInfo:
-    try:
-        return ZoneInfo(TIMEZONE_NAME)
-    except ZoneInfoNotFoundError:
-        fallback = "UTC"
-        log.warning(
-            "Timezone '%s' not found. Falling back to '%s'. Install 'tzdata' to use IANA timezone names on this platform.",
-            TIMEZONE_NAME,
-            fallback,
-        )
-        return ZoneInfo(fallback)
+    """The configured zone, via the shared resolver.
+
+    This caught only `ZoneInfoNotFoundError`, but an empty or malformed name
+    raises `ValueError` instead - and this module is on the boot path
+    (`main.py` -> calendar router -> service -> here), so the app died at import
+    with an unhandled ValueError rather than falling back (NUMA-142 P6 review).
+    """
+    return resolve_timezone(TIMEZONE_NAME)
 
 
 TIMEZONE = _resolve_timezone()
@@ -46,9 +48,13 @@ DATETIME_FORMATS = [
 
 
 def parse_datetime(datetime_str: str) -> datetime:
-    cleaned = datetime_str.strip().rstrip(".")
-    if cleaned.endswith("Z"):
-        cleaned = cleaned[:-1]
+    # The trailing `Z` used to be deleted here, which turned a UTC instant into
+    # a naive wall clock before anything downstream could see it was UTC. On
+    # 3.11 `fromisoformat` understands `Z`, so it is tried first with the string
+    # intact and only stripped for the older `strptime` formats, which cannot
+    # (NUMA-142 P6, PLAN 7).
+    raw = datetime_str.strip().rstrip(".")
+    cleaned = raw[:-1] if raw.endswith("Z") else raw
 
     natural_prefixes = {"today": 0, "tomorrow": 1, "tmr": 1}
 
@@ -72,6 +78,11 @@ def parse_datetime(datetime_str: str) -> datetime:
             raise ValueError(f"Could not parse time portion '{remainder}' from '{datetime_str}'.")
 
     try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        pass
+
+    try:
         return datetime.fromisoformat(cleaned)
     except ValueError:
         pass
@@ -88,8 +99,20 @@ def parse_datetime(datetime_str: str) -> datetime:
 
 
 def force_local(dt: datetime) -> datetime:
-    naive = dt.replace(tzinfo=None)
-    return naive.replace(tzinfo=TIMEZONE)
+    """Express `dt` in the local timezone.
+
+    An aware datetime is converted, preserving the instant. It used to have its
+    tzinfo stripped and the same wall-clock digits relabelled as local, so an
+    agent asked for `2025-09-10T14:00:00Z` booked 14:00 IST - five and a half
+    hours out - and `modify_event_by_description` moved existing meetings by the
+    same amount (NUMA-142 P6, PLAN 7).
+
+    A naive datetime still means local wall clock, which is what the form
+    payload in `_build_google_event_body` supplies.
+    """
+    if dt.tzinfo is not None:
+        return dt.astimezone(TIMEZONE)
+    return dt.replace(tzinfo=TIMEZONE)
 
 
 def _to_local(dt: datetime) -> datetime:

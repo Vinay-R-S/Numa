@@ -39,7 +39,13 @@ export function useDashboard() {
         // An auth 401 is already handled: lib/http clears the token and
         // navigates to /auth (NUMA-126). Anything else is not fatal to the
         // page, so the dashboard renders without the user header.
-        if (!(err instanceof ApiError)) throw err
+        //
+        // Reported, not rethrown: a `throw` inside a `.catch` callback rejects
+        // the promise that callback returns, and nothing awaits it, so the only
+        // effect was an unhandled rejection in the console (NUMA-142 P6).
+        if (!(err instanceof ApiError)) {
+          console.error("Failed to load the dashboard user:", err)
+        }
       })
   }, [])
 

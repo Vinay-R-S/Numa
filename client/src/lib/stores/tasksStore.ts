@@ -68,17 +68,24 @@ export const useTasksStore = create<TasksStore>((set, get) => ({
       set({ loadingTasks: true })
     }
 
+    // The guard covers the failure path and the spinner too: a superseded
+    // request used to write its own error over a newer success and clear the
+    // spinner the newer request had just set (NUMA-142 P6, PLAN 7).
+    const requestId = ++tasksFetchRequestId
     try {
       set({ tasksError: null })
-      const requestId = ++tasksFetchRequestId
       const data = await fetchTasks()
       if (requestId === tasksFetchRequestId) {
         set({ tasks: data, lastFetchedTasks: now })
       }
     } catch (err) {
-      set({ tasksError: err instanceof Error ? err.message : "Failed to load tasks" })
+      if (requestId === tasksFetchRequestId) {
+        set({ tasksError: err instanceof Error ? err.message : "Failed to load tasks" })
+      }
     } finally {
-      set({ loadingTasks: false })
+      if (requestId === tasksFetchRequestId) {
+        set({ loadingTasks: false })
+      }
     }
   },
 

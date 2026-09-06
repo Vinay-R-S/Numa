@@ -17,6 +17,3 @@ export function formatWeeklyMetric(value: number, metric: string | number): stri
   if (metric === "calories") return `${Math.round(value).toLocaleString()} kcal`
   return `${formatCompactValue(value)} steps`
 }
-
-// One home for the fetch-abort check: lib/http owns it.
-export { isAbortError } from "@/lib/http"

@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+from psycopg2.pool import PoolError
+
+from ..core.timezones import user_today
 from ..memory import memory_service
 from .repository import health_repository
-from .utils import _dt_from_millis
+from .utils import HEALTH_RETENTION_DAYS, _dt_from_millis
 
 log = logging.getLogger(__name__)
 
@@ -157,6 +160,8 @@ def get_health_intraday_snapshot(
 ) -> Optional[Dict]:
     try:
         return health_repository.get_intraday(user_id, snapshot_date, source, bucket_minutes)
+    except PoolError:
+        raise
     except Exception as exc:
         log.warning("get_health_intraday_snapshot failed: %s", exc)
         return None
@@ -165,12 +170,21 @@ def get_health_intraday_snapshot(
 def get_health_snapshots(
     user_id: str,
     source: Optional[str] = None,
-    days: int = 8,
+    days: int = HEALTH_RETENTION_DAYS,
 ) -> List[Dict]:
     """Fetch recent health snapshots for a user (up to N days)."""
     try:
-        cutoff = date.today() - timedelta(days=days)
+        # The user's day, like every consumer of this list. A host date one day
+        # ahead of theirs shortened the window to seven days and hid the oldest
+        # retained day (NUMA-142 P6 review).
+        cutoff = user_today(user_id) - timedelta(days=days)
         return health_repository.get_snapshots(user_id, source, cutoff)
+    except PoolError:
+        # Not a "no data" answer. The connection is acquired inside the repository
+        # now, so the explanatory PoolError NUMA-135 added was landing in this
+        # bare handler: /health-agent/snapshots answered 200 with zero rows under
+        # load and the page told the user their sync was broken (NUMA-142 P6).
+        raise
     except Exception as exc:
         log.warning("get_health_snapshots failed: %s", exc)
         return []
@@ -179,7 +193,13 @@ def get_health_snapshots(
 def purge_old_health_snapshots() -> int:
     """Delete health rows older than 8 days. Returns count of deleted rows."""
     try:
-        cutoff = date.today() - timedelta(days=8)
+        # One day of slack on the purge side. This runs for every user at once,
+        # so it cannot use any single user's date; taking the later of UTC and
+        # the host date keeps a user ahead of the host from having their oldest
+        # readable day deleted out from under them (NUMA-142 P6 review).
+        cutoff = max(date.today(), datetime.now(timezone.utc).date()) - timedelta(
+            days=HEALTH_RETENTION_DAYS + 1
+        )
         deleted = health_repository.purge_older_than(cutoff)
         log.info("Purged %d health snapshots older than %s", deleted, cutoff)
         return deleted

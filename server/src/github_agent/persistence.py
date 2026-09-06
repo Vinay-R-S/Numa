@@ -6,8 +6,10 @@ vector store. Keeps the best-effort swallow/log semantics the router relied on.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
+from ..core.timezones import user_timezone
 from ..memory import memory_service
 from .repository import github_repository
 from .utils import _log_dependency_exception
@@ -91,6 +93,23 @@ def _store_github_stats_vector(user_id: str, stats: dict) -> None:
         _log_dependency_exception("GitHub Qdrant upsert failed: %s", exc)
 
 
+# Totals that describe the account rather than a repository or a commit. They
+# come only from a live fetch, so the cached path had nothing to read and
+# reported zeros (NUMA-142 P6, PLAN 7).
+_PROFILE_STAT_KEYS = (
+    "public_repos",
+    "private_repos",
+    "followers",
+    "following",
+    "open_prs",
+)
+
+# How long the cached stats are served before a live fetch is preferred. The
+# cache had no freshness bound at all, so the zeros above were the steady state
+# rather than a transient.
+CACHE_FRESH_MINUTES = int(os.getenv("GITHUB_STATS_CACHE_MINUTES", "30"))
+
+
 def _cache_github_stats(user_id: str, stats: dict) -> None:
     repos = stats.get("recent_repos") or []
     commits = stats.get("recent_commits") or []
@@ -98,6 +117,15 @@ def _cache_github_stats(user_id: str, stats: dict) -> None:
         github_repository.cache_stats(user_id, repos, commits)
     except Exception as exc:
         _log_dependency_exception("GitHub DB cache update failed: %s", exc)
+
+    try:
+        github_repository.save_profile_stats(
+            user_id,
+            {key: int(stats.get(key) or 0) for key in _PROFILE_STAT_KEYS},
+            datetime.now(timezone.utc),
+        )
+    except Exception as exc:
+        _log_dependency_exception("GitHub profile stats cache update failed: %s", exc)
 
 
 def _map_repo_rows(repo_rows: list) -> list[dict]:
@@ -134,33 +162,49 @@ def _load_cached_github_stats(user_id: str, username: str) -> dict | None:
     try:
         auth_row, repo_rows, commit_rows = github_repository.cache_rows(user_id)
         avatar_url = auth_row[0] if auth_row else None
+        profile_stats = (auth_row[1] if auth_row and len(auth_row) > 1 else None) or {}
+        profile_synced_at = auth_row[2] if auth_row and len(auth_row) > 2 else None
 
         recent_repos = _map_repo_rows(repo_rows)
         recent_commits = _map_commit_rows(commit_rows)
         if not recent_repos and not recent_commits:
             return None
 
-        now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # The user's midnight, not UTC's. The app's default timezone is
+        # Asia/Kolkata, so "commits today" started 5.5 hours late and counted
+        # the previous evening's commits as today's (NUMA-142 P6, PLAN 7).
+        tz = user_timezone(user_id)
+        today_start = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - timedelta(days=7)
         total_commits_today = sum(1 for row in commit_rows if row[4] and row[4] >= today_start)
         total_commits_week = sum(1 for row in commit_rows if row[4] and row[4] >= week_start)
 
         last_synced_values = [row[8] for row in repo_rows if row[8]] + [row[6] for row in commit_rows if row[6]]
         last_synced_at = max(last_synced_values) if last_synced_values else None
+        # The stored totals from the last live fetch. Counting `recent_repos`
+        # only ever counted the eight rows the cache query keeps.
+        def total(key: str, fallback: int) -> int:
+            value = profile_stats.get(key)
+            return int(value) if isinstance(value, (int, float)) else fallback
+
         return {
             "username": username,
             "avatar_url": avatar_url,
-            "public_repos": sum(1 for repo in recent_repos if not repo["private"]),
-            "private_repos": sum(1 for repo in recent_repos if repo["private"]),
-            "followers": 0,
-            "following": 0,
+            "public_repos": total(
+                "public_repos", sum(1 for repo in recent_repos if not repo["private"]),
+            ),
+            "private_repos": total(
+                "private_repos", sum(1 for repo in recent_repos if repo["private"]),
+            ),
+            "followers": total("followers", 0),
+            "following": total("following", 0),
             "total_commits_today": total_commits_today,
             "total_commits_week": total_commits_week,
-            "open_prs": 0,
+            "open_prs": total("open_prs", 0),
             "recent_repos": recent_repos,
             "recent_commits": recent_commits,
             "_last_synced_at": last_synced_at,
+            "_profile_synced_at": profile_synced_at,
         }
     except Exception as exc:
         _log_dependency_exception("Could not load cached GitHub stats: %s", exc)

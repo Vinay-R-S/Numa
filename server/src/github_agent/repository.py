@@ -190,12 +190,25 @@ class GitHubRepository(BaseRepository):
                 )
             conn.commit()
 
+    def save_profile_stats(self, user_id: str, stats: dict, synced_at: datetime) -> None:
+        """Store the profile-level totals a live fetch returned (migration 0007)."""
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE public.github_auth "
+                "SET profile_stats = %s, profile_stats_synced_at = %s "
+                "WHERE user_id = %s",
+                (Json(stats), synced_at, user_id),
+            )
+            conn.commit()
+
     def cache_rows(self, user_id: str) -> Tuple:
         """Return (auth_row, repo_rows, commit_rows) for cached-stats assembly."""
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT avatar_url FROM public.github_auth WHERE user_id = %s",
+                "SELECT avatar_url, profile_stats, profile_stats_synced_at "
+                "FROM public.github_auth WHERE user_id = %s",
                 (user_id,),
             )
             auth_row = cur.fetchone()

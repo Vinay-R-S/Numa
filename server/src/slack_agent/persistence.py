@@ -137,27 +137,39 @@ def _delete_slack_message_by_ts(ts: str, slack_user_id: Optional[str] = None) ->
     if not ts:
         return
 
-    user_id = _resolve_user_id_by_slack(slack_user_id or "") if slack_user_id else None
-    if not user_id:
-        try:
-            user_id = slack_repository.user_id_by_message_ts(ts)
-        except Exception as exc:
-            log.warning("_delete_slack_message_by_ts lookup failed: %s", exc)
-
-    task_ids: list[str] = []
+    # Every owner, not one. Since migration 0006 a message has one row per NUMA
+    # user in the workspace, so resolving a single id left the other users'
+    # vectors pointing at a message that no longer exists (NUMA-142 P6).
+    # Read the owners before the delete, or there is nothing left to read.
+    owner_ids: list[str] = []
     try:
-        task_ids = slack_repository.delete_message_and_tasks(ts)
+        owner_ids = slack_repository.user_ids_by_message_ts(ts)
+    except Exception as exc:
+        log.warning("_delete_slack_message_by_ts lookup failed: %s", exc)
+
+    # The Slack author, if they are a NUMA user, may hold a row this lookup
+    # missed because the delete event arrived before their copy was stored.
+    author_id = _resolve_user_id_by_slack(slack_user_id or "") if slack_user_id else None
+    if author_id and author_id not in owner_ids:
+        owner_ids.append(author_id)
+
+    task_rows: list[tuple[str, str]] = []
+    try:
+        task_rows = slack_repository.delete_message_and_tasks(ts)
     except Exception as exc:
         log.warning("_delete_slack_message_by_ts DB delete failed: %s", exc)
 
-    if user_id:
-        delete_message(user_id=user_id, ts=ts)
-        try:
-            from ..tasks import service as task_service
-            for task_id in task_ids:
-                task_service.delete_task_snapshot(user_id, task_id)
-        except Exception:
-            log.debug("Task snapshot cleanup failed for ts %s", ts, exc_info=True)
+    for owner_id in owner_ids:
+        delete_message(user_id=owner_id, ts=ts)
+
+    # Each task's own user, not whichever owner happened to be first: the task
+    # rows for a shared message belong to different people.
+    try:
+        from ..tasks import service as task_service
+        for task_id, task_user_id in task_rows:
+            task_service.delete_task_snapshot(task_user_id, task_id)
+    except Exception:
+        log.debug("Task snapshot cleanup failed for ts %s", ts, exc_info=True)
 
 
 def _update_slack_message(event: dict, channel_name: Optional[str] = None) -> None:
@@ -170,9 +182,20 @@ def _update_slack_message(event: dict, channel_name: Optional[str] = None) -> No
     if not ts or not slack_user_id:
         return
 
-    user_id = _resolve_user_id_by_slack(slack_user_id)
-    if not user_id:
-        return
+    # Every user holding a copy, not just the author. This returned early when
+    # the Slack author was not a NUMA user, so an edit by a colleague never
+    # reached anyone's copy; and when it did run, the UPDATE touched every row
+    # while the re-embed refreshed only the author's vectors, leaving everyone
+    # else's semantic index serving the pre-edit text (NUMA-142 P6).
+    try:
+        owner_ids = slack_repository.user_ids_by_message_ts(ts)
+    except Exception as exc:
+        log.warning("_update_slack_message owner lookup failed: %s", exc)
+        owner_ids = []
+
+    author_id = _resolve_user_id_by_slack(slack_user_id)
+    if author_id and author_id not in owner_ids:
+        owner_ids.append(author_id)
 
     resolved_channel_name = channel_name or _get_channel_name_from_db(slack_chan_id)
     try:
@@ -181,17 +204,26 @@ def _update_slack_message(event: dict, channel_name: Optional[str] = None) -> No
         log.warning("_update_slack_message DB update failed: %s", exc)
         return
 
-    if text.strip():
-        ingest_message(
-            user_id=user_id,
-            slack_user_id=slack_user_id,
-            slack_channel_id=slack_chan_id,
-            channel_name=resolved_channel_name or slack_chan_id,
-            text=text,
-            ts=ts,
-            thread_ts=message.get("thread_ts"),
-            message_type=message.get("subtype") or "message",
-        )
+    if not text.strip():
+        return
+
+    for owner_id in owner_ids:
+        # Guarded, like the two sibling call sites. An embedder failure here
+        # used to escape after the row was already committed, which the
+        # post-ack swallow then turned into a silently stale index.
+        try:
+            ingest_message(
+                user_id=owner_id,
+                slack_user_id=slack_user_id,
+                slack_channel_id=slack_chan_id,
+                channel_name=resolved_channel_name or slack_chan_id,
+                text=text,
+                ts=ts,
+                thread_ts=message.get("thread_ts"),
+                message_type=message.get("subtype") or "message",
+            )
+        except Exception as exc:
+            log.warning("_update_slack_message Qdrant re-ingest failed: %s", exc)
 
 
 def _save_slack_message_for_user(

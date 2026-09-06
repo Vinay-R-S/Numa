@@ -57,6 +57,16 @@ def _extract_meet_link(event: Dict) -> Optional[str]:
     return None
 
 
+# Google caps `events.list` at 2500 per page and defaults to 250. Asking for
+# the cap keeps a busy month to a single round trip.
+_EVENTS_PAGE_SIZE = 2500
+
+# A page guard, not a limit anyone should reach: 2500 * 20 is far past any real
+# month, so hitting it means the API is looping rather than that the user is
+# busy. Stopping is safe because it also marks the calendar incomplete.
+_EVENTS_MAX_PAGES = 20
+
+
 def fetch_events_across_selected_calendars(
     service,
     time_min: str,
@@ -79,26 +89,58 @@ def fetch_events_across_selected_calendars(
         if not cal_id:
             continue
 
-        try:
-            result = (
-                service.events()
-                .list(
-                    calendarId=cal_id,
-                    timeMin=time_min,
-                    timeMax=time_max,
-                    singleEvents=True,
-                    orderBy="startTime",
-                )
-                .execute()
-            )
-        except Exception as exc:
-            log.warning("Failed to fetch events for calendar %s: %s", cal_id, exc)
-            continue
+        # Page to the end. `events().list` returns at most 250 items by default
+        # and this loop never asked for the next page, so a month with more
+        # events than one page came back truncated - and because the calendar
+        # was still recorded as fetched, `_reconcile_deleted_events_for_month`
+        # read the missing events as deleted and destroyed them along with their
+        # linked tasks and vectors (NUMA-142 P6, PLAN 7).
+        items: List[Dict] = []
+        page_token: Optional[str] = None
+        pages = 0
+        complete = True
 
-        if fetched_calendar_ids is not None:
+        while True:
+            try:
+                result = (
+                    service.events()
+                    .list(
+                        calendarId=cal_id,
+                        timeMin=time_min,
+                        timeMax=time_max,
+                        singleEvents=True,
+                        orderBy="startTime",
+                        maxResults=_EVENTS_PAGE_SIZE,
+                        pageToken=page_token,
+                    )
+                    .execute()
+                )
+            except Exception as exc:
+                log.warning("Failed to fetch events for calendar %s: %s", cal_id, exc)
+                complete = False
+                break
+
+            items.extend(result.get("items", []))
+            page_token = result.get("nextPageToken")
+            pages += 1
+
+            if not page_token:
+                break
+            if pages >= _EVENTS_MAX_PAGES:
+                log.warning(
+                    "Stopped paging calendar %s after %d pages; more events remain",
+                    cal_id, pages,
+                )
+                complete = False
+                break
+
+        # Only a calendar we read to the end may be reconciled against. A
+        # partial read still shows the events it did get, but claiming it was
+        # complete is what turns a transient API failure into deleted data.
+        if complete and fetched_calendar_ids is not None:
             fetched_calendar_ids.add(str(cal_id))
 
-        for event in result.get("items", []):
+        for event in items:
             if cal_type in ("personal", "shared", "other"):
                 # For user calendars: filter out non-personal events (contacts birthdays etc.)
                 if _is_excluded_google_special_event(event, str(cal_id), str(cal.get("summary") or "")):
@@ -111,6 +153,7 @@ def fetch_events_across_selected_calendars(
             event["_calendar_summary"]     = cal.get("summary")
             event["_calendar_access_role"] = cal.get("access_role")
             event["_calendar_type"]        = cal_type
+            event["_calendar_is_primary"]  = bool(cal.get("is_primary"))
             combined.append(event)
 
     combined.sort(
@@ -184,7 +227,19 @@ def _format_event_for_frontend(event: Dict) -> Dict:
     is_readonly   = event.get("_calendar_access_role") not in (None, "owner", "writer")
     event_id      = event.get("id", "")
     calendar_id   = event.get("_calendar_id") or "primary"
-    safe_id       = event_id if not is_readonly else f"{calendar_id}:{event_id}"
+    # Composite whenever the event is not on the primary calendar, not only when
+    # it is readonly. `_parse_calendar_event_id` reads a bare id as belonging to
+    # "primary", so an event on a secondary calendar the user owns - access role
+    # "owner", therefore not readonly - had every update and delete routed to
+    # the wrong calendar and answered 404 (NUMA-142 P6, PLAN 7).
+    #
+    # `is_primary`, not `calendar_id == "primary"`: Google's calendarList names
+    # the primary calendar by the user's email address, so testing the literal
+    # alias minted a composite id for it too, and the cleanup then looked for
+    # `gcal:<email>:<id>` while `create_event_from_payload` had written
+    # `gcal:primary:<id>` (NUMA-142 P6 review).
+    is_primary    = bool(event.get("_calendar_is_primary")) or calendar_id == "primary"
+    safe_id       = event_id if is_primary else f"{calendar_id}:{event_id}"
 
     description = event.get("description", "")
     if not description and calendar_name:

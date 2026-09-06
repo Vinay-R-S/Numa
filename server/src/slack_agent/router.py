@@ -42,7 +42,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
 from ..auth.dependencies import get_current_user, require_admin
-from ..core.errors import AppError
+from ..core.errors import AppError, http_error_from
 from .client import _resolve_slack_user_name  # noqa: F401  re-exported
 from .config import (  # noqa: F401  re-exported
     _bot_token,
@@ -84,7 +84,10 @@ def _require_user_id(current_user: dict) -> str:
 
 
 def _http_error(exc: AppError) -> HTTPException:
-    return HTTPException(status_code=exc.status_code, detail=exc.detail)
+    # `http_error_from`, not a bare HTTPException: it carries the raiser's
+    # safe-detail decision, which the 5xx redaction otherwise flattens into
+    # "Internal server error" (NUMA-142 P6 review).
+    return http_error_from(exc)
 
 
 # ── 1. Slack Events API (webhook - HMAC verified) ─────────────────────────────

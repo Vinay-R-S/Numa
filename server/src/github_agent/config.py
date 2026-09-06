@@ -1,7 +1,7 @@
 """GitHub OAuth configuration and constants (NUMA-109 P3, PLAN 16.7).
 
-OAuth endpoint URLs, expected token permissions, in-memory OAuth state store, and
-config/header helpers. No DB, no business logic.
+OAuth endpoint URLs, expected token permissions, and config/header helpers. No
+DB, no business logic.
 """
 from __future__ import annotations
 
@@ -13,8 +13,11 @@ GITHUB_OAUTH_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
 
-# OAuth state -> user_id, set on /connect and consumed on /callback.
-_oauth_states: dict[str, str] = {}
+# The OAuth state store used to be a module-global dict here: no TTL, no bound,
+# and written in one worker while the callback landed in another, so a flow
+# could fail nondeterministically and every abandoned flow leaked an entry for
+# the life of the process. It is now the signed, expiring state in
+# `core.oauth_state`, shared with Slack (NUMA-142 P6, PLAN 8).
 
 GITHUB_EXPECTED_TOKEN_PERMISSIONS = {
     "actions": "read",

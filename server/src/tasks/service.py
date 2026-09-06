@@ -122,6 +122,9 @@ def delete_task_by_external_ref(user_id: str, external_ref: str) -> int:
     return deleted
 
 
+_TASK_PRIORITIES = {"low", "medium", "high", "urgent"}
+
+
 def create_task_for_user(
     user_id: str,
     title: str,
@@ -131,6 +134,7 @@ def create_task_for_user(
     source_name: Optional[str] = None,
     source_logo: Optional[str] = None,
     external_ref: Optional[str] = None,
+    priority: str = "medium",
 ) -> Dict:
     normalized_title = title.strip()
     if not normalized_title:
@@ -159,6 +163,9 @@ def create_task_for_user(
         source_name=source_name,
         source_logo=source_logo,
         external_ref=dedupe_ref,
+        # The shared agent tools advertised a priority argument and dropped it
+        # before it reached the row (NUMA-142 P6, PLAN 10).
+        priority=priority if priority in _TASK_PRIORITIES else "medium",
     )
     _store_task_snapshot(task)
     return task
@@ -196,15 +203,18 @@ def update_task_by_title(
 
 
 def delete_task_by_title(user_id: str, title: str) -> int:
-    row = task_repository.find_id_by_title(user_id, title)
-    deleted = task_repository.delete_latest_by_title(user_id, title)
+    deleted_id = task_repository.delete_latest_by_title(user_id, title)
+    deleted = 1 if deleted_id else 0
 
-    if deleted and row and row[0]:
-        memory_service.delete_snapshot(
-            user_id=user_id,
-            source="task",
-            external_id=str(row[0]),
-        )
+    if deleted_id:
+        # delete_task_snapshot, not delete_snapshot: a task is written to memory
+        # twice, as a snapshot and as a `tasks` domain point, and this path
+        # removed only the first. The domain point outlived the row, so the
+        # context assembler kept retrieving a task the agent had just deleted
+        # (NUMA-142 P6, PLAN 7). The helper also swallows and logs, which this
+        # call did not, so a Qdrant outage no longer raises after the row is
+        # already gone.
+        delete_task_snapshot(user_id, deleted_id)
 
     return deleted
 

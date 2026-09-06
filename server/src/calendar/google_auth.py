@@ -3,14 +3,38 @@
 Leaf module: stdlib + Google libs only, no cross-module calendar imports.
 Extracted verbatim from calendar/service.py; service.py re-exports these names.
 """
+import base64
 import os
 import json
 import importlib
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
+
+# Resolved Google emails, so the per-event lookup in `_persist_mutated_event`
+# stops reading and parsing the token file once per event (NUMA-142 P6, PLAN 9).
+# Cleared when a token is written or deleted, which are the only two ways the
+# answer changes.
+_email_cache: dict[str, str] = {}
+_email_cache_lock = threading.Lock()
+
+
+def _email_cache_get(user_id: str) -> Optional[str]:
+    with _email_cache_lock:
+        return _email_cache.get(user_id)
+
+
+def _email_cache_put(user_id: str, email: str) -> None:
+    with _email_cache_lock:
+        _email_cache[user_id] = email
+
+
+def _email_cache_clear(user_id: str) -> None:
+    with _email_cache_lock:
+        _email_cache.pop(user_id, None)
 
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/calendar",
@@ -153,6 +177,7 @@ def exchange_google_oauth_code(user_id: str, code: str, redirect_uri: str) -> No
     token_path = _user_token_file(user_id)
     token_path.parent.mkdir(parents=True, exist_ok=True)
     token_path.write_text(flow.credentials.to_json(), encoding="utf-8")
+    _email_cache_clear(user_id)
 
 
 def get_credentials(user_id: Optional[str] = None):
@@ -195,6 +220,8 @@ def get_credentials(user_id: Optional[str] = None):
                         token_path.unlink(missing_ok=True)
                     except Exception:
                         pass
+                    if user_id:
+                        _email_cache_clear(user_id)
                     raise RuntimeError(
                         "Google Calendar session expired or was revoked. "
                         "Please reconnect your Google account via /calendar/oauth/start."
@@ -211,21 +238,64 @@ def get_credentials(user_id: Optional[str] = None):
     return creds
 
 
+def _email_from_id_token(raw: str) -> str:
+    """The `email` claim of a stored id_token, without verifying it.
+
+    The token is ours, it never leaves the server, and the value is a label on a
+    Qdrant payload, so the claim is read rather than validated.
+    """
+    parts = raw.split(".")
+    if len(parts) != 3:
+        return ""
+    try:
+        payload = parts[1]
+        decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        claims = json.loads(decoded.decode("utf-8"))
+    except Exception:
+        return ""
+    return str(claims.get("email") or "")
+
+
 def _get_user_email(user_id: Optional[str]) -> str:
     """
     Read the authenticated Google user's email from the stored token JSON.
     Returns empty string if unavailable (non-fatal - used only for Qdrant payload).
+
+    It used to look for `client_email` and `email`, neither of which
+    `Credentials.to_json()` writes, so it always returned "" and every calendar
+    vector was stored without the label it exists to carry. `account` is the
+    field that holds it, with the id_token claim as the fallback for tokens
+    minted before Google started populating it (NUMA-142 P6, PLAN 7).
+
+    Cached, because `_persist_mutated_event` calls this once per event and the
+    scheduler replays every event of every user every 30 minutes (PLAN 9).
     """
     if not user_id:
         return ""
+
+    cached = _email_cache_get(user_id)
+    if cached is not None:
+        return cached
+
+    email = ""
     try:
         token_path = _user_token_file(user_id)
-        if not token_path.exists():
-            return ""
-        token_data = json.loads(token_path.read_text(encoding="utf-8"))
-        return str(token_data.get("client_email") or token_data.get("email") or "")
+        if token_path.exists():
+            token_data = json.loads(token_path.read_text(encoding="utf-8"))
+            email = str(
+                token_data.get("account")
+                or token_data.get("email")
+                or token_data.get("client_email")
+                or ""
+            ).strip()
+            if not email and token_data.get("id_token"):
+                email = _email_from_id_token(str(token_data.get("id_token")))
     except Exception:
+        log.debug("Could not read the stored Google email for %s", user_id, exc_info=True)
         return ""
+
+    _email_cache_put(user_id, email)
+    return email
 
 
 def get_all_connected_user_ids() -> List[str]:

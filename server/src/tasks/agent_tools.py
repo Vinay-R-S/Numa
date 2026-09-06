@@ -72,6 +72,7 @@ def make_task_tools(tool_decorator, user_id: str, source_name: str = "Agent"):
                 status=normalized,
                 due_date=due,
                 source_name=source_name,
+                priority=priority.strip().lower() or "medium",
             )
             return f"Task created: {task.get('title')} [{task.get('status')}] (from {source_name})"
         except Exception as exc:

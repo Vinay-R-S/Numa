@@ -3,7 +3,8 @@ from datetime import date
 from typing import Dict, List, Optional
 
 from ..core.base import BaseRepository
-from ..core.db import get_db, row_to_dict
+from ..core.db import get_db
+from ..health_agent.repository import health_repository, row_to_dict
 
 _COLS = (
     "id, user_id, title, content, mood, entry_date, tags, ai_summary, "
@@ -18,8 +19,9 @@ _UPSERT = (
     "    title = EXCLUDED.title, "
     "    content = EXCLUDED.content, "
     "    mood = EXCLUDED.mood, "
-    "    tags = EXCLUDED.tags, "
-    "    updated_at = NOW() "
+    "    tags = EXCLUDED.tags "
+    # No `updated_at = NOW()`: `trg_journal_entries_updated_at` is a BEFORE
+    # UPDATE trigger on this table and already sets it (NUMA-142 P6, PLAN 10).
     "RETURNING " + _COLS
 )
 
@@ -72,7 +74,7 @@ class JournalRepository(BaseRepository):
                 raise
 
     def update_fields(self, user_id: str, entry_date: date, fields: Dict) -> Optional[Dict]:
-        set_clause = ", ".join(f"{k} = %s" for k in fields) + ", updated_at = NOW()"
+        set_clause = ", ".join(f"{k} = %s" for k in fields)
         params = list(fields.values())
         params.extend([user_id, entry_date])
         with get_db() as conn:
@@ -111,7 +113,7 @@ class JournalRepository(BaseRepository):
             try:
                 cur.execute(
                     "UPDATE public.journal_entries "
-                    "SET ai_summary = %s, updated_at = NOW() "
+                    "SET ai_summary = %s "
                     "WHERE user_id = %s AND entry_date = %s",
                     (summary, user_id, entry_date),
                 )
@@ -158,19 +160,21 @@ class JournalRepository(BaseRepository):
     def health_rows(self, user_id: str, target_date: date) -> list:
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute(
-                "SELECT source, steps, active_minutes, calories, distance_km, sleep_hours, "
-                "       heart_rate_bpm, heart_points "
-                "FROM public.health_snapshots WHERE user_id = %s AND snapshot_date = %s",
-                (user_id, target_date),
-            )
-            return cur.fetchall()
+            # Through HealthRepository on this connection, not a fourth copy of
+            # the same SQL (NUMA-143 P7, PLAN 10).
+            return health_repository.day_metrics(user_id, target_date, conn=conn)
 
     def slack_highlights(self, user_id: str, start, end) -> list:
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT channel_name, sender_name, text FROM public.slack_messages "
+                # `slack_user_id`, not `sender_name`: no migration creates that
+                # column, so this query always failed and the swallowing caller
+                # silently dropped the Slack section from every daily summary
+                # (NUMA-142 P6 review). The display name lives in the raw
+                # payload and is resolved by `slack_agent.service`; the id is
+                # what this table stores.
+                "SELECT channel_name, slack_user_id, text FROM public.slack_messages "
                 "WHERE user_id = %s AND ("
                 "    (created_at >= %s AND created_at < %s) "
                 "    OR (ts ~ '^[0-9]+(\\.[0-9]+)?$' "

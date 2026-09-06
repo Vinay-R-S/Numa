@@ -10,6 +10,8 @@ keeping it here avoids a repository <-> google_client import cycle.
 """
 import os
 import logging
+import threading
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -35,10 +37,60 @@ log = logging.getLogger(__name__)
 # How long to consider the DB cache fresh before re-fetching from Google
 CACHE_TTL_MINUTES = int(os.getenv("CALENDAR_CACHE_TTL_MINUTES", "30"))
 
+# Last etag embedded per event, so the 30-minute sync stops paying for an
+# embedding of text that has not changed. The scheduler replays every event of
+# every connected user on every tick, and each one used to be re-embedded
+# synchronously (NUMA-142 P6, PLAN 9). Google changes the etag whenever the
+# event changes, so an unchanged etag means the stored vector is still correct.
+# Process-local and bounded: after a restart each event is embedded once more.
+_INGESTED_ETAG_MAX = 20000
+_ingested_etags: "OrderedDict[str, str]" = OrderedDict()
+_ingested_lock = threading.Lock()
 
-# ══════════════════════════════════════════════════════════════════════════════
+
+def _already_ingested(user_id: str, google_event_id: str, etag: str) -> bool:
+    if not etag or not google_event_id:
+        return False
+    key = f"{user_id}:{google_event_id}"
+    with _ingested_lock:
+        if _ingested_etags.get(key) == etag:
+            _ingested_etags.move_to_end(key)
+            return True
+        return False
+
+
+def _forget_ingested(user_id: str, google_event_id: str) -> None:
+    """Drop the memo for an event whose vector was just deleted.
+
+    Without this a re-created or restored event with an unchanged etag would
+    never be re-embedded for the life of the process (NUMA-142 P6 review).
+    """
+    if not google_event_id:
+        return
+    with _ingested_lock:
+        _ingested_etags.pop(f"{user_id}:{google_event_id}", None)
+
+
+def _forget_all_ingested(user_id: str) -> None:
+    """Drop every memo for one user, after a bulk vector delete."""
+    prefix = f"{user_id}:"
+    with _ingested_lock:
+        for key in [k for k in _ingested_etags if k.startswith(prefix)]:
+            _ingested_etags.pop(key, None)
+
+
+def _mark_ingested(user_id: str, google_event_id: str, etag: str) -> None:
+    if not etag or not google_event_id:
+        return
+    key = f"{user_id}:{google_event_id}"
+    with _ingested_lock:
+        _ingested_etags[key] = etag
+        _ingested_etags.move_to_end(key)
+        while len(_ingested_etags) > _INGESTED_ETAG_MAX:
+            _ingested_etags.popitem(last=False)
+
+
 # CACHE LAYER - read from cal_events DB before hitting Google API
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _is_cache_fresh_for_month(user_id: str, month_start: datetime, month_end: datetime) -> bool:
     """
@@ -49,8 +101,9 @@ def _is_cache_fresh_for_month(user_id: str, month_start: datetime, month_end: da
 
     This avoids hitting the Google API on every page load.
     """
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
 
         # Check latest sync timestamp
@@ -94,7 +147,8 @@ def _is_cache_fresh_for_month(user_id: str, month_start: datetime, month_end: da
         log.warning("Cache freshness check failed: %s", exc)
         return False
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def _read_month_events_from_db(user_id: str, month_start: datetime, month_end: datetime) -> List[Dict]:
@@ -105,8 +159,9 @@ def _read_month_events_from_db(user_id: str, month_start: datetime, month_end: d
     This is the Groq-token-saving path: the agent can also call SQL against
     cal_events instead of re-fetching JSON from Google.
     """
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -124,7 +179,8 @@ def _read_month_events_from_db(user_id: str, month_start: datetime, month_end: d
                 c.name          AS calendar_name,
                 c.google_cal_id AS google_cal_id,
                 c.calendar_type AS calendar_type,
-                c.access_role   AS access_role
+                c.access_role   AS access_role,
+                c.is_primary    AS is_primary
             FROM public.cal_events e
             JOIN public.cal_calendars c ON c.id = e.calendar_id
             WHERE e.user_id     = %s
@@ -155,7 +211,17 @@ def _read_month_events_from_db(user_id: str, month_start: datetime, month_end: d
             is_readonly = bool(r["is_readonly"])
             google_cal_id   = r["google_cal_id"]
             google_event_id = r["google_event_id"]
-            safe_id = google_event_id if not is_readonly else f"{google_cal_id}:{google_event_id}"
+            # The same rule as `_format_event_for_frontend`, and for the same
+            # reason: `_parse_calendar_event_id` reads a bare id as belonging to
+            # "primary", so an event on a secondary calendar the user owns
+            # (access role "owner", therefore not readonly) had its update and
+            # delete routed to the wrong calendar and answered 404. This path
+            # serves every load for CALENDAR_CACHE_TTL_MINUTES after a refresh,
+            # so keying it on `is_readonly` while the Google path keyed on
+            # `is_primary` also gave one event two different ids depending on
+            # which path served it (NUMA-142 P6 review).
+            is_primary = bool(r.get("is_primary")) or google_cal_id == "primary"
+            safe_id = google_event_id if is_primary else f"{google_cal_id}:{google_event_id}"
 
             description = r.get("description") or ""
             if not description and r.get("calendar_name"):
@@ -181,12 +247,11 @@ def _read_month_events_from_db(user_id: str, month_start: datetime, month_end: d
         log.warning("Failed to read month events from DB: %s", exc)
         return []
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # NORMALIZED STORAGE - cal_calendars / cal_events / cal_attendees
-# ══════════════════════════════════════════════════════════════════════════════
 
 # Slim agent-facing read. One literal statement over a half-open window, so the
 # repository keeps zero f-string SQL (PLAN 8) and callers share one bound rule.
@@ -253,8 +318,9 @@ def _ensure_cal_calendar(user_id: str, cal: Dict, calendar_type: str = "personal
     if calendar_type not in ("personal", "shared", "holiday", "birthday", "other"):
         calendar_type = "other"
 
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -281,7 +347,8 @@ def _ensure_cal_calendar(user_id: str, cal: Dict, calendar_type: str = "personal
         log.warning("Failed to upsert cal_calendar(%s, %s): %s", user_id, google_cal_id, exc)
         raise
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def _upsert_cal_event(user_id: str, calendar_uuid: str, event: Dict) -> Optional[str]:
@@ -304,8 +371,9 @@ def _upsert_cal_event(user_id: str, calendar_uuid: str, event: Dict) -> Optional
     is_readonly = event.get("_calendar_access_role") not in (None, "owner", "writer")
     deleted_at  = datetime.now(TIMEZONE) if status == "cancelled" else None
 
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -372,7 +440,8 @@ def _upsert_cal_event(user_id: str, calendar_uuid: str, event: Dict) -> Optional
         log.warning("Failed to upsert cal_event(%s): %s", google_event_id, exc)
         return None
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def _upsert_cal_attendees(event_uuid: str, attendees_raw: Any) -> None:
@@ -384,8 +453,9 @@ def _upsert_cal_attendees(event_uuid: str, attendees_raw: Any) -> None:
     if not isinstance(attendees_raw, list) or not attendees_raw:
         return
 
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         for att in attendees_raw:
             if not isinstance(att, dict):
@@ -429,7 +499,8 @@ def _upsert_cal_attendees(event_uuid: str, attendees_raw: Any) -> None:
     except Exception as exc:
         log.warning("Failed to upsert cal_attendees for event %s: %s", event_uuid, exc)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def _store_cal_event(user_id: str, calendar_uuid: str, event: Dict) -> None:
@@ -440,7 +511,7 @@ def _store_cal_event(user_id: str, calendar_uuid: str, event: Dict) -> None:
         return
     _upsert_cal_attendees(event_uuid, event.get("attendees") or [])
 
-    # ── Qdrant ingest (best-effort, non-blocking) ──────────────────────────────
+    # Qdrant ingest (best-effort, non-blocking)
     try:
         google_event_id = str(event.get("id")             or "").strip()
         google_cal_id   = str(event.get("_calendar_id")   or "primary")
@@ -448,8 +519,12 @@ def _store_cal_event(user_id: str, calendar_uuid: str, event: Dict) -> None:
         title           = str(event.get("summary")        or "(No title)").strip()
         description     = event.get("description")
         start_at, end_at, is_all_day, _, _ = _event_datetime_bounds(event)
+        etag = str(event.get("etag") or "")
 
-        # Resolve the user's Google email from the token file (cached per call)
+        if not google_event_id or _already_ingested(user_id, google_event_id, etag):
+            return
+
+        # Resolve the user's Google email from the token file (cached per user)
         user_email = _get_user_email(user_id)
 
         if google_event_id:
@@ -465,8 +540,46 @@ def _store_cal_event(user_id: str, calendar_uuid: str, event: Dict) -> None:
                 is_all_day=is_all_day,
                 calendar_type=cal_type,
             )
+            _mark_ingested(user_id, google_event_id, etag)
     except Exception as exc:
         log.warning("Qdrant ingest failed for event (non-fatal): %s", exc)
+
+
+def _known_calendar(user_id: str, google_cal_id: str) -> Optional[Dict]:
+    """The calendar as we already synced it, or None if we have never seen it.
+
+    `_ensure_cal_calendar` overwrites name, access_role, is_primary and
+    calendar_type on every upsert, so any field a caller guesses at is written
+    over the truth. A calendar the full sync already classified is the
+    authoritative answer and costs one indexed read, rather than a Google round
+    trip on every event edit.
+    """
+    conn = None
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT name, access_role, is_primary, calendar_type "
+            "FROM public.cal_calendars WHERE user_id = %s AND google_cal_id = %s",
+            (user_id, google_cal_id),
+        )
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            return None
+        return {
+            "id": google_cal_id,
+            "summary": row[0],
+            "access_role": row[1],
+            "is_primary": row[2],
+            "calendar_type": row[3],
+        }
+    except Exception:
+        log.debug("Could not read the stored calendar %s", google_cal_id, exc_info=True)
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _persist_mutated_event(user_id: Optional[str], service, event: Dict) -> None:
@@ -474,12 +587,25 @@ def _persist_mutated_event(user_id: Optional[str], service, event: Dict) -> None
         return
 
     google_cal_id = str(event.get("_calendar_id") or "primary")
-    cal = _primary_calendar_entry(service) if google_cal_id == "primary" else {
-        "id": google_cal_id,
-        "summary": event.get("_calendar_summary") or google_cal_id,
-        "accessRole": event.get("_calendar_access_role") or "owner",
-        "calendar_type": event.get("_calendar_type") or "personal",
-    }
+    if google_cal_id == "primary":
+        cal = _primary_calendar_entry(service)
+    else:
+        # The stored row first. Editing one event on a shared calendar used to
+        # rewrite that calendar's name to "Primary", its type to personal and
+        # its access role to owner, because the caller supplied those as
+        # defaults and the upsert overwrites every column. Every event on the
+        # calendar then rendered with the wrong name and colour and an
+        # unprefixed id, which also made them un-addressable for update and
+        # delete (NUMA-142 P6, PLAN 7).
+        cal = _known_calendar(user_id, google_cal_id) or {
+            # Only for a calendar no sync has ever classified. Guessing is still
+            # wrong here, but there is no stored truth to prefer, and the next
+            # full refresh reclassifies it.
+            "id": google_cal_id,
+            "summary": event.get("_calendar_summary") or google_cal_id,
+            "accessRole": event.get("_calendar_access_role") or "owner",
+            "calendar_type": event.get("_calendar_type") or "personal",
+        }
 
     cal_type = str(cal.get("calendar_type") or event.get("_calendar_type") or "personal")
     calendar_uuid = _ensure_cal_calendar(user_id, cal, calendar_type=cal_type)
@@ -500,9 +626,10 @@ def _prune_cal_events_outside_month(
     Delete cal_events (and cascaded attendees) outside the current month window,
     then clean up linked tasks, memory snapshots, and Qdrant calendar vectors.
     """
-    conn   = _get_conn()
+    conn = None
     stale: List[Tuple[str, str, str]] = []
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -529,10 +656,12 @@ def _prune_cal_events_outside_month(
     except Exception as exc:
         log.warning("Failed to prune cal_events outside month: %s", exc)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
     for _evt_uuid, cal_id, event_id in stale:
         ext_ref = task_service.calendar_external_ref(cal_id, event_id)
+        _forget_ingested(user_id, event_id)
         _run_parallel_best_effort(
             lambda r=ext_ref: task_service.delete_task_by_external_ref(user_id, r),
             lambda c=cal_id, e=event_id: memory_service.delete_snapshot(
@@ -546,6 +675,9 @@ def _prune_cal_events_outside_month(
     prev_month_str = (month_start - timedelta(days=1)).strftime("%Y-%m")
     try:
         _qdrant_delete_month(user_id, prev_month_str)
+        # The whole month's vectors are gone, so no memo for this user is safe
+        # to trust any more (NUMA-142 P6 review).
+        _forget_all_ingested(user_id)
     except Exception as exc:
         log.warning("Qdrant month purge failed for %s/%s: %s", user_id, prev_month_str, exc)
 
@@ -566,8 +698,9 @@ def _reconcile_deleted_events_for_month(
         return
 
     stale: List[Tuple[str, str]] = []
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -606,9 +739,13 @@ def _reconcile_deleted_events_for_month(
         cur.close()
     except Exception as exc:
         log.warning("Failed to reconcile deleted calendar events: %s", exc)
-        conn.rollback()
+        # `conn` is None when the failure was acquiring it, which is exactly the
+        # pool-exhaustion case this handler exists to absorb (NUMA-142 P6 review).
+        if conn is not None:
+            conn.rollback()
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
     for cal_id, event_id in stale:
         ext_ref = task_service.calendar_external_ref(cal_id, event_id)
@@ -620,6 +757,7 @@ def _reconcile_deleted_events_for_month(
                 external_id=f"{c}:{e}",
             ),
             lambda e=event_id: _qdrant_delete_event(user_id, e),
+            lambda e=event_id: _forget_ingested(user_id, e),
         )
 
 
@@ -627,17 +765,30 @@ def _delete_cal_event_cleanup(
     user_id: Optional[str],
     google_cal_id: str,
     google_event_id: str,
+    service=None,
 ) -> None:
-    """Soft-delete in cal_events and clean up tasks + memory."""
+    """Soft-delete in cal_events and clean up tasks + memory.
+
+    `service` is the caller's Google client. Every caller already has one, and
+    building a second here was the last place the injected
+    `CalendarService._service_factory` did not reach: a test that swapped the
+    factory still had this path call the real Google API (NUMA-143 P7, PLAN 5.2).
+    """
     if not user_id:
         return
 
     ical_uid: Optional[str] = None
     resolved_calendar_ids = [google_cal_id]
     try:
-        service  = get_calendar_service(user_id=user_id)
-        if google_cal_id == "primary":
-            resolved_calendar_ids = _primary_calendar_ids(service)
+        if service is None:
+            service = get_calendar_service(user_id=user_id)
+        # Both directions. The primary calendar answers to the alias "primary"
+        # and to the user's email address, and a ref written under one must
+        # still be found when the delete arrives under the other
+        # (NUMA-142 P6 review).
+        primary_ids = _primary_calendar_ids(service)
+        if google_cal_id in primary_ids:
+            resolved_calendar_ids = primary_ids
         event    = service.events().get(calendarId=google_cal_id, eventId=google_event_id).execute()
         ical_uid = str(event.get("iCalUID") or "").strip() or None
     except Exception:
@@ -656,8 +807,9 @@ def _delete_cal_event_cleanup(
     for cal_id in resolved_calendar_ids:
         external_refs.add(task_service.calendar_external_ref(cal_id, google_event_id))
 
-    conn = _get_conn()
+    conn = None
     try:
+        conn = _get_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -676,7 +828,8 @@ def _delete_cal_event_cleanup(
     except Exception as exc:
         log.warning("Failed to soft-delete cal_event: %s", exc)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
     _run_parallel_best_effort(
         *[
@@ -692,4 +845,5 @@ def _delete_cal_event_cleanup(
             for cal_id in resolved_calendar_ids
         ],
         lambda: _qdrant_delete_event(user_id, google_event_id),
+        lambda: _forget_ingested(user_id, google_event_id),
     )

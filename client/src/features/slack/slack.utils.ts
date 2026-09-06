@@ -6,9 +6,6 @@
  */
 import type { MessageRelevance, SlackChannel, SlackMessage } from "./slack.types"
 
-// One home for the fetch-abort check: lib/http owns it.
-export { isAbortError } from "@/lib/http"
-
 export function timeAgo(dateStr: string | null | undefined): string {
   if (!dateStr) return ""
 

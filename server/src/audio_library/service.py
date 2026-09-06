@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import threading
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -47,6 +48,7 @@ class AudioLibraryService(BaseService):
         self.catalog = catalog if catalog is not None else AUDIO_LIBRARY
         self.audio_root = audio_root or AUDIO_ROOT
         self.min_audio_bytes = min_audio_bytes
+        self._ensure_lock = threading.Lock()
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -56,9 +58,19 @@ class AudioLibraryService(BaseService):
         return AudioLibraryStatus(ok=True, items=self._items())
 
     def ensure(self) -> AudioLibraryEnsureResult:
-        """Fetch or derive every missing track. Partial success is reported, not raised."""
+        """Fetch or derive every missing track. Partial success is reported, not raised.
+
+        Serialised: the mental-peace page prewarms while the player prepares, so
+        overlapping calls each downloaded the same five tracks and occupied five
+        worker threads apiece for as long as Wikimedia took (NUMA-142 P6,
+        PLAN 9). The second caller waits and then finds the files ready.
+        """
         self._ensure_root()
 
+        with self._ensure_lock:
+            return self._ensure_locked()
+
+    def _ensure_locked(self) -> AudioLibraryEnsureResult:
         downloaded: list[str] = []
         failed: list[AudioLibraryFailure] = []
 
@@ -92,15 +104,27 @@ class AudioLibraryService(BaseService):
     def _path(self, filename: str) -> Path:
         return self.audio_root / filename
 
+    def _size_bytes(self, filename: str) -> int:
+        """The file's size, or 0 when it is absent or unreadable.
+
+        One stat, not two, and no `FileNotFoundError` out of a read-only status
+        route when a file is removed between the check and the read
+        (NUMA-142 P6, PLAN 7).
+        """
+        try:
+            return self._path(filename).stat().st_size
+        except OSError:
+            return 0
+
     def _is_ready(self, filename: str) -> bool:
-        path = self._path(filename)
-        return path.exists() and path.stat().st_size >= self.min_audio_bytes
+        return self._size_bytes(filename) >= self.min_audio_bytes
 
     def _items(self) -> list[AudioLibraryItem]:
         return [self._item(entry) for entry in self.catalog]
 
     def _item(self, entry: AudioLibraryEntry) -> AudioLibraryItem:
-        ready = self._is_ready(entry.filename)
+        size_bytes = self._size_bytes(entry.filename)
+        ready = size_bytes >= self.min_audio_bytes
         return AudioLibraryItem(
             id=entry.id,
             kind=entry.kind,
@@ -113,7 +137,7 @@ class AudioLibraryService(BaseService):
             license=entry.license,
             attribution=entry.attribution,
             source_page=entry.source_page,
-            size_bytes=self._path(entry.filename).stat().st_size if ready else 0,
+            size_bytes=size_bytes if ready else 0,
         )
 
     # ── Acquisition ──────────────────────────────────────────────────────────

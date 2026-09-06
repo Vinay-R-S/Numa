@@ -202,8 +202,10 @@ def delete_event(
 
 @router.get("/watch/status", response_model=WatchStateResponse)
 def watch_status(current_user: dict = Depends(get_current_user)):
-    _ = current_user
-    return WatchStateResponse(**watch.get_watch_state())
+    # Scoped to the caller. This discarded the identity and returned the
+    # process-global record, so one user saw another's channel and resource ids
+    # (NUMA-142 P6, PLAN 8).
+    return WatchStateResponse(**watch.get_watch_state(_optional_user_id(current_user)))
 
 
 @router.post("/watch/start", response_model=WatchStartResponse)

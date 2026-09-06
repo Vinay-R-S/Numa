@@ -6,13 +6,13 @@
  * `components/calendar/api.ts` mapping did.
  */
 import type { CalendarEvent, CalendarEventDto, CalendarEventPayload } from "./calendar.types"
-import { toDateParam } from "./calendar.utils"
+import { fromDateParam, toDateParam } from "./calendar.utils"
 
 export function toCalendarEvent(dto: CalendarEventDto): CalendarEvent {
   return {
     id: dto.id,
     title: dto.title,
-    date: new Date(dto.date),
+    date: fromDateParam(dto.date),
     startTime: dto.startTime,
     endTime: dto.endTime,
     description: dto.description,

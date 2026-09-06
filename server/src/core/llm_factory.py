@@ -59,6 +59,119 @@ def _timeout_from_env(name: str, default: float) -> float:
     return value if value > 0 else default
 
 
+# Built on first use and reused: the base class lives in langchain_core, and
+# this module keeps every langchain import lazy so importing it stays cheap.
+_feedback_handler_class = None
+
+
+def _rate_limiter_callbacks(provider: str) -> list:
+    """A callback that tells the rate limiter how each provider call went.
+
+    `record_success` and `record_failure` had no call sites anywhere in the
+    server, so `consecutive_failures` never moved, `circuit_open_until` was
+    never set, and `_is_circuit_open` always answered False. A provider that
+    started refusing every request kept being handed back at full quota and the
+    fallback chain `get_llm_with_fallback` exists to provide could never fire
+    (NUMA-142 P6, PLAN 9).
+
+    Attached as a constructor kwarg rather than through `with_config`, because
+    that returns a RunnableBinding and the agents call `bind_tools` on this
+    object. Nothing here may raise: a bookkeeping failure must not take down the
+    model call it is observing.
+    """
+    global _feedback_handler_class
+
+    if _feedback_handler_class is None:
+        try:
+            from langchain_core.callbacks import BaseCallbackHandler
+        except Exception:
+            log.debug("langchain_core callbacks unavailable; rate-limiter feedback is off")
+            return []
+
+        class _RateLimiterFeedback(BaseCallbackHandler):
+            def __init__(self, provider_name: str):
+                self.provider_name = provider_name
+
+            def on_llm_end(self, response, **kwargs) -> None:
+                try:
+                    from .rate_limiter import rate_limiter
+                    output = getattr(response, "llm_output", None) or {}
+                    usage = output.get("token_usage") or output.get("usage") or {}
+                    tokens = int(usage.get("total_tokens") or 0)
+                    rate_limiter.record_success(self.provider_name, tokens_used=tokens)
+                except Exception:
+                    log.debug("Rate-limiter success feedback failed", exc_info=True)
+
+            def on_llm_error(self, error, **kwargs) -> None:
+                try:
+                    from .rate_limiter import rate_limiter
+                    text = str(error).lower()
+                    if not _is_capacity_error(text):
+                        # The circuit breaker exists for a provider that cannot
+                        # take the call right now. A retired model id, an
+                        # over-long context or a bad key is the request's fault
+                        # and repeats no matter which provider answers, so
+                        # recording it would open the breaker for every user of
+                        # this process (NUMA-142 P6 review).
+                        return
+                    rate_limiter.record_failure(
+                        self.provider_name,
+                        is_rate_limit=_is_rate_limit_error(text),
+                    )
+                except Exception:
+                    log.debug("Rate-limiter failure feedback failed", exc_info=True)
+
+        _feedback_handler_class = _RateLimiterFeedback
+
+    return [_feedback_handler_class(provider)]
+
+
+# Text that means "this provider cannot take the call right now": a 429, a
+# transport failure, or a 5xx. Anything else - a bad model id, an over-long
+# prompt, an invalid key - is a property of the request and must not open the
+# circuit breaker for everyone (NUMA-142 P6 review).
+_RATE_LIMIT_MARKERS = (
+    "429",
+    "rate limit",
+    "rate_limit",
+    "too many requests",
+    "quota exceeded",
+    "resource_exhausted",
+)
+
+_TRANSIENT_MARKERS = (
+    "timeout",
+    "timed out",
+    "connection error",
+    "connection reset",
+    "connection refused",
+    "temporarily unavailable",
+    "service unavailable",
+    "bad gateway",
+    "internal server error",
+    " 500",
+    " 502",
+    " 503",
+    " 504",
+    "overloaded",
+    "apiconnectionerror",
+)
+
+
+def _is_rate_limit_error(text: str) -> bool:
+    return any(marker in text for marker in _RATE_LIMIT_MARKERS)
+
+
+def _is_capacity_error(text: str) -> bool:
+    if _is_rate_limit_error(text):
+        return True
+    # `insufficient_quota` is a permanent billing state, not back-pressure:
+    # retrying elsewhere is right, but zeroing this provider's buckets is not.
+    if "insufficient_quota" in text:
+        return False
+    return any(marker in text for marker in _TRANSIENT_MARKERS)
+
+
 def _llm_timeout() -> float:
     """Per-request deadline for a hosted provider call, in seconds."""
     return _timeout_from_env("LLM_TIMEOUT_SECONDS", _DEFAULT_LLM_TIMEOUT)
@@ -297,6 +410,7 @@ def get_llm(
     final_temp = temperature if temperature is not None else (resolved_temp if resolved_temp is not None else 0.1)
     final_ollama_url = ollama_base_url or resolved_ollama_url
     timeout = _llm_timeout()
+    feedback = _rate_limiter_callbacks(p)
 
     if p == "groq":
         from langchain_groq import ChatGroq
@@ -304,7 +418,10 @@ def get_llm(
         if not keys:
             raise RuntimeError("GROQ_API_KEY is not configured")
         llms = [
-            ChatGroq(model=m, temperature=final_temp, api_key=key, timeout=timeout)
+            ChatGroq(
+                model=m, temperature=final_temp, api_key=key, timeout=timeout,
+                callbacks=feedback,
+            )
             for key in keys
         ]
         return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
@@ -315,7 +432,10 @@ def get_llm(
         if not keys:
             raise RuntimeError("OPENAI_API_KEY is not configured")
         llms = [
-            ChatOpenAI(model=m, temperature=final_temp, api_key=key, timeout=timeout)
+            ChatOpenAI(
+                model=m, temperature=final_temp, api_key=key, timeout=timeout,
+                callbacks=feedback,
+            )
             for key in keys
         ]
         return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
@@ -326,7 +446,10 @@ def get_llm(
         if not keys:
             raise RuntimeError("ANTHROPIC_API_KEY is not configured")
         llms = [
-            ChatAnthropic(model=m, temperature=final_temp, api_key=key, timeout=timeout)
+            ChatAnthropic(
+                model=m, temperature=final_temp, api_key=key, timeout=timeout,
+                callbacks=feedback,
+            )
             for key in keys
         ]
         return llms[0].with_fallbacks(llms[1:]) if len(llms) > 1 else llms[0]
@@ -339,6 +462,7 @@ def get_llm(
         llms = [
             ChatGoogleGenerativeAI(
                 model=m, temperature=final_temp, google_api_key=key, timeout=timeout,
+                callbacks=feedback,
             )
             for key in keys
         ]
@@ -352,6 +476,7 @@ def get_llm(
             # ChatOllama has no timeout field of its own; this reaches the
             # underlying ollama client, which passes it to httpx.
             client_kwargs={"timeout": _ollama_timeout()},
+            callbacks=feedback,
         )
 
     raise ValueError(f"Unsupported provider: {p}")
@@ -451,7 +576,7 @@ def get_llm_with_fallback(
 
     if actual_provider is None:
         log.warning(
-            "All providers exhausted for agent '%s' — using preferred '%s' anyway",
+            "All providers exhausted for agent '%s' - using preferred '%s' anyway",
             agent_name, p,
         )
         actual_provider = p
@@ -459,15 +584,26 @@ def get_llm_with_fallback(
     # If we fell back to a different provider, use that provider's default model
     if actual_provider != p:
         log.info(
-            "Agent '%s' falling back: %s → %s",
+            "Agent '%s' falling back: %s -> %s",
             agent_name, p, actual_provider,
         )
-        final_model = model or DEFAULT_MODELS.get(actual_provider, "")
+        # The caller's model belongs to the preferred provider; carrying it over
+        # to a different one asks for a model that does not exist there. Keep it
+        # only when the fallback provider actually offers it (NUMA-142 P6).
+        final_model = (
+            model
+            if model and model in PROVIDER_MODELS.get(actual_provider, [])
+            else DEFAULT_MODELS.get(actual_provider, "")
+        )
         return get_llm(
             provider=actual_provider,
             model=final_model,
             user_id=user_id,
-            temperature=temperature,
+            # The stored api key belongs to the preferred provider, so it is
+            # deliberately not carried over; the user's temperature and Ollama
+            # host are provider-independent and were being dropped.
+            temperature=temperature if temperature is not None else resolved_temp,
+            ollama_base_url=resolved_ollama_url if actual_provider == "ollama" else None,
         )
 
     # Use the originally resolved provider

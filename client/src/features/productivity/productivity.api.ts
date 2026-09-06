@@ -23,7 +23,7 @@
  *   endpoint's error.
  */
 import { expectBody, http } from "@/lib/http"
-import { GITHUB_AUTHORIZE_URL_PREFIX } from "./productivity.constants"
+import { GITHUB_AUTHORIZE_URL_PREFIX, assertExternalUrl } from "@/lib/externalUrl"
 import {
   githubAuthStatusSchema,
   githubConnectResponseSchema,
@@ -53,11 +53,9 @@ export async function connectGitHub(): Promise<string> {
     message
   )
 
-  if (!data.authorization_url.startsWith(GITHUB_AUTHORIZE_URL_PREFIX)) {
-    throw new Error("Invalid GitHub authorization URL")
-  }
-
-  return data.authorization_url
+  // The shared guard, so the same check covers Google, Slack and the calendar
+  // reconnect URL rather than GitHub alone (NUMA-142 P6, PLAN 8).
+  return assertExternalUrl(data.authorization_url, [GITHUB_AUTHORIZE_URL_PREFIX], "GitHub")
 }
 
 export function connectGitHubToken(accessToken: string): Promise<GitHubAuthStatus> {

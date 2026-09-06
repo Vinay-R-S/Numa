@@ -11,12 +11,11 @@ from typing import List, Optional, Tuple
 from ..common import (
     _get_llm,
     _history_to_messages,
-    _parse_due_datetime,
     _require_master_dependencies,
 )
 from ..state import TaskAgentState
 from ...memory import memory_service
-from ...tasks import service as task_service
+from ...tasks.agent_tools import make_task_tools
 
 
 TASK_SUBAGENT_SYSTEM_PROMPT = (
@@ -31,92 +30,14 @@ TASK_SUBAGENT_SYSTEM_PROMPT = (
 
 
 def _task_toolset(tool_decorator, user_id: str):
-    @tool_decorator
-    def create_task(
-        title: str,
-        description: str = "",
-        status: str = "planned",
-        due_datetime: str = "",
-    ) -> str:
-        """Create a task with optional description, status, and due datetime."""
-        try:
-            normalized_status = status.strip().lower() or "planned"
-            if normalized_status not in {"planned", "inprogress", "completed", "pending"}:
-                return "Invalid status. Use planned, inprogress, completed, or pending."
+    """The shared task tools, labelled for the master agent.
 
-            due = _parse_due_datetime(due_datetime)
-            task = task_service.create_task_for_user(
-                user_id=user_id,
-                title=title.strip(),
-                description=description.strip() or None,
-                status=normalized_status,
-                due_date=due,
-                source_name="NUMA Agent",
-            )
-            return f"Task created: {task.get('title')} [{task.get('status')}]."
-        except Exception as exc:
-            return f"Error creating task: {exc}"
-
-    @tool_decorator
-    def update_task(
-        title: str,
-        new_title: str = "",
-        description: str = "",
-        status: str = "",
-    ) -> str:
-        """Update an existing task identified by title."""
-        try:
-            normalized_status = status.strip().lower() or None
-            if normalized_status and normalized_status not in {"planned", "inprogress", "completed", "pending"}:
-                return "Invalid status. Use planned, inprogress, completed, or pending."
-
-            if not any((new_title.strip(), description.strip(), normalized_status)):
-                return "Please provide at least one update field: new_title, description, or status."
-
-            updated = task_service.update_task_by_title(
-                user_id=user_id,
-                title=title.strip(),
-                new_title=new_title.strip() or None,
-                description=description.strip() or None,
-                status=normalized_status,
-            )
-            if not updated:
-                return f"Task not found: {title}."
-
-            return f"Task updated: {updated.get('title')} [{updated.get('status')}]."
-        except Exception as exc:
-            return f"Error updating task: {exc}"
-
-    @tool_decorator
-    def delete_task(title: str) -> str:
-        """Delete a task by title."""
-        try:
-            deleted = task_service.delete_task_by_title(user_id=user_id, title=title.strip())
-            if deleted == 0:
-                return f"Task not found: {title}."
-            return f"Task deleted: {title}."
-        except Exception as exc:
-            return f"Error deleting task: {exc}"
-
-    @tool_decorator
-    def list_tasks(limit: int = 10) -> str:
-        """List recent tasks up to the given limit."""
-        try:
-            safe_limit = max(1, min(limit, 50))
-            tasks = task_service.list_recent_tasks(user_id=user_id, limit=safe_limit)
-            if not tasks:
-                return "You have no tasks right now."
-
-            lines = ["Recent tasks:"]
-            for task in tasks:
-                due = task.get("due_date")
-                due_text = due.isoformat() if isinstance(due, datetime) else (str(due) if due else "none")
-                lines.append(f"- {task.get('title', 'Untitled')} [{task.get('status', 'planned')}] due={due_text}")
-            return "\n".join(lines)
-        except Exception as exc:
-            return f"Error listing tasks: {exc}"
-
-    return [create_task, update_task, delete_task, list_tasks]
+    This module used to re-implement create/update/delete/list verbatim, with
+    one divergence: the copy had no `priority` argument, so the master agent
+    could not set a task's priority while every sub-agent could (NUMA-142 P6,
+    PLAN 10).
+    """
+    return make_task_tools(tool_decorator, user_id, source_name="NUMA Agent")
 
 
 @lru_cache(maxsize=64)

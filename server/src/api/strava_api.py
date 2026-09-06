@@ -254,7 +254,18 @@ class StravaAPI:
                 return response.json()
             if response.status_code == 401:
                 self._access_token = None
-                headers = {"Authorization": f"Bearer {self._get_access_token()}"}
+                # A failed refresh returns None, which used to be interpolated
+                # into the header as the literal string "Bearer None" and sent
+                # to Strava (NUMA-142 P6, PLAN 7).
+                refreshed = self._get_access_token()
+                if not refreshed:
+                    log.warning(
+                        "Strava request to %s got 401 and the token refresh failed",
+                        endpoint,
+                    )
+                    return None
+                self._access_token = refreshed
+                headers = {"Authorization": f"Bearer {refreshed}"}
                 response = requests.get(
                     f"{self.API_BASE}{endpoint}",
                     headers=headers,

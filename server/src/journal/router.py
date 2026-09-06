@@ -7,6 +7,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth.dependencies import get_current_user
+from ..core.errors import PublicHTTPException
 from .repository import journal_repository
 from .schemas import (
     JournalEntryCreate,
@@ -21,6 +22,16 @@ from .schemas import (
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/journal", tags=["journal"])
+
+# The exception text used to be interpolated into 500 bodies at four points
+# here, which carried driver, schema and provider detail to the caller and
+# bypassed the NUMA-134 redaction (it only filters log records). The reason is
+# logged; the caller is told what failed (NUMA-142 P6, PLAN 8).
+
+
+def _server_error(message: str, exc: Exception) -> HTTPException:
+    log.error("%s: %s", message, exc, exc_info=True)
+    return HTTPException(500, message)
 
 
 def _row_to_entry(d: dict) -> JournalEntryOut:
@@ -68,7 +79,7 @@ def auto_generate_journal(current_user: dict = Depends(get_current_user)):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except Exception as exc:
-        raise HTTPException(500, f"Auto-generation failed: {exc}")
+        raise _server_error("Auto-generation failed", exc)
 
     entry_date = generated.get("entry_date", date.today())
 
@@ -82,7 +93,7 @@ def auto_generate_journal(current_user: dict = Depends(get_current_user)):
             tags=generated.get("tags", []),
         )
     except Exception as exc:
-        raise HTTPException(500, f"Failed to save auto-generated entry: {exc}")
+        raise _server_error("Failed to save the auto-generated entry", exc)
     return _row_to_entry(entry)
 
 
@@ -116,7 +127,7 @@ def create_entry(body: JournalEntryCreate, current_user: dict = Depends(get_curr
             tags=body.tags,
         )
     except Exception as exc:
-        raise HTTPException(500, f"Failed to save journal entry: {exc}")
+        raise _server_error("Failed to save the journal entry", exc)
     return _row_to_entry(entry)
 
 
@@ -146,7 +157,7 @@ def update_entry(
     try:
         entry = journal_repository.update_fields(user_id, entry_date, fields)
     except Exception as exc:
-        raise HTTPException(500, f"Failed to update journal entry: {exc}")
+        raise _server_error("Failed to update the journal entry", exc)
     if not entry:
         raise HTTPException(404, f"No journal entry for {entry_date}")
     return _row_to_entry(entry)
@@ -175,8 +186,18 @@ def summarize_day(
 
     target_date = body.entry_date or date.today()
 
-    from .service import generate_daily_summary
-    summary = generate_daily_summary(user_id, target_date)
+    from .service import SummaryUnavailable, generate_daily_summary
+
+    try:
+        summary = generate_daily_summary(user_id, target_date)
+    except SummaryUnavailable as exc:
+        # Not persisted and not returned as the summary. The failure text used
+        # to be written through set_summary and shown as the user's AI summary
+        # on every later load (NUMA-142 P6, PLAN 7).
+        log.warning("Daily summary unavailable for %s: %s", target_date, exc)
+        # PublicHTTPException: the message is written for the user, and the 5xx
+        # redaction would otherwise flatten it (NUMA-142 P6 review).
+        raise PublicHTTPException(503, str(exc)) from exc
 
     try:
         journal_repository.set_summary(user_id, target_date, summary)

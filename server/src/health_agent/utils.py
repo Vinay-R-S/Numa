@@ -5,22 +5,25 @@ health router god-file so both the router and the sync layer can share them.
 """
 from __future__ import annotations
 
-import os
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List, Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
+
+from ..core.timezones import resolve_timezone
+
+# One retention window. It was written as a bare 8 in four places - the purge
+# job, the snapshot read, the diet builder and the weekly summary - so the read
+# window and the purge window could silently drift apart (NUMA-142 P6, PLAN 10).
+HEALTH_RETENTION_DAYS = 8
 
 
 def _resolve_timezone_name(name: Optional[str]) -> ZoneInfo:
-    fallback = os.getenv("TIMEZONE", "Asia/Kolkata")
-    for candidate in (name, fallback, "UTC"):
-        if not candidate:
-            continue
-        try:
-            return ZoneInfo(candidate)
-        except ZoneInfoNotFoundError:
-            continue
-    return ZoneInfo("UTC")
+    """Kept as the health module's name for `core.timezones.resolve_timezone`.
+
+    The local copy caught only `ZoneInfoNotFoundError`, so a malformed profile
+    value raised `ValueError` straight out of the fallback (NUMA-142 P6).
+    """
+    return resolve_timezone(name)
 
 
 def _millis(dt: datetime) -> int:

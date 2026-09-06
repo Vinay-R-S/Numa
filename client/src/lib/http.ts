@@ -20,7 +20,7 @@
  */
 import type { ZodType } from "zod"
 
-import { endSession, getToken } from "./session"
+import { endApiSession, getToken } from "./session"
 
 const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL || ""
 
@@ -118,10 +118,23 @@ async function fetchWithTimeout(
 ): Promise<Response> {
   if (!timeoutMs) return fetch(url, init)
 
-  const controller = new AbortController()
   const callerSignal = init.signal
-  const abortFromCaller = () => controller.abort()
-  callerSignal?.addEventListener("abort", abortFromCaller, { once: true })
+
+  // Already aborted before we started. `addEventListener("abort")` never fires
+  // for a signal that has already aborted, so a cancelled caller still hit the
+  // network whenever a timeout was set (NUMA-142 P6, PLAN 7).
+  if (callerSignal?.aborted) {
+    throw callerSignal.reason instanceof Error
+      ? callerSignal.reason
+      : new DOMException("Aborted", "AbortError")
+  }
+
+  const controller = new AbortController()
+  // Deliberately not detached in `finally`. That ran as soon as the headers
+  // arrived, so aborting while the body was still streaming cancelled nothing.
+  // `{ once: true }` removes it after it fires, and the controller becomes
+  // garbage with the response either way.
+  callerSignal?.addEventListener("abort", () => controller.abort(), { once: true })
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
@@ -132,7 +145,7 @@ async function fetchWithTimeout(
     }
     throw error
   } finally {
-    callerSignal?.removeEventListener("abort", abortFromCaller)
+    // Only the timer: reading a slow body is never counted against the deadline.
     clearTimeout(timeoutId)
   }
 }
@@ -178,7 +191,10 @@ export async function request<T>(path: string, options: RequestOptions<T> = {}):
 
     // The token is gone or no longer accepted: drop it and send the user to
     // sign in rather than leaving them on a page that can only keep failing.
-    if (authFailure) endSession()
+    // `endApiSession`, not `endSession`: a routine JWT expiry must leave the
+    // Supabase session alone so the protected layout can re-mint silently
+    // (NUMA-142 P6 review).
+    if (authFailure) endApiSession()
 
     throw new ApiError(res.status, detail, authFailure)
   }

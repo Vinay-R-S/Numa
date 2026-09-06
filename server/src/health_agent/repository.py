@@ -8,7 +8,7 @@ from datetime import date, datetime
 from typing import Dict, List, Optional
 
 from ..core.base import BaseRepository
-from ..core.db import get_db, row_to_dict
+from ..core.db import get_db, row_to_dict, using
 
 _SNAPSHOT_COLS = (
     "id, user_id, source, snapshot_date, steps, active_minutes, "
@@ -147,6 +147,51 @@ class HealthRepository(BaseRepository):
                     "ORDER BY snapshot_date DESC",
                     (user_id, cutoff),
                 )
+            rows = cur.fetchall()
+            return [row_to_dict(cur, r) for r in rows]
+
+    #: The metrics every caller of `day_metrics` reads, in one place. Four
+    #: modules each selected their own subset with their own SQL, so the
+    #: repository governed two of six read paths (NUMA-143 P7, PLAN 10).
+    DAY_METRIC_COLS = (
+        "source, steps, active_minutes, calories, distance_km, "
+        "sleep_hours, heart_rate_bpm, heart_points"
+    )
+
+    def day_metrics(
+        self, user_id: str, snapshot_date: date, *, conn=None,
+    ) -> List[Dict]:
+        """Every source's snapshot for one day.
+
+        Takes an optional caller connection so a module batching statements on
+        one connection can use this without opening a second - which is why the
+        dashboard, journal, day planner and master agent each hand-rolled this
+        query instead.
+        """
+        with using(conn) as active:
+            cur = active.cursor()
+            cur.execute(
+                "SELECT " + self.DAY_METRIC_COLS + " FROM public.health_snapshots "
+                "WHERE user_id = %s AND snapshot_date = %s",
+                (user_id, snapshot_date),
+            )
+            rows = cur.fetchall()
+            return [row_to_dict(cur, r) for r in rows]
+
+    def daily_totals_between(
+        self, user_id: str, source: str, start: date, end: date, *, conn=None,
+    ) -> List[Dict]:
+        """One source's per-day totals across an inclusive date range."""
+        with using(conn) as active:
+            cur = active.cursor()
+            cur.execute(
+                "SELECT snapshot_date, steps, calories, distance_km "
+                "FROM public.health_snapshots "
+                "WHERE user_id = %s AND source = %s "
+                "  AND snapshot_date >= %s AND snapshot_date <= %s "
+                "ORDER BY snapshot_date",
+                (user_id, source, start, end),
+            )
             rows = cur.fetchall()
             return [row_to_dict(cur, r) for r in rows]
 

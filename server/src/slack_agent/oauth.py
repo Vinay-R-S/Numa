@@ -13,6 +13,7 @@ import logging
 import httpx
 
 from ..core.errors import AppError
+from ..core.oauth_state import verify_state
 from .config import _client_id, _client_secret, _frontend_url, _redirect_uri
 from .events import fetch_latest_slack_for_user
 from .persistence import _upsert_slack_auth
@@ -52,9 +53,16 @@ def frontend_redirect_url() -> str:
 async def complete_oauth_connection(code: str, state: str) -> str:
     """Exchange the code, persist the auth row, kick the first sync.
 
-    `state` carries the NUMA user_id set during /connect. Returns the frontend
-    URL to redirect to.
+    `state` is the signed value issued by /connect; it is verified before it is
+    trusted, because this route has no other authentication (NUMA-142 P6,
+    PLAN 8). Returns the frontend URL to redirect to.
     """
+    # Before the exchange, not after: an unverifiable state means this callback
+    # is not ours, and there is no reason to spend a code exchange on it.
+    user_id = verify_state(state)
+    if not user_id:
+        raise AppError("Invalid or expired OAuth state", status_code=400)
+
     data = await exchange_oauth_code(code)
 
     authed_user = data.get("authed_user", {})
@@ -66,9 +74,7 @@ async def complete_oauth_connection(code: str, state: str) -> str:
     access_token = user_token_val or bot_token_val
     team_name = team.get("name")
 
-    user_id = state.strip() if state.strip() else None
-
-    if user_id and access_token:
+    if access_token:
         _upsert_slack_auth(
             user_id=user_id,
             slack_user_id=slack_user_id,

@@ -12,6 +12,7 @@ import {
   updateCalendarEvent,
 } from "@/features/calendar/calendar.api"
 import { toEventPayload } from "@/features/calendar/calendar.transforms"
+import { fromDateParam } from "@/features/calendar/calendar.utils"
 import { loadSessionMessages, saveSessionMessages } from "@/lib/useSessionMessages"
 
 const CALENDAR_AGENT_SESSION_KEY = "numa:session:calendar-agent-chat"
@@ -45,6 +46,13 @@ interface CalendarStore {
 // Cache duration: 5 minutes
 const CACHE_DURATION = 5 * 60 * 1000
 
+// In-flight tracking lives here, not in the `loading` UI flag. `loading` is only
+// set on the very first fetch (so a refresh does not blank the grid), which made
+// the `if (loading) return` dedup guard unreachable from the second fetch on:
+// two overlapping fetches both ran and the slower one overwrote the fresher
+// result (NUMA-142 P6, PLAN 7).
+let eventsFetchInFlight = false
+
 export const useCalendarStore = create<CalendarStore>((set, get) => ({
   events: [],
   loading: false,
@@ -54,10 +62,10 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
   agentMessages: loadSessionMessages(CALENDAR_AGENT_SESSION_KEY, DEFAULT_CALENDAR_AGENT_MESSAGES),
 
   fetchEvents: async (forceFresh = false) => {
-    const { lastFetchedAt, loading } = get()
+    const { lastFetchedAt } = get()
     const now = Date.now()
 
-    if (loading) return
+    if (eventsFetchInFlight) return
 
     if (!forceFresh && lastFetchedAt && now - lastFetchedAt < CACHE_DURATION) {
       return
@@ -67,6 +75,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
       set({ loading: true })
     }
 
+    eventsFetchInFlight = true
     try {
       set({ error: null })
       const data = await fetchCalendarEvents(forceFresh ? { refresh: true } : undefined)
@@ -82,6 +91,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
         set({ error: err instanceof Error ? err.message : "Failed to load calendar events" })
       }
     } finally {
+      eventsFetchInFlight = false
       set({ loading: false })
     }
   },
@@ -91,7 +101,11 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     const tempEvent: CalendarEvent = {
       id: `temp-${Date.now()}`,
       title: payload.title,
-      date: new Date(payload.date),
+      // `fromDateParam`, not `new Date`: the wire format is `YYYY-MM-DD`, which
+      // JS parses as UTC midnight, so west of UTC the optimistic event rendered
+      // in the previous day's cell and jumped when the server reply replaced it
+      // (NUMA-142 P6 review).
+      date: fromDateParam(payload.date),
       startTime: payload.startTime,
       endTime: payload.endTime,
       description: payload.description,

@@ -1,14 +1,20 @@
 name: CI
 
+# `develop` included. Every phase of the restructure has been merged into
+# develop through PRs, and none of it ever reached main, so CI - including the
+# gitleaks job added specifically to stop the next credential leak - had not run
+# on any of this work (NUMA-143 P7).
 on:
   push:
     branches:
       - main
       - master
+      - develop
   pull_request:
     branches:
       - main
       - master
+      - develop
 
 jobs:
   secret-scan:
@@ -50,7 +56,42 @@ jobs:
             ./gitleaks detect --source . --redact --no-banner --exit-code 1 --no-git
           fi
 
-  test-suites:
+  unit-tests:
+    name: Unit tests (server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      # The whole server requirement set, not just pytest. These tests import
+      # `src/` and `main.py`, which is the point of them: the suite that ran
+      # here before imported nothing from the application, so a green run said
+      # nothing about the code (NUMA-143 P7).
+      - name: Install server dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r server/requirements.txt
+          python -m pip install pytest
+
+      - name: Run unit tests
+        env:
+          # Never a real credential: these tests must not need one, and a job
+          # that quietly depends on a secret stops running for forks.
+          JWT_SECRET: test-jwt-secret-not-a-real-key
+          TIMEZONE: Asia/Kolkata
+        # A directory, not a hand-maintained file list. The previous matrix
+        # named every file explicitly, so a new test file was collected by
+        # nobody and protected nothing until someone remembered to add it.
+        run: python -m pytest tests/unit -q
+
+  legacy-tests:
     name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
     strategy:
@@ -58,22 +99,40 @@ jobs:
       matrix:
         include:
           - suite: Suite 1 - Core Logic
-            paths: tests/test_unit.py tests/test_data_validation.py
+            paths: tests/legacy/test_unit.py tests/legacy/test_data_validation.py
           - suite: Suite 2 - User Workflows
-            paths: tests/test_functional.py tests/test_uat.py tests/test_complex_workflows.py
+            paths: tests/legacy/test_functional.py tests/legacy/test_uat.py tests/legacy/test_complex_workflows.py
           - suite: Suite 3 - Integration and API Contracts
-            paths: tests/test_integration.py tests/test_api_contract.py
+            paths: tests/legacy/test_integration.py tests/legacy/test_api_contract.py
           - suite: Suite 4 - Security Controls
-            paths: tests/test_security.py
+            paths: tests/legacy/test_security.py
           - suite: Suite 5 - Smoke Sanity Regression
-            paths: tests/test_smoke.py tests/test_sanity.py tests/test_regression.py
+            paths: tests/legacy/test_smoke.py tests/legacy/test_sanity.py tests/legacy/test_regression.py
           - suite: Suite 6 - Performance and Edge Cases
-            paths: tests/test_performance.py tests/test_edge_cases.py
+            paths: tests/legacy/test_performance.py tests/legacy/test_edge_cases.py
           - suite: Suite 7 - System and Error Handling
-            paths: tests/test_system.py tests/test_error_handling.py
-          - suite: Suite 8 - Secret Config Checks
-            paths: tests/test_secret_config.py
+            paths: tests/legacy/test_system.py tests/legacy/test_error_handling.py
 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # These import nothing from the application, so bare pytest is enough and
+      # the job stays fast. See tests/README.md for why they are kept.
+      - name: Install test dependency
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Run ${{ matrix.suite }}
+        run: python -m pytest ${{ matrix.paths }}
+
+  secret-config-checks:
+    name: Suite 8 - Secret Config Checks
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -86,7 +145,7 @@ jobs:
       - name: Install test dependency
         run: python -m pip install --upgrade pip pytest
 
-      - name: Run ${{ matrix.suite }}
+      - name: Run secret config checks
         env:
           RUN_SECRET_INTEGRATION_TESTS: ${{ secrets.RUN_SECRET_INTEGRATION_TESTS }}
           BACKEND_URL: ${{ secrets.BACKEND_URL }}
@@ -116,4 +175,4 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-        run: python -m pytest ${{ matrix.paths }}
+        run: python -m pytest tests/secret_checks -q

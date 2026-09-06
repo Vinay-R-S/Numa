@@ -9,6 +9,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlsplit
 
 import psycopg2
 from psycopg2.pool import PoolError, ThreadedConnectionPool
@@ -24,7 +25,7 @@ log = logging.getLogger(__name__)
 # handshake overhead and prevents connection exhaustion on Supabase.
 #
 # Existing code that calls ``_get_conn()`` / ``conn.close()`` continues to
-# work unchanged — ``close()`` returns the connection to the pool rather
+# work unchanged - ``close()`` returns the connection to the pool rather
 # than destroying it.  New code should prefer the ``get_db()`` context
 # manager or call ``_put_conn(conn)`` in a finally block.
 
@@ -44,30 +45,105 @@ _DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
 _DB_POOL_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "10"))
 _pool_slots: Optional[threading.BoundedSemaphore] = None
 
+# Set by close_pool(). Shutdown bounds how long it waits for a background job to
+# finish, so a slow job can still call get_db() after the pool is gone; without
+# this flag `_get_pool()` would happily open a brand-new pool against Postgres
+# after shutdown, which is the "too many clients" leak close_pool() exists to
+# prevent (NUMA-142 P6 review).
+_shutting_down = False
+
+
+def _encode_userinfo(raw: str) -> str:
+    """Percent-encode the userinfo of a DSN so `urlsplit` reads it correctly.
+
+    Only characters that would otherwise end the authority are encoded, and only
+    inside the userinfo, so a password already written as `p%40ss` is untouched
+    and still decodes to `p@ss`.
+    """
+    scheme, sep, rest = raw.partition("://")
+    if not sep:
+        return raw
+
+    # Split on the last "/" that precedes the "@", not the first: a "/" inside
+    # the password would otherwise end the authority before `rpartition("@")`
+    # ever ran, and the URL came back unchanged to fail later as a non-numeric
+    # port (NUMA-142 P6 review). Generated passwords contain "/" routinely.
+    at_index = rest.find("@")
+    if at_index == -1:
+        return raw
+
+    boundary = rest.find("/", at_index)
+    authority = rest if boundary == -1 else rest[:boundary]
+    slash = "" if boundary == -1 else "/"
+    tail = "" if boundary == -1 else rest[boundary + 1:]
+
+    userinfo, at, hostport = authority.rpartition("@")
+    if not at:
+        return raw
+
+    encoded = userinfo
+    for char, replacement in (("#", "%23"), ("?", "%3F"), ("/", "%2F")):
+        encoded = encoded.replace(char, replacement)
+
+    return f"{scheme}://{encoded}@{hostport}{slash}{tail}"
+
 
 def _parse_database_url():
+    """Split DATABASE_URL into psycopg2 connection parameters.
+
+    Hand-rolled string slicing got three common URL shapes wrong (NUMA-142 P6,
+    PLAN 7):
+
+    - the query string was never removed, so the `?sslmode=require` form
+      Supabase hands out (and the `?pgbouncer=true` its pooler adds) produced
+      `dbname="postgres?sslmode=require"` and killed the boot with
+      `database "postgres?sslmode=require" does not exist`;
+    - the password was never percent-decoded, so one stored as `p%40ss` was
+      sent literally and authentication failed;
+    - a URL with no password has no colon in its userinfo, so `find(":")`
+      returned -1 and the slices produced a silently wrong user and password
+      rather than an error.
+
+    `urlsplit` splits userinfo on the last `@`, which is what the old `rfind`
+    was there for, so an unencoded `@` inside a password still works.
+
+    libpq parameters in the query string are deliberately not forwarded:
+    `sslmode` is pinned to `require` as policy, and honouring a URL that asked
+    to turn TLS off would be a downgrade this function should not grant.
     """
-    Parse DATABASE_URL manually to handle the '@' character inside the password.
-    Format: postgresql://user:password@host:port/dbname
-    """
-    raw = os.environ["DATABASE_URL"].replace("postgresql://", "").replace("postgres://", "")
+    raw = os.environ["DATABASE_URL"].strip()
 
-    at = raw.rfind("@")
-    credentials, host_part = raw[:at], raw[at + 1:]
+    # A literal `#` or `?` in the password is legal in a URL people actually
+    # paste, and `urlsplit` would read it as the start of the fragment or query
+    # and then report a missing database name. Percent-encode the userinfo
+    # before splitting so those keep working, exactly as they did under the
+    # hand-rolled `rfind("@")` this replaced (NUMA-142 P6 review).
+    parts = urlsplit(_encode_userinfo(raw))
 
-    colon = credentials.find(":")
-    user, password = credentials[:colon], credentials[colon + 1:]
+    if parts.scheme not in ("postgresql", "postgres"):
+        raise ValueError(f"DATABASE_URL has an unsupported scheme: {parts.scheme!r}")
 
-    host_and_port, dbname = host_part.split("/", 1)
-    if ":" in host_and_port:
-        host, port = host_and_port.rsplit(":", 1)
-    else:
-        host, port = host_and_port, "5432"
+    dbname = parts.path.lstrip("/")
+    if not dbname:
+        raise ValueError("DATABASE_URL is missing a database name")
+
+    host = parts.hostname
+    if not host:
+        raise ValueError("DATABASE_URL is missing a host")
+
+    try:
+        port = parts.port or 5432
+    except ValueError as exc:
+        raise ValueError("DATABASE_URL has a non-numeric port") from exc
+
+    # urlsplit leaves these percent-encoded; psycopg2 wants the decoded value.
+    user = unquote(parts.username or "")
+    password = unquote(parts.password or "")
 
     return {
         "host": host,
-        "port": int(port),
-        "dbname": dbname,
+        "port": port,
+        "dbname": unquote(dbname),
         "user": user,
         "password": password,
         "sslmode": "require",
@@ -85,6 +161,9 @@ def _get_pool() -> ThreadedConnectionPool:
         # Double-check after acquiring lock
         if _pool is not None and not _pool.closed:
             return _pool
+
+        if _shutting_down:
+            raise PoolError("The database pool is closed: the app is shutting down")
 
         params = _parse_database_url()
         _pool = ThreadedConnectionPool(
@@ -223,7 +302,7 @@ def _put_conn(conn) -> None:
 
 @contextmanager
 def get_db():
-    """Context manager for database connections — recommended for new code.
+    """Context manager for database connections - recommended for new code.
 
     Usage::
 
@@ -245,10 +324,14 @@ def close_pool() -> None:
     Nothing closed the pool before, so a restart left its sockets for Postgres
     to time out - which on a small connection allowance is the difference
     between restarting cleanly and restarting into "too many clients".
-    Idempotent, and `_get_pool()` rebuilds on the next call if one comes.
+    Idempotent. A later `_get_pool()` refuses rather than rebuilding: a
+    background job that outran the bounded shutdown wait used to open a fresh
+    pool after the app had gone (NUMA-142 P6 review). `reopen_pool()` lifts the
+    flag for a process that shuts a pool and keeps running, such as a test.
     """
-    global _pool, _pool_slots
+    global _pool, _pool_slots, _shutting_down
     with _pool_lock:
+        _shutting_down = True
         pool = _pool
         _pool = None
         _pool_slots = None
@@ -261,6 +344,32 @@ def close_pool() -> None:
         log.info("Database connection pool closed.")
     except Exception:
         log.warning("Failed to close the database connection pool", exc_info=True)
+
+
+def reopen_pool() -> None:
+    """Allow the pool to be rebuilt after `close_pool()`. For tests and scripts."""
+    global _shutting_down
+    with _pool_lock:
+        _shutting_down = False
+
+
+@contextmanager
+def using(conn=None):
+    """Yield the caller's connection, or a pooled one this closes itself.
+
+    Lets a repository method be called both standalone and inside a caller's
+    existing transaction. Four modules hand-rolled their own `health_snapshots`
+    SQL precisely because the repository always opened its own connection, and
+    they batch many statements on one (`dashboard` runs 18, and its per-query
+    rollback depends on sharing them). Borrowing a connection is never closed
+    here: the owner opened it and the owner closes it (NUMA-143 P7, PLAN 10).
+    """
+    if conn is not None:
+        yield conn
+        return
+
+    with get_db() as owned:
+        yield owned
 
 
 def row_to_dict(cursor, row) -> dict:

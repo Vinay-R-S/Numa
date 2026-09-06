@@ -14,11 +14,22 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     let cancelled = false
 
+    // Never `void`-discarded: a throw from the fetch inside became an
+    // unhandled rejection and the pending flag stayed set forever, so every
+    // later page load retried the same failing bootstrap (NUMA-142 P6, PLAN 7).
     const maybeRunBootstrap = async (token: string) => {
       if (!hasIntegrationBootstrapPending()) return
-      const result = await runIntegrationBootstrap(token)
-      if (result === "done" && !cancelled) {
-        router.replace("/home")
+      try {
+        const result = await runIntegrationBootstrap(token)
+        // "retry" is not success: navigating on it bounced a user who deep
+        // linked to /calendar or /settings to /home because the backend was
+        // briefly down (NUMA-142 P6 review).
+        if (result === "done" && !cancelled) {
+          router.replace("/home")
+        }
+      } catch {
+        // The flag stays set on purpose: the next load retries. Only a
+        // completed run clears it.
       }
     }
 
@@ -26,7 +37,7 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
       const token = getToken()
       if (token && !isTokenExpired(token)) {
         if (!cancelled) setCheckingAuth(false)
-        void maybeRunBootstrap(token)
+        void maybeRunBootstrap(token).catch(() => undefined)
         return
       }
 
@@ -38,8 +49,13 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
       if (token) clearToken()
 
       const { data } = await supabase.auth.getSession()
+      if (cancelled) return
+
       const supabaseToken = data.session?.access_token
       if (!supabaseToken) {
+        // `cancelled` guarded the state setters but none of the three
+        // navigations, so an unmounted layout still redirected the page the
+        // user had already moved to (NUMA-142 P6, PLAN 7).
         router.replace("/auth")
         return
       }
@@ -51,16 +67,18 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
           body: JSON.stringify({ supabase_token: supabaseToken }),
         })
         const json = await res.json()
-        if (!res.ok || !json.access_token) {
+        if (cancelled) return
+
+        if (!res.ok || typeof json.access_token !== "string" || !json.access_token) {
           router.replace("/auth")
           return
         }
 
         storeToken(json.access_token)
         if (!cancelled) setCheckingAuth(false)
-        void maybeRunBootstrap(json.access_token)
+        void maybeRunBootstrap(json.access_token).catch(() => undefined)
       } catch {
-        router.replace("/auth")
+        if (!cancelled) router.replace("/auth")
       }
     }
 

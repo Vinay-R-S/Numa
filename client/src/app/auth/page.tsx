@@ -1,13 +1,17 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Mail, Lock, User, Eye, EyeOff, Check, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import { markIntegrationBootstrapPending } from "@/lib/bootstrapIntegrations";
+import {
+  clearIntegrationBootstrapPending,
+  markIntegrationBootstrapPending,
+} from "@/lib/bootstrapIntegrations";
+import { http } from "@/lib/http";
 import { storeToken } from "@/lib/session"
 
 type Mode = "signin" | "signup";
@@ -19,6 +23,19 @@ const passwordChecks = [
   { label: "Number",        test: (p: string) => /[0-9]/.test(p) },
   { label: "Special char",  test: (p: string) => /[^A-Za-z0-9]/.test(p) },
 ];
+
+// The callback redirects here with `?error=` on every OAuth failure, and this
+// page never read it, so a failed sign-in looked like nothing had happened
+// (NUMA-142 P6, PLAN 7). Codes the callback emits get a sentence; anything else
+// falls back to a generic line rather than rendering backend text verbatim.
+const OAUTH_ERROR_MESSAGES: Record<string, string> = {
+  oauth_failed: "Sign-in with that provider did not complete. Please try again.",
+  exchange_failed: "We could not finish signing you in. Please try again.",
+};
+
+function oauthErrorMessage(code: string): string {
+  return OAUTH_ERROR_MESSAGES[code] ?? "Sign-in did not complete. Please try again.";
+}
 
 export default function AuthPage() {
   const router = useRouter();
@@ -32,6 +49,16 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    // `window.location`, not `useSearchParams`: this page is statically
+    // prerendered, and reading the hook here without a Suspense boundary fails
+    // `next build` with a CSR-bailout error (NUMA-142 P6 review). The value is
+    // only needed after hydration, which is exactly what an effect gives.
+    const code = new URLSearchParams(window.location.search).get("error");
+    if (!code) return;
+    setError(oauthErrorMessage(code));
+  }, []);
 
   const checks = useMemo(
     () => passwordChecks.map((c) => ({ ...c, passed: c.test(password) })),
@@ -65,20 +92,26 @@ export default function AuthPage() {
           ? { email, password }
           : { email, password, full_name: name };
 
-      const res = await fetch(`/api${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+      // `lib/http`, not a hand-rolled fetch: it owns the `/api` prefix, the
+      // JSON headers and the `{ detail }` envelope this page was re-implementing
+      // (NUMA-142 P6, PLAN 10). A 401 from a wrong password carries no
+      // `WWW-Authenticate: Bearer`, so it stays an ordinary error here rather
+      // than ending a session that does not exist yet.
+      const data = await http.post<{ access_token?: string }>(endpoint, body, {
+        errorMessage: "Something went wrong.",
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.detail ?? "Something went wrong.");
+      // Checked, not assumed: a 2xx without a token used to store the string
+      // "undefined" as the session, which then failed every request with a
+      // confusing 401 instead of a clear error here (NUMA-142 P6, PLAN 7).
+      if (typeof data?.access_token !== "string" || !data.access_token) {
+        throw new Error("Sign-in did not return a session. Please try again.");
       }
 
-      // Store JWT and redirect (works for both sign-in and sign-up)
       storeToken(data.access_token);
+      if (mode === "signup") {
+        setSuccess("Account created. Taking you to your dashboard.");
+      }
       router.push("/home");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -92,8 +125,7 @@ export default function AuthPage() {
     if (provider === "google") {
       markIntegrationBootstrapPending();
     } else {
-      localStorage.removeItem("numa_integration_bootstrap_pending");
-      localStorage.removeItem("numa_integration_bootstrap_visited");
+      clearIntegrationBootstrapPending();
     }
     // Supabase JS handles the OAuth dance; our /auth/callback page
     // will exchange the Supabase token for our backend JWT.
@@ -102,7 +134,11 @@ export default function AuthPage() {
       options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
     if (err) {
-      localStorage.removeItem("numa_connect_google_services_after_auth");
+      // The real flag, not `numa_connect_google_services_after_auth`, which
+      // nothing else in the app writes. Removing that orphan left the pending
+      // flag set, so the next sign-in ran a bootstrap the user never started
+      // (NUMA-142 P6, PLAN 7).
+      clearIntegrationBootstrapPending();
       setError(err.message);
     }
   };

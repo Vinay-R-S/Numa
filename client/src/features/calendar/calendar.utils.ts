@@ -18,9 +18,6 @@ import type {
   Viewport,
 } from "./calendar.types"
 
-// One home for the fetch-abort check: lib/http owns it.
-export { isAbortError } from "@/lib/http"
-
 export function isSameDay(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&
@@ -82,8 +79,32 @@ export function nowHHMM(): string {
 }
 
 /** `YYYY-MM-DD` request/date-input value. */
+const DATE_PARAM_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * The local calendar day as `YYYY-MM-DD`.
+ *
+ * This serialized through `toISOString()`, which is UTC, while every bucketing
+ * helper here reads local fields. West of UTC the two disagreed by a day, so
+ * clicking an 18:00 slot on Sep 5 in UTC-7 posted Sep 6, and a Sep 5 event
+ * rendered in the Sep 4 cell (NUMA-142 P6, PLAN 7).
+ */
 export function toDateParam(date: Date): string {
-  return date.toISOString().slice(0, 10)
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+/**
+ * The inverse of `toDateParam`. `new Date("2026-09-05")` is UTC midnight, whose
+ * local fields are the previous day west of UTC; this builds the local day the
+ * string names.
+ */
+export function fromDateParam(value: string): Date {
+  if (!DATE_PARAM_PATTERN.test(value)) return new Date(value)
+
+  const [year, month, day] = value.split("-").map(Number)
+  return new Date(year, month - 1, day)
 }
 
 export function eventsForDay(events: CalendarEvent[], date: Date): CalendarEvent[] {
@@ -110,7 +131,12 @@ export function groupEventsByDay(events: CalendarEvent[]): Map<string, CalendarE
   return grouped
 }
 
-/** Local-calendar day key. Not `toDateParam`, which converts to UTC. */
+/**
+ * Map key for a local calendar day. Both this and `toDateParam` read local
+ * fields; they differ in format, and only this one is safe to use as an
+ * identity key, since it is not padded and never leaves the process.
+ * `toDateParam` is the wire format and must stay `YYYY-MM-DD`.
+ */
 export function dayKey(date: Date): string {
   return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
 }

@@ -1,5 +1,6 @@
 "use client"
 
+import { useMemo } from "react"
 import { Moon } from "lucide-react"
 
 import { SLEEP_GOAL_HOURS, SLEEP_STAGE_META, SLEEP_STAGE_ORDER } from "../health.constants"
@@ -42,10 +43,18 @@ function EmptySleepCard() {
 export function SleepCard({ snapshot }: { snapshot: HealthSnapshot | null }) {
   const sleep = snapshot?.sleep_hours
 
+  // Before the early return: hooks run in the same order on every render.
+  // Memoized because the flatten is O(boundaries x segments) and ran on every
+  // render of the health page, including every keystroke in the agent composer
+  // (NUMA-142 P6, PLAN 9).
+  const normalizedSegments = useMemo(
+    () => normalizeSleepSegments(snapshot?.sleep_segments),
+    [snapshot?.sleep_segments]
+  )
+
   if (!sleep || sleep <= 0) return <EmptySleepCard />
 
   const goal = SLEEP_GOAL_HOURS
-  const normalizedSegments = normalizeSleepSegments(snapshot?.sleep_segments)
   const segmentHours = normalizedSegments.reduce((sum, segment) => sum + segment.hours, 0)
   const displaySleep = segmentHours > 0 ? segmentHours : sleep
   const rawSleepDiffers = segmentHours > 0 && Math.abs(sleep - segmentHours) >= 0.25

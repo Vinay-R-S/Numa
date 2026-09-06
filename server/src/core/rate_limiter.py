@@ -231,7 +231,7 @@ class RateLimiter:
                 bucket.requests_remaining = 0
                 bucket.tokens_remaining = 0
                 log.warning(
-                    "Provider '%s' rate-limited — exhausting bucket for this window",
+                    "Provider '%s' rate-limited - exhausting bucket for this window",
                     provider,
                 )
 

@@ -23,7 +23,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth.dependencies import get_current_user
-from ..core.errors import AppError
+from ..core.errors import AppError, http_error_from
 from .schemas import (
     LeetCodeChatRequest,
     LeetCodeChatResponse,
@@ -42,7 +42,10 @@ def get_leetcode_service() -> LeetCodeService:
 
 
 def _http_error(exc: AppError) -> HTTPException:
-    return HTTPException(status_code=exc.status_code, detail=exc.detail)
+    # `http_error_from`, not a bare HTTPException: it carries the raiser's
+    # safe-detail decision, which the 5xx redaction otherwise flattens into
+    # "Internal server error" (NUMA-142 P6 review).
+    return http_error_from(exc)
 
 
 # ── Stats (JWT-protected) ────────────────────────────────────────────────────
@@ -70,7 +73,11 @@ def get_leetcode_stats(
     except AppError as exc:
         raise _http_error(exc) from exc
 
-    return LeetCodeStats(**stats)
+    # The service already shaped this through `LeetCodeStats`, and FastAPI
+    # validates it once more against `response_model`. Rebuilding the model here
+    # was a third validation and a second deep copy of the same payload on every
+    # request (NUMA-142 P6, PLAN 9).
+    return stats
 
 
 # ── Chat (JWT-protected) ─────────────────────────────────────────────────────

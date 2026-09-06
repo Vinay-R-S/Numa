@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Dict, List, Optional, Sequence, TypedDict
 
 import operator
+from functools import lru_cache
 
 log = logging.getLogger(__name__)
 
@@ -171,9 +172,6 @@ def _github_toolset(tool_decorator, user_id: str):
     return [check_commits, get_pr_status, get_repo_stats, get_contribution_overview] + task_tools
 
 
-from functools import lru_cache
-
-
 @lru_cache(maxsize=64)
 def _build_github_graph(user_id: str, model_override: Optional[str] = None):
     deps = _require_deps()
@@ -185,6 +183,11 @@ def _build_github_graph(user_id: str, model_override: Optional[str] = None):
 
     tools = _github_toolset(deps["tool"], user_id)
     tool_map = {t.name: t for t in tools}
+    # Every GitHub tool here reads; only the shared task tools write. So this
+    # reports `refresh_tasks`, not `refresh_github`: asking this agent to create
+    # a task used to refresh the GitHub panel and leave the board stale
+    # (NUMA-142 P6, PLAN 7 and review).
+    mutation_tools = {"create_task", "update_task", "delete_task"}
 
     def call_model(state: GitHubAgentState) -> GitHubAgentState:
         llm = _get_llm(model_override=model_override, user_id=user_id)
@@ -208,6 +211,8 @@ def _build_github_graph(user_id: str, model_override: Optional[str] = None):
             else:
                 try:
                     result = tool_map[name].invoke(args)
+                    if name in mutation_tools:
+                        mutated = True
                 except Exception as exc:
                     result = f"Error: {exc}"
             out.append(ToolMessage(content=str(result), tool_call_id=tid))
@@ -240,12 +245,14 @@ def run_github_agent_chat(
 ) -> Dict:
     if not user_id:
         return {"response": "User session is missing.", "success": False,
-                "delegated_to": "github-subagent", "refresh_github": False}
+                "delegated_to": "github-subagent", "refresh_github": False,
+                "refresh_tasks": False}
 
     from ..llm_factory import is_any_llm_configured
     if not is_any_llm_configured(user_id):
         return {"response": "GitHub sub-agent unavailable - no LLM configured. Go to Settings.",
-                "success": True, "delegated_to": "github-subagent", "refresh_github": False}
+                "success": True, "delegated_to": "github-subagent",
+                "refresh_github": False, "refresh_tasks": False}
 
     try:
         deps = _require_deps()
@@ -317,13 +324,18 @@ def run_github_agent_chat(
             "response": str(content),
             "success": True,
             "delegated_to": "github-subagent",
-            "refresh_github": bool(result.get("mutated", False)),
+            "refresh_github": False,
+            "refresh_tasks": bool(result.get("mutated", False)),
         }
     except Exception as exc:
+        # Logged, not returned: this string is a response body the orchestrator
+        # re-emits, and the NUMA-134 redaction only filters log records
+        # (NUMA-142 P6 review).
         log.error("GitHub sub-agent error: %s", exc, exc_info=True)
         return {
-            "response": f"GitHub sub-agent error: {exc}",
+            "response": "The GitHub assistant hit an error. Please try again.",
             "success": False,
             "delegated_to": "github-subagent",
             "refresh_github": False,
+            "refresh_tasks": False,
         }

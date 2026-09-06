@@ -44,6 +44,7 @@ export function useSlack() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const initialSyncAttemptedRef = useRef(false)
   const syncingRef = useRef(false)
+  const messagesRequestRef = useRef(0)
 
   const checkStatus = useCallback(async () => {
     try {
@@ -69,18 +70,31 @@ export function useSlack() {
 
   const loadMessages = useCallback(async () => {
     if (!activeChannel) {
+      // Bumped here too: clearing the pane without superseding the in-flight
+      // request let an older response repopulate it with a channel that had
+      // just been removed (NUMA-142 P6 review).
+      messagesRequestRef.current += 1
       setMessages([])
       return
     }
 
+    // Ordering guard. Clicking channel A then B left A's request in flight, and
+    // when it landed last it wrote A's messages under B's header with B's
+    // composer active, so the user replied to the wrong conversation. The same
+    // interleaving happened between the 20s poll and a fresh selection
+    // (NUMA-142 P6, PLAN 7). `useHealth` and `useAiSettings` guard this already.
+    const requestId = messagesRequestRef.current + 1
+    messagesRequestRef.current = requestId
+
     setLoadingMessages(true)
     try {
       const loaded = await getSlackMessages({ channel: activeChannel, limit: MESSAGE_PAGE_SIZE })
+      if (messagesRequestRef.current !== requestId) return
       setMessages(sortMessagesByTime(loaded))
     } catch {
       // fail silently
     } finally {
-      setLoadingMessages(false)
+      if (messagesRequestRef.current === requestId) setLoadingMessages(false)
     }
   }, [activeChannel])
 

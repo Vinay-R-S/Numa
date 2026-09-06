@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
+from collections import OrderedDict
 from datetime import date, datetime, timedelta
 from typing import Dict, Optional
 from zoneinfo import ZoneInfo
@@ -20,6 +22,7 @@ from .persistence import (
 )
 from .repository import health_repository
 from .utils import (
+    HEALTH_RETENTION_DAYS,
     _activity_day_bounds,
     _has_health_values,
     _intraday_bounds,
@@ -30,9 +33,45 @@ from .utils import (
 
 log = logging.getLogger(__name__)
 
-# Google Fit API (lazy singleton, per user)
-_google_fit_instances: Dict[str, object] = {}
+# Google Fit API (lazy singleton, per user). Bounded: this was an unevicted
+# dict holding one client, its credentials and its HTTP session for every user
+# the process ever synced (NUMA-142 P6, PLAN 9).
+_GOOGLE_FIT_CACHE_MAX = 128
+_google_fit_instances: "OrderedDict[str, object]" = OrderedDict()
 _google_fit_instances_lock = threading.Lock()
+
+# The periodic sync used to re-fetch all 8 days on every tick: 8 days times
+# several Google Fit calls each, per user, every 30 minutes. Days that have
+# already closed only change when a provider backfills them, so the full window
+# runs twice a day and the ticks in between cover the days still moving.
+_FULL_BACKFILL_INTERVAL_SECONDS = 12 * 3600
+_RECENT_SYNC_DAYS = 2
+_BACKFILL_TRACK_MAX = 1024
+_last_full_backfill: Dict[str, float] = {}
+_backfill_lock = threading.Lock()
+
+
+def _days_to_sync(user_id: str) -> int:
+    """How many days this tick should cover: the recent window, or the lot."""
+    now = time.time()
+    with _backfill_lock:
+        last = _last_full_backfill.get(user_id, 0.0)
+        if now - last < _FULL_BACKFILL_INTERVAL_SECONDS:
+            return _RECENT_SYNC_DAYS
+        return HEALTH_RETENTION_DAYS
+
+
+def _record_full_backfill(user_id: str) -> None:
+    """Mark a full backfill done, once it actually succeeded.
+
+    Stamping this before the sync ran meant a failed backfill (an expired token,
+    a Google Fit 5xx) was not retried for twelve hours and the gap silently
+    stayed (NUMA-142 P6 review).
+    """
+    with _backfill_lock:
+        if len(_last_full_backfill) >= _BACKFILL_TRACK_MAX:
+            _last_full_backfill.clear()
+        _last_full_backfill[user_id] = time.time()
 
 
 def _get_user_timezone(user_id: str) -> ZoneInfo:
@@ -44,13 +83,20 @@ def _get_user_timezone(user_id: str) -> ZoneInfo:
 
 
 def _get_google_fit(user_id: str):
-    """Lazy-init Google Fit API client."""
-    if user_id not in _google_fit_instances:
-        with _google_fit_instances_lock:
-            if user_id not in _google_fit_instances:
-                from .google_fit_client import GoogleFitClient
-                _google_fit_instances[user_id] = GoogleFitClient(user_id=user_id)
-    return _google_fit_instances[user_id]
+    """Lazy-init Google Fit API client, kept in a bounded LRU."""
+    with _google_fit_instances_lock:
+        client = _google_fit_instances.get(user_id)
+        if client is not None:
+            _google_fit_instances.move_to_end(user_id)
+            return client
+
+        from .google_fit_client import GoogleFitClient
+
+        client = GoogleFitClient(user_id=user_id)
+        _google_fit_instances[user_id] = client
+        while len(_google_fit_instances) > _GOOGLE_FIT_CACHE_MAX:
+            _google_fit_instances.popitem(last=False)
+        return client
 
 
 def _is_google_fit_configured() -> bool:
@@ -137,10 +183,13 @@ def _sync_temporarily_unavailable_detail(source: str) -> str:
 
 def sync_google_fit_for_user(user_id: str, target_date: Optional[date] = None) -> Dict:
     """Fetch Google Fit data for target_date and store in Supabase."""
-    target = target_date or date.today()
+    # The user's today, not the host's. Fixing only the window left the day
+    # itself host-local, so on a UTC host an IST user's current day was not
+    # synced until UTC rolled over (NUMA-142 P6).
+    tz = _get_user_timezone(user_id)
+    target = target_date or datetime.now(tz).date()
     try:
         gfit = _get_google_fit(user_id)
-        tz = _get_user_timezone(user_id)
         start_dt, end_dt = _activity_day_bounds(target, tz)
         start_ms = _millis(start_dt)
         end_ms = _millis(end_dt)
@@ -236,17 +285,29 @@ def sync_google_fit_for_user(user_id: str, target_date: Optional[date] = None) -
 
 def sync_strava_for_user(user_id: str, target_date: Optional[date] = None) -> Dict:
     """Fetch Strava data for target_date and store in Supabase."""
-    target = target_date or date.today()
+    # The config check first: resolving the timezone reads public.profiles, and
+    # doing it above this return cost one query per day per user on every tick
+    # of a deployment with Strava switched off (NUMA-142 P6 review).
     if not _is_strava_configured():
         return {"ok": False, "source": "strava", "detail": "Strava not configured"}
+
+    tz = _get_user_timezone(user_id)
+    target = target_date or datetime.now(tz).date()
 
     try:
         from ..api.strava_api import StravaAPI
 
-        start_dt = datetime.combine(target, datetime.min.time())
-        end_dt = datetime.combine(target, datetime.max.time())
-        start_ms = int(start_dt.timestamp() * 1000)
-        end_ms = int(end_dt.timestamp() * 1000)
+        # The user's timezone, not the host's. These were naive datetimes, so
+        # the window was built in whatever zone the server happened to run in:
+        # on a UTC host an IST user's 22:00 run was attributed to the next
+        # snapshot_date, _has_health_values then saw an empty day, and
+        # delete_health_snapshot wiped the row a previous sync had stored
+        # correctly (NUMA-142 P6, PLAN 7). _activity_day_bounds also gives the
+        # half-open [midnight, next midnight) window the Google Fit path uses,
+        # rather than stopping at 23:59:59.999999.
+        start_dt, end_dt = _activity_day_bounds(target, tz)
+        start_ms = _millis(start_dt)
+        end_ms = _millis(end_dt)
 
         raw = StravaAPI().fetch_all_data(start_ms, end_ms)
 
@@ -287,15 +348,23 @@ def sync_strava_for_user(user_id: str, target_date: Optional[date] = None) -> Di
         return {"ok": False, "source": "strava", "detail": str(exc)}
 
 
-def sync_health_for_user(user_id: str) -> Dict:
-    """Sync recent health data for a user. Called by data_sync."""
-    days = 8
+def sync_health_for_user(user_id: str, days: Optional[int] = None) -> Dict:
+    """Sync recent health data for a user. Called by data_sync.
+
+    `days` defaults to the recent window on a periodic tick and to the full
+    retention window twice a day, rather than re-fetching all 8 days from every
+    provider on every tick (NUMA-142 P6, PLAN 9).
+    """
+    requested_days = days
+    days = days or _days_to_sync(user_id)
+    tz = _get_user_timezone(user_id)
+    today = datetime.now(tz).date()
     gfit_results = []
     strava_results = []
     sync_strava = _sync_strava_with_health_all()
     gfit_unavailable = False
     for offset in range(days):
-        target = date.today() - timedelta(days=offset)
+        target = today - timedelta(days=offset)
         if not gfit_unavailable:
             gfit_result = sync_google_fit_for_user(user_id, target_date=target)
             gfit_results.append(gfit_result)
@@ -305,6 +374,12 @@ def sync_health_for_user(user_id: str) -> Dict:
             strava_results.append(sync_strava_for_user(user_id, target_date=target))
 
     gfit_ok = sum(1 for result in gfit_results if result.get("ok"))
+    strava_any_ok = any(result.get("ok") for result in strava_results)
+    # Recorded only now, and only for a run that both asked for the full window
+    # and got something back.
+    if requested_days is None and days == HEALTH_RETENTION_DAYS and (gfit_ok or strava_any_ok):
+        _record_full_backfill(user_id)
+
     gfit_sleep_ok = sum(1 for result in gfit_results if result.get("sleep_synced"))
     gfit_hourly_ok = sum(1 for result in gfit_results if result.get("hourly_synced"))
     strava_ok = sum(1 for result in strava_results if result.get("ok"))

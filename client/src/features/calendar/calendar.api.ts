@@ -39,6 +39,7 @@ import {
   tokenHealthSchema,
   watchStartResponseSchema,
 } from "./calendar.schema"
+import { GOOGLE_AUTHORIZE_URL_PREFIX, assertExternalUrl } from "@/lib/externalUrl"
 import { toCalendarEvent } from "./calendar.transforms"
 import type {
   AgentChatMessage,
@@ -87,7 +88,7 @@ export async function updateCalendarEvent(
 ): Promise<CalendarEvent> {
   const message = "Failed to update event"
   const updated = await expectBody(
-    http.put(`/calendar/events/${eventId}`, payload, {
+    http.put(`/calendar/events/${encodeURIComponent(eventId)}`, payload, {
       schema: calendarEventDtoSchema,
       errorMessage: message,
     }),
@@ -100,7 +101,7 @@ export async function updateCalendarEvent(
 export async function deleteCalendarEvent(eventId: string): Promise<boolean> {
   const message = "Failed to delete event"
   const data = await expectBody(
-    http.del(`/calendar/events/${eventId}`, {
+    http.del(`/calendar/events/${encodeURIComponent(eventId)}`, {
       schema: deleteResponseSchema,
       errorMessage: message,
     }),
@@ -145,9 +146,7 @@ export async function getGoogleCalendarAuthorizationUrl(): Promise<string> {
     message
   )
 
-  if (!data.authorization_url) throw new Error("Google authorization URL was not returned")
-
-  return data.authorization_url
+  return assertExternalUrl(data.authorization_url, [GOOGLE_AUTHORIZE_URL_PREFIX], "Google")
 }
 
 const DISCONNECTED: TokenHealthResult = { valid: false, connected: false }

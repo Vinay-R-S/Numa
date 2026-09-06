@@ -69,6 +69,7 @@ class _CachedEmbedder:
         self._using_hash_fallback = False
         self._cache: OrderedDict[str, List[float]] = OrderedDict()
         self._cache_lock = threading.Lock()
+        self._load_lock = threading.RLock()
         self._cache_max = int(os.getenv("EMBEDDING_CACHE_SIZE", "256"))
         self._cache_hits = 0
         self._cache_misses = 0
@@ -120,6 +121,14 @@ class _CachedEmbedder:
         if self._model is not None or self._failed:
             return
 
+        # The class docstring promised thread safety but nothing enforced it, so
+        # two cold requests each built a 90MB SentenceTransformer (NUMA-142 P6).
+        with self._load_lock:
+            if self._model is not None or self._failed:
+                return
+            self._load_locked()
+
+    def _load_locked(self):
         cache_dir = _model_cache_dir()
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
 
@@ -181,7 +190,7 @@ class _CachedEmbedder:
                 self._cache_hits += 1
                 return self._cache[cache_key]
 
-        # Cache miss — compute embedding
+        # Cache miss - compute embedding
         self._load()
         try:
             if self._model is None:
@@ -196,14 +205,7 @@ class _CachedEmbedder:
                     vec = vec[0]
                 result = [float(v) for v in vec]
 
-            # Store in cache
-            with self._cache_lock:
-                self._cache[cache_key] = result
-                self._cache_misses += 1
-                # Evict oldest if over limit
-                while len(self._cache) > self._cache_max:
-                    self._cache.popitem(last=False)
-
+            self._remember(cache_key, result)
             return result
         except Exception as exc:
             log.warning("embed() failed: %s", exc)
@@ -226,18 +228,51 @@ class _CachedEmbedder:
 
     # ------------------------------------------------------------------
     def embed_batch(self, texts: List[str]) -> List[Optional[List[float]]]:
-        """Embed multiple texts in one pass - more efficient than looping."""
+        """Embed multiple texts in one pass - more efficient than looping.
+
+        Shares `embed()`'s cache and its empty-string contract: a blank input
+        yields None rather than a vector (NUMA-142 P6).
+        """
+        results: List[Optional[List[float]]] = [None] * len(texts)
+        pending: List[int] = []
+        keys: Dict[int, str] = {}
+
+        for index, text in enumerate(texts):
+            stripped = text.strip()
+            if not stripped:
+                continue
+            key = hashlib.md5(stripped.encode("utf-8", errors="replace")).hexdigest()
+            keys[index] = key
+            with self._cache_lock:
+                cached = self._cache.get(key)
+                if cached is not None:
+                    self._cache.move_to_end(key)
+                    self._cache_hits += 1
+            if cached is not None:
+                results[index] = cached
+                continue
+            pending.append(index)
+
+        if not pending:
+            return results
+
+        vectors = self._encode_batch([texts[i].strip() for i in pending])
+        for index, vector in zip(pending, vectors):
+            results[index] = vector
+            if vector is None:
+                continue
+            self._remember(keys[index], vector)
+        return results
+
+    def _encode_batch(self, stripped: List[str]) -> List[Optional[List[float]]]:
         self._load()
         if self._model is None:
             if not self._using_hash_fallback:
-                return [None] * len(texts)
-            return [
-                self._hash_embed(text.strip(), self.dimension) if text.strip() else None
-                for text in texts
-            ]
+                return [None] * len(stripped)
+            return [self._hash_embed(text, self.dimension) for text in stripped]
         try:
             vecs = self._model.encode(
-                [t.strip() for t in texts],
+                stripped,
                 normalize_embeddings=True,
                 batch_size=64,
             )
@@ -245,13 +280,17 @@ class _CachedEmbedder:
         except Exception as exc:
             log.warning("embed_batch() failed: %s", exc)
             if self._hash_fallback_enabled():
-                return [
-                    self._hash_embed(text.strip(), self.dimension) if text.strip() else None
-                    for text in texts
-                ]
-            return [None] * len(texts)
+                return [self._hash_embed(text, self.dimension) for text in stripped]
+            return [None] * len(stripped)
+
+    def _remember(self, cache_key: str, vector: List[float]) -> None:
+        with self._cache_lock:
+            self._cache[cache_key] = vector
+            self._cache_misses += 1
+            while len(self._cache) > self._cache_max:
+                self._cache.popitem(last=False)
 
 
-# ── Module-level singleton ─────────────────────────────────────────────────────
+# The process-wide embedder.
 
 embedder = _CachedEmbedder()

@@ -22,13 +22,30 @@ SUMMARY_SYSTEM_PROMPT = (
 )
 
 
+class SummaryUnavailable(Exception):
+    """The daily summary could not be generated.
+
+    Raised instead of returning the failure text as the summary: the router used
+    to persist that string through `set_summary` and answer 200 with it, so a
+    provider outage became the user's permanent AI summary and the raw error was
+    disclosed to the client (NUMA-142 P6, PLAN 7 / 8).
+    """
+
+
 def _day_bounds(target_date: date):
     start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
     return start, start + timedelta(days=1)
 
 
 def _fetch_journal_content(user_id: str, target_date: date) -> str:
-    row = journal_repository.content_row(user_id, target_date)
+    # Guarded like every sibling collector. This one ran unprotected and outside
+    # the enclosing try, so a DB failure here took down the whole summary
+    # instead of contributing one empty section (NUMA-142 P6, PLAN 7).
+    try:
+        row = journal_repository.content_row(user_id, target_date)
+    except Exception as exc:
+        log.warning("Could not read the journal entry for %s: %s", target_date, exc)
+        return ""
     if not row:
         return ""
     title, content, mood, tags = row
@@ -77,23 +94,26 @@ def _fetch_health_data(user_id: str, target_date: date) -> str:
         rows = journal_repository.health_rows(user_id, target_date)
         if not rows:
             return ""
+        # By key, not by position. The repository returns dicts now, and
+        # unpacking a tuple meant any change to the column list silently
+        # reassigned every field (NUMA-143 P7).
         lines = ["Health data:"]
-        for src, steps, active, cal, dist, sleep, heart_rate, heart_points in rows:
-            parts = [f"Source: {src}"]
-            if steps:
-                parts.append(f"Steps: {steps:,}")
-            if active:
-                parts.append(f"Active: {active}min")
-            if cal:
-                parts.append(f"Calories: {cal:,}")
-            if dist:
-                parts.append(f"Distance: {dist}km")
-            if sleep:
-                parts.append(f"Sleep: {sleep}h")
-            if heart_rate:
-                parts.append(f"Heart rate: {heart_rate:g} bpm")
-            if heart_points:
-                parts.append(f"Heart points: {heart_points:g}")
+        for row in rows:
+            parts = [f"Source: {row.get('source')}"]
+            if row.get("steps"):
+                parts.append(f"Steps: {row['steps']:,}")
+            if row.get("active_minutes"):
+                parts.append(f"Active: {row['active_minutes']}min")
+            if row.get("calories"):
+                parts.append(f"Calories: {row['calories']:,}")
+            if row.get("distance_km"):
+                parts.append(f"Distance: {row['distance_km']}km")
+            if row.get("sleep_hours"):
+                parts.append(f"Sleep: {row['sleep_hours']}h")
+            if row.get("heart_rate_bpm"):
+                parts.append(f"Heart rate: {row['heart_rate_bpm']:g} bpm")
+            if row.get("heart_points"):
+                parts.append(f"Heart points: {row['heart_points']:g}")
             lines.append(f"  {', '.join(parts)}")
         return "\n".join(lines)
     except Exception:
@@ -243,7 +263,7 @@ def generate_daily_summary(user_id: str, target_date: date) -> str:
         from ..llm_factory import get_llm, is_any_llm_configured
 
         if not is_any_llm_configured(user_id):
-            return (
+            raise SummaryUnavailable(
                 "AI summary unavailable - no LLM provider configured. "
                 "Go to Settings to add an API key."
             )
@@ -260,6 +280,10 @@ def generate_daily_summary(user_id: str, target_date: date) -> str:
         if isinstance(content, list):
             content = "\n".join(str(p) for p in content)
         return str(content).strip()
+    except SummaryUnavailable:
+        raise
     except Exception as exc:
-        log.error("Journal summary generation failed: %s", exc)
-        return f"Could not generate summary: {exc}"
+        log.error("Journal summary generation failed: %s", exc, exc_info=True)
+        raise SummaryUnavailable(
+            "Could not generate the summary right now. Please try again."
+        ) from exc

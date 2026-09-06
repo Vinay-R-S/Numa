@@ -50,19 +50,32 @@ def verify_jwt(token: str) -> dict:
 
 # ── Profile helpers ──────────────────────────────────────────────────────────
 
+def _display_name(user) -> str:
+    """The best name Supabase has for this user, across both sign-in paths.
+
+    The OAuth path populates `name` and the password path `full_name`, so
+    reading only one of them let a Google user's stored name be overwritten with
+    an empty string the next time they signed in with a password
+    (NUMA-142 P6 review).
+    """
+    metadata = (getattr(user, "user_metadata", None) or {})
+    return str(metadata.get("full_name") or metadata.get("name") or "").strip()
+
+
 def _upsert_profile(user_id: str, full_name: str | None) -> None:
     """
     Insert or update a row in public.profiles.
     Uses the service-role client so RLS is bypassed.
+
+    An empty name is never written over a stored one: it is absent metadata, not
+    a request to clear the field.
     """
+    row: dict = {"id": user_id}
+    if (full_name or "").strip():
+        row["full_name"] = full_name.strip()
+
     try:
-        supabase_admin.table("profiles").upsert(
-            {
-                "id": user_id,
-                "full_name": full_name or "",
-            },
-            on_conflict="id",
-        ).execute()
+        supabase_admin.table("profiles").upsert(row, on_conflict="id").execute()
     except Exception as exc:
         import logging
         logging.getLogger(__name__).error("profile upsert failed: %s", exc)
@@ -88,8 +101,7 @@ def sign_up(email: str, password: str, full_name: Optional[str] = None) -> dict:
         raise ValueError("Sign-up failed. The email may already be registered.")
 
     user = response.user
-    display_name = (user.user_metadata or {}).get("full_name")
-    _upsert_profile(str(user.id), display_name)
+    display_name = _display_name(user)
 
     # Supabase returns a user with no session when the address still has to be
     # confirmed, and an obfuscated placeholder user when the address is already
@@ -101,6 +113,13 @@ def sign_up(email: str, password: str, full_name: Optional[str] = None) -> dict:
         raise ValueError(
             "Check your email to confirm your account, then sign in."
         )
+
+    # Below the guard, not above it. This ran unconditionally, so every rejected
+    # sign-up still upserted an attacker-supplied display name into
+    # public.profiles through the service-role client with RLS bypassed - and an
+    # existing unconfirmed address could have its name overwritten by anyone who
+    # signed up with it (NUMA-142 P6, PLAN 8).
+    _upsert_profile(str(user.id), display_name)
 
     token = create_jwt(
         str(user.id),
@@ -118,7 +137,15 @@ def sign_up(email: str, password: str, full_name: Optional[str] = None) -> dict:
 
 
 def sign_in(email: str, password: str) -> dict:
-    """Authenticate an existing user and return our JWT + user info."""
+    """Authenticate an existing user and return our JWT + user info.
+
+    Also upserts the profile. Moving the sign-up write below the session guard
+    (NUMA-142) stopped rejected sign-ups from writing, but it also stranded the
+    legitimate email-confirmation case: that path raises before the write, and
+    the user's later sign-in never created the row, so they had no profile and
+    `health_agent` silently fell back to the default timezone. Every path that
+    mints a session now ensures one.
+    """
     response = supabase.auth.sign_in_with_password(
         {"email": email, "password": password}
     )
@@ -126,17 +153,20 @@ def sign_in(email: str, password: str) -> dict:
         raise ValueError("Invalid email or password.")
 
     user = response.user
+    display_name = _display_name(user)
+    _upsert_profile(str(user.id), display_name)
+
     token = create_jwt(
         str(user.id),
         user.email,
-        (user.user_metadata or {}).get("full_name"),
+        display_name,
     )
     return {
         "token": token,
         "user": {
             "id": str(user.id),
             "email": user.email,
-            "full_name": (user.user_metadata or {}).get("full_name"),
+            "full_name": display_name,
         },
     }
 
@@ -151,8 +181,7 @@ def exchange_supabase_token(supabase_access_token: str) -> dict:
         raise ValueError("Invalid Supabase token.")
 
     user = response.user
-    metadata = user.user_metadata or {}
-    full_name = metadata.get("full_name") or metadata.get("name") or ""
+    full_name = _display_name(user)
     _upsert_profile(str(user.id), full_name)
     token = create_jwt(str(user.id), user.email, full_name)
     return {

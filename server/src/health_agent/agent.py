@@ -21,10 +21,15 @@ import importlib
 import json
 import logging
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Dict, List, Optional, Sequence, TypedDict
 
 import operator
+from functools import lru_cache
+
+from ..core.timezones import user_today
+from .utils import HEALTH_RETENTION_DAYS
 
 log = logging.getLogger(__name__)
 
@@ -47,23 +52,34 @@ DIET_DISCLAIMER = (
 )
 
 
+# Whole words, not substrings. `"eat" in q` matched "beats", "breathe", "sweat"
+# and "great", and each of those short-circuited the entire LangGraph agent into
+# a canned meal plan with no tool ever running (NUMA-142 P6, PLAN 7).
+_DIET_TERMS = (
+    "diet",
+    "meal",
+    "meals",
+    "nutrition",
+    "food",
+    "foods",
+    "eat",
+    "eating",
+    "breakfast",
+    "lunch",
+    "dinner",
+    "protein",
+)
+
+_DIET_PHRASES = ("calorie intake",)
+
+_DIET_WORD_RE = re.compile(r"\b(?:" + "|".join(_DIET_TERMS) + r")\b")
+
+
 def _is_diet_query(query: str) -> bool:
     q = (query or "").lower()
-    return any(
-        term in q
-        for term in (
-            "diet",
-            "meal",
-            "nutrition",
-            "food",
-            "eat",
-            "breakfast",
-            "lunch",
-            "dinner",
-            "protein",
-            "calorie intake",
-        )
-    )
+    if any(phrase in q for phrase in _DIET_PHRASES):
+        return True
+    return bool(_DIET_WORD_RE.search(q))
 
 
 def _valid_number(value) -> Optional[float]:
@@ -87,8 +103,11 @@ def _fmt_metric(value: float, unit: str) -> str:
 def _build_diet_recommendation(user_id: str) -> str:
     from .persistence import get_health_snapshots
 
-    snapshots = get_health_snapshots(user_id, days=8)
-    today = date.today()
+    snapshots = get_health_snapshots(user_id, days=HEALTH_RETENTION_DAYS)
+    # The user's today. Snapshots are keyed by the date it was where they are,
+    # so a server-local date silently matched nothing for part of every day
+    # (NUMA-142 P6, PLAN 7).
+    today = user_today(user_id)
     today_snaps = [s for s in snapshots if s.get("snapshot_date") == today]
 
     def best_metric(key: str) -> Optional[float]:
@@ -238,6 +257,9 @@ class HealthAgentState(TypedDict):
     user_id: str
     semantic_context: str
     mutated: bool
+    # Separate from `mutated`, which means "health data changed": this toolset
+    # also writes tasks, and the two refresh different panels.
+    tasks_mutated: bool
 
 
 def _require_deps() -> Dict:
@@ -282,7 +304,7 @@ def _health_toolset(tool_decorator, user_id: str):
         """Get today's health data (steps, calories, active minutes, sleep, distance, heart rate, heart points) from stored snapshots.
         Use this when the user asks about their current health, today's progress, or metrics."""
         snapshots = get_health_snapshots(user_id, days=1)
-        today_snaps = [s for s in snapshots if s.get("snapshot_date") == date.today()]
+        today_snaps = [s for s in snapshots if s.get("snapshot_date") == user_today(user_id)]
         if not today_snaps:
             return "No health data for today yet. Try syncing first with sync_health_data."
         lines = []
@@ -321,7 +343,7 @@ def _health_toolset(tool_decorator, user_id: str):
     def get_weekly_health() -> str:
         """Get the last 7 days of health data for trend analysis.
         Use this when the user asks about weekly trends, progress over time, or comparisons."""
-        snapshots = get_health_snapshots(user_id, source="google_fit", days=8)
+        snapshots = get_health_snapshots(user_id, source="google_fit", days=HEALTH_RETENTION_DAYS)
         if not snapshots:
             return "No weekly health data available. Try syncing Google Fit data first."
         lines = ["Weekly Health Summary (Google Fit):"]
@@ -344,6 +366,12 @@ def _health_toolset(tool_decorator, user_id: str):
         """Sync fresh health data from Google Fit and/or Strava.
         source: 'google_fit', 'strava', or 'all'.
         Use this when data seems stale or the user asks to refresh."""
+        if source not in ("all", "google_fit", "strava"):
+            return (
+                f"Unknown health source '{source}'. "
+                "Use 'google_fit', 'strava', or 'all'."
+            )
+
         results = []
         if source in ("all", "google_fit"):
             r = sync_google_fit_for_user(user_id)
@@ -360,7 +388,7 @@ def _health_toolset(tool_decorator, user_id: str):
         """Generate personalized health insights based on today's data.
         Use this when the user asks for advice, suggestions, or health recommendations."""
         snapshots = get_health_snapshots(user_id, source="google_fit", days=1)
-        today_snap = next((s for s in snapshots if s.get("snapshot_date") == date.today()), None)
+        today_snap = next((s for s in snapshots if s.get("snapshot_date") == user_today(user_id)), None)
         if not today_snap:
             return "No data available for insights. Sync your health data first."
 
@@ -405,7 +433,7 @@ def _health_toolset(tool_decorator, user_id: str):
         """Recommend yoga poses based on the user's current health data.
         Use this when the user asks about yoga, stretching, or physical wellness recommendations."""
         snapshots = get_health_snapshots(user_id, source="google_fit", days=1)
-        today_snap = next((s for s in snapshots if s.get("snapshot_date") == date.today()), None)
+        today_snap = next((s for s in snapshots if s.get("snapshot_date") == user_today(user_id)), None)
 
         sleep = (today_snap.get("sleep_hours") or 0) if today_snap else 0
         active = (today_snap.get("active_minutes") or 0) if today_snap else 0
@@ -447,8 +475,6 @@ def _health_toolset(tool_decorator, user_id: str):
     return [get_todays_health, get_weekly_health, sync_health_data, get_health_insights, get_diet_recommendation, get_yoga_recommendation] + task_tools
 
 
-from functools import lru_cache
-
 @lru_cache(maxsize=64)
 def _build_health_graph(user_id: str, model_override: Optional[str] = None):
     deps = _require_deps()
@@ -460,7 +486,11 @@ def _build_health_graph(user_id: str, model_override: Optional[str] = None):
 
     tools = _health_toolset(deps["tool"], user_id)
     tool_map = {t.name: t for t in tools}
+    # Two kinds of write, two flags. `_health_toolset` also returns the shared
+    # task tools, and creating a task through this agent used to set nothing, so
+    # the board stayed stale (NUMA-142 P6 review).
     mutation_tools = {"sync_health_data"}
+    task_mutation_tools = {"create_task", "update_task", "delete_task"}
 
     def call_model(state: HealthAgentState) -> HealthAgentState:
         llm = _get_llm(model_override=model_override, user_id=user_id)
@@ -477,6 +507,7 @@ def _build_health_graph(user_id: str, model_override: Optional[str] = None):
         last = state["messages"][-1]
         out = []
         mutated = state["mutated"]
+        tasks_mutated = bool(state.get("tasks_mutated"))
         for tc in getattr(last, "tool_calls", []):
             name, args, tid = tc.get("name"), tc.get("args", {}), tc.get("id")
             if name not in tool_map:
@@ -486,10 +517,12 @@ def _build_health_graph(user_id: str, model_override: Optional[str] = None):
                     result = tool_map[name].invoke(args)
                     if name in mutation_tools:
                         mutated = True
+                    if name in task_mutation_tools:
+                        tasks_mutated = True
                 except Exception as exc:
                     result = f"Error running {name}: {exc}"
             out.append(ToolMessage(content=str(result), tool_call_id=tid))
-        return {**state, "messages": out, "mutated": mutated}
+        return {**state, "messages": out, "mutated": mutated, "tasks_mutated": tasks_mutated}
 
     def should_continue(state: HealthAgentState):
         last = state["messages"][-1]
@@ -518,7 +551,8 @@ def run_health_agent_chat(
 ) -> Dict:
     if not user_id:
         return {"response": "User session is missing. Please sign in again.", "success": False,
-                "delegated_to": "health-subagent", "refresh_health": False}
+                "delegated_to": "health-subagent", "refresh_health": False,
+                "refresh_tasks": False}
 
     if _is_diet_query(query):
         try:
@@ -533,6 +567,7 @@ def run_health_agent_chat(
                 "success": True,
                 "delegated_to": "health-subagent",
                 "refresh_health": False,
+                "refresh_tasks": False,
             }
         except Exception as exc:
             log.error("Diet recommendation failed: %s", exc, exc_info=True)
@@ -540,7 +575,8 @@ def run_health_agent_chat(
     from ..llm_factory import is_any_llm_configured
     if not is_any_llm_configured(user_id):
         return {"response": "Health sub-agent is unavailable - no LLM provider configured. Go to Settings to add one.",
-                "success": True, "delegated_to": "health-subagent", "refresh_health": False}
+                "success": True, "delegated_to": "health-subagent",
+                "refresh_health": False, "refresh_tasks": False}
 
     try:
         deps = _require_deps()
@@ -589,6 +625,7 @@ def run_health_agent_chat(
             "user_id": user_id,
             "semantic_context": semantic_context,
             "mutated": False,
+            "tasks_mutated": False,
         }
 
         result = graph.invoke(initial_state)
@@ -603,6 +640,9 @@ def run_health_agent_chat(
 
         mutated = bool(result.get("mutated", False))
 
+        # Stored before the fallback is substituted, so the canned apology is
+        # never written to vector memory and retrieved later as if it were an
+        # answer (NUMA-142 P6 review).
         if user_id and str(content).strip():
             try:
                 from ..memory.service import memory_service
@@ -610,18 +650,32 @@ def run_health_agent_chat(
             except Exception:
                 pass
 
+        # Hitting the 6-round tool cap ends the graph on a tool call, whose
+        # message carries no text: the route answered 200 with an empty string
+        # and success true, and the user saw a blank reply (NUMA-142 P6).
+        if not str(content).strip():
+            content = (
+                "I gathered your health data but ran out of steps before writing "
+                "the answer. Please ask again, more specifically."
+            )
+
         return {
             "response": str(content),
             "success": True,
             "delegated_to": "health-subagent",
             "refresh_health": mutated,
+            "refresh_tasks": bool(result.get("tasks_mutated", False)),
         }
 
     except Exception as exc:
+        # The message is a response body and the orchestrator re-emits it, so
+        # the exception text was reaching the client and walking past the
+        # NUMA-134 redaction, which only filters log records (NUMA-142 P6).
         log.error("Health sub-agent error: %s", exc, exc_info=True)
         return {
-            "response": f"Health sub-agent encountered an error: {exc}",
+            "response": "The health assistant hit an error. Please try again.",
             "success": False,
             "delegated_to": "health-subagent",
             "refresh_health": False,
+            "refresh_tasks": False,
         }

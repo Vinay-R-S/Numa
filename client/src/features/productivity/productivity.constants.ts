@@ -12,9 +12,6 @@ import type { GitHubStats, LeetCodeStats } from "./productivity.types"
 /** Shared with `settings/page.tsx`, which writes the username on save. */
 export const LEETCODE_USERNAME_STORAGE_KEY = "numa_leetcode_username"
 
-/** A connect URL that does not start with this is not GitHub's consent screen. */
-export const GITHUB_AUTHORIZE_URL_PREFIX = "https://github.com/login/oauth/authorize"
-
 export const RECENT_REPO_LIMIT = 6
 export const RECENT_COMMIT_LIMIT = 8
 export const RECENT_SUBMISSION_LIMIT = 6

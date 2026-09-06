@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -17,6 +20,7 @@ from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.background import BackgroundTask
 
+from ..core.timezones import user_today
 from .config import _bot_token
 from .errors import (
     _is_transient_dependency_error,
@@ -35,6 +39,53 @@ from .persistence import (
 from .repository import slack_repository
 
 log = logging.getLogger(__name__)
+
+# Delivered event ids, so a redelivery is acked without being worked again
+# (NUMA-142 P6, PLAN 7). A fast ack makes retries unlikely but cannot prevent
+# them: a dropped ack, a proxy 502 or a restart between the send and the
+# background task all make Slack send the same event again, and the handler
+# bills another model call per mentioned user and rewrites a task the user may
+# have finished since. Bounded and expiring, because this outlives the request.
+# It is per-process, which covers the common case (the retry lands on the worker
+# that answered) and degrades to today's behaviour when it does not.
+_EVENT_ID_TTL_SECONDS = 900
+_EVENT_ID_MAX = 2048
+_seen_event_ids: "OrderedDict[str, float]" = OrderedDict()
+_seen_lock = threading.Lock()
+
+# How many times the post-ack worker retries before the event is lost. The ack
+# already went out, so Slack will not redeliver on a failure here and there is
+# no queue to replay from; a bounded retry covers the brief Postgres or embedder
+# outage this handler actually sees.
+_PROCESS_ATTEMPTS = 3
+_PROCESS_BACKOFF_SECONDS = 2.0
+
+
+def _claim_event(event_id: str) -> bool:
+    """True the first time an event id is seen, False for a redelivery."""
+    if not event_id:
+        return True
+
+    now = time.time()
+    with _seen_lock:
+        while _seen_event_ids:
+            oldest_id, seen_at = next(iter(_seen_event_ids.items()))
+            if now - seen_at <= _EVENT_ID_TTL_SECONDS and len(_seen_event_ids) <= _EVENT_ID_MAX:
+                break
+            _seen_event_ids.pop(oldest_id, None)
+
+        if event_id in _seen_event_ids:
+            return False
+        _seen_event_ids[event_id] = now
+        return True
+
+
+def _release_event(event_id: str) -> None:
+    """Forget an event that never got processed, so a redelivery can retry it."""
+    if not event_id:
+        return
+    with _seen_lock:
+        _seen_event_ids.pop(event_id, None)
 
 
 def fetch_latest_slack_for_user(user_id: str) -> dict:
@@ -222,26 +273,94 @@ async def handle_slack_events(request: Request):
             retry_num, request.headers.get("X-Slack-Retry-Reason", "unknown"),
         )
 
+    # Detecting the retry header was never enough: the event was then processed
+    # exactly as a first delivery. The id is what makes the second delivery a
+    # no-op (NUMA-142 P6, PLAN 7).
+    event_id = str(payload.get("event_id") or "")
+    if not _claim_event(event_id):
+        log.info("Slack event %s already handled; acking the redelivery", event_id)
+        return Response(status_code=200)
+
     # ── Handle event callbacks ─────────────────────────────────────────────────
     # Answer first, work after. Starlette runs the background task once the
     # response is on the wire, and a sync task there goes to the same worker
     # threadpool NUMA-136 moved this into.
-    return Response(status_code=200, background=BackgroundTask(_process_event, payload))
+    return Response(
+        status_code=200,
+        background=BackgroundTask(_process_event, payload, event_id),
+    )
 
 
-def _process_event(payload: dict) -> None:
-    """Run the handler after the ack, turning a failure into a log line.
+def _event_identity(payload: dict, event_id: str) -> str:
+    """Enough of an event to find it in Slack after a failure."""
+    event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+    return (
+        f"event_id={event_id or 'unknown'} "
+        f"team={payload.get('team_id') or 'unknown'} "
+        f"channel={event.get('channel') or 'unknown'} "
+        f"ts={event.get('ts') or 'unknown'}"
+    )
 
-    Nothing is left to return a status to: the 200 has already gone out, so an
-    exception here would be an unhandled error in a background task. It used to
-    become a 500, which made Slack redeliver the event; the log is what replaces
-    that, because a redelivery of a message that was already stored is not a
-    recovery, it is the same work billed twice.
+
+def _process_event(payload: dict, event_id: str = "") -> None:
+    """Run the handler after the ack, retrying a transient failure.
+
+    Nothing is left to return a status to: the 200 has already gone out, so
+    Slack will not redeliver and there is no queue to replay from. Answering
+    first therefore removed the only retry path a brief Postgres or embedder
+    outage had, and the message was lost with a log line that named nothing to
+    recover it by. The bounded retry restores that, and the final log carries
+    the event id, channel and ts (NUMA-142 P6, PLAN 7).
+
+    The first attempt runs here, on the worker thread Starlette gave the
+    background task. The retries do not: their backoff would hold one of the
+    anyio threadpool's workers for seconds, and a Slack burst during a database
+    outage would starve every other sync route in the process of threads
+    (NUMA-142 P6 review). They go to a short-lived thread of their own instead.
     """
     try:
         _handle_event_payload(payload)
+        return
     except Exception:
-        log.exception("Slack event processing failed after the ack")
+        log.warning(
+            "Slack event processing failed (attempt 1/%d), retrying off the request pool: %s",
+            _PROCESS_ATTEMPTS, _event_identity(payload, event_id),
+            exc_info=True,
+        )
+
+    worker = threading.Thread(
+        target=_retry_event,
+        args=(payload, event_id),
+        name="slack-event-retry",
+        daemon=True,
+    )
+    worker.start()
+
+
+def _retry_event(payload: dict, event_id: str) -> None:
+    """The remaining attempts, on a thread that is nobody else's to wait for."""
+    for attempt in range(2, _PROCESS_ATTEMPTS + 1):
+        time.sleep(_PROCESS_BACKOFF_SECONDS * (attempt - 1))
+        try:
+            _handle_event_payload(payload)
+            return
+        except Exception:
+            if attempt < _PROCESS_ATTEMPTS:
+                log.warning(
+                    "Slack event processing failed (attempt %d/%d), retrying: %s",
+                    attempt, _PROCESS_ATTEMPTS, _event_identity(payload, event_id),
+                    exc_info=True,
+                )
+                continue
+
+    # Forget the id so a later redelivery, or a manual replay, is not swallowed
+    # by the dedupe guard.
+    _release_event(event_id)
+    log.error(
+        "Slack event dropped after %d attempts: %s",
+        _PROCESS_ATTEMPTS, _event_identity(payload, event_id),
+        exc_info=True,
+    )
 
 
 def _handle_event_payload(payload: dict) -> None:
@@ -292,29 +411,54 @@ def _handle_event_payload(payload: dict) -> None:
 
 
 def _run_agent_task_extraction(text: str, ts: Optional[str], team_id: Optional[str]):
-    """Background call: extract action items from @mentioned messages."""
+    """Background call: extract action items from @mentioned messages.
+
+    The extraction is a deterministic question about one message, so it runs
+    once and the answer is written for every mentioned NUMA user. It used to run
+    per user: three mentions billed three identical model calls (NUMA-142 P6,
+    PLAN 9).
+    """
     try:
         import re
         mentioned_slack_ids = re.findall(r"<@([A-Z0-9]+)>", text)
         if not mentioned_slack_ids:
             return
         rows = slack_repository.user_ids_by_slack_ids(mentioned_slack_ids)
+        user_ids = [str(user_id_row) for user_id_row, _slack_id in rows]
+        if not user_ids:
+            return
 
-        for user_id_row, _slack_id in rows:
-            user_id = str(user_id_row)
-            _extract_and_create_task(text, ts, user_id)
+        # One extraction serves everyone, but which user's provider runs it
+        # matters: if the first mentioned user has no working provider the
+        # answer must not be "no task for anyone", so the next one is tried
+        # (NUMA-142 P6 review). A success stops the loop, so the common case is
+        # still exactly one model call.
+        extraction = None
+        for owner_id in user_ids:
+            extraction = _extract_task_from_text(text, owner_id)
+            if extraction is not None:
+                break
+        if not extraction:
+            return
+
+        for user_id in user_ids:
+            _create_task_from_extraction(extraction, ts, user_id)
     except Exception as exc:
         log.warning("_run_agent_task_extraction error: %s", exc)
 
 
-def _extract_and_create_task(text: str, ts: Optional[str], user_id: str):
-    """Use Groq LLM to detect if text is actionable and create a task."""
+def _extract_task_from_text(text: str, user_id: str) -> Optional[dict]:
+    """Ask the LLM whether a Slack message is actionable. One call per message.
+
+    The provider is the mentioned user's own, not a hardcoded Groq: a user
+    configured for OpenAI got a silent no-op here because GROQ_API_KEY was never
+    set on the box (NUMA-142 P6, PLAN 9).
+    """
     try:
-        from datetime import date
         from langchain_core.prompts import ChatPromptTemplate  # type: ignore
         from langchain_core.output_parsers import PydanticOutputParser  # type: ignore
         from pydantic import BaseModel
-        from ..llm_factory import get_llm
+        from ..core.llm_factory import get_llm
 
         class TaskExtraction(BaseModel):
             is_actionable: bool
@@ -331,21 +475,42 @@ def _extract_and_create_task(text: str, ts: Optional[str], user_id: str):
             )),
             ("human", "{text}"),
         ])
-        llm = get_llm(provider="groq", model="llama-3.1-8b-instant", temperature=0)
+        llm = get_llm(user_id=user_id, temperature=0)
         chain = prompt | llm | parser
         result: TaskExtraction = chain.invoke({
             "text": text,
-            "today": date.today().isoformat(),
+            # The mentioned user's day, not the host's, like every other
+            # "today" in this sweep. One extraction serves every mentioned user,
+            # so a workspace spanning zones still resolves "tomorrow" against
+            # this one user's date; that is the cost of not billing a model call
+            # per mention (NUMA-142 P6 review).
+            "today": user_today(user_id).isoformat(),
             "format_instructions": parser.get_format_instructions(),
         })
-        if result.is_actionable and result.task_title:
-            from .agent import _insert_task_from_slack
-            _insert_task_from_slack(
-                user_id=user_id,
-                title=result.task_title,
-                priority=result.task_priority if result.task_priority in {"low","medium","high","urgent"} else "medium",
-                due_date=result.task_due,
-                slack_ts=ts,
-            )
+        if not result.is_actionable or not result.task_title:
+            return None
+        return {
+            "title": result.task_title,
+            "priority": result.task_priority,
+            "due": result.task_due,
+        }
     except Exception as exc:
-        log.warning("_extract_and_create_task failed: %s", exc)
+        log.warning("_extract_task_from_text failed: %s", exc)
+        return None
+
+
+def _create_task_from_extraction(extraction: dict, ts: Optional[str], user_id: str) -> None:
+    """Write one already-extracted action item as a task for one user."""
+    try:
+        from .agent import _insert_task_from_slack
+
+        priority = extraction.get("priority")
+        _insert_task_from_slack(
+            user_id=user_id,
+            title=extraction["title"],
+            priority=priority if priority in {"low", "medium", "high", "urgent"} else "medium",
+            due_date=extraction.get("due"),
+            slack_ts=ts,
+        )
+    except Exception as exc:
+        log.warning("_create_task_from_extraction failed: %s", exc)

@@ -106,40 +106,90 @@ class AISettingsService(BaseService):
         return keys_status
 
     def update_integration_keys(self, body: dict) -> dict:
-        """Write the known keys into the server `.env` and the live environment."""
-        lines: list[str] = []
-        if ENV_FILE_PATH.exists():
-            lines = ENV_FILE_PATH.read_text().splitlines()
+        """Write the known keys into the server `.env` and the live environment.
 
-        updated_keys: list[str] = []
+        Every value is validated before anything is written. A value carrying a
+        newline used to produce a truncated quoted line followed by a bare
+        `NAME=` line that `load_dotenv` picked up on the next boot, so an admin
+        could inject arbitrary settings (a `DATABASE_URL`, say) through an API
+        key field; an embedded quote closed the string early and merged two
+        settings; and a NUL raised out of `os.environ` after earlier keys had
+        already been mutated, leaving the file and the process disagreeing
+        (NUMA-142 P6, PLAN 8).
+        """
+        pending: list[tuple[str, str, str]] = []
         for api_key, value in body.items():
             env_key = INTEGRATION_KEYS.get(api_key)
             if not env_key or not isinstance(value, str):
                 continue
-
-            _upsert_env_line(lines, env_key, value)
-            os.environ[env_key] = value
-            updated_keys.append(api_key)
+            _validate_env_value(api_key, value)
+            pending.append((api_key, env_key, value))
 
         # Nothing recognized in the body: leave the file alone instead of
         # rewriting it, which would normalize its line endings for no reason.
-        if not updated_keys:
-            return {"ok": True, "updated": updated_keys}
+        if not pending:
+            return {"ok": True, "updated": []}
+
+        lines: list[str] = []
+        if ENV_FILE_PATH.exists():
+            lines = ENV_FILE_PATH.read_text().splitlines()
+
+        for _api_key, env_key, value in pending:
+            _upsert_env_line(lines, env_key, value)
 
         ENV_FILE_PATH.write_text("\n".join(lines) + "\n")
 
-        return {"ok": True, "updated": updated_keys}
+        # The process is updated only once the file is written, so a failure
+        # cannot leave the two out of step.
+        for _api_key, env_key, value in pending:
+            os.environ[env_key] = value
+
+        return {"ok": True, "updated": [api_key for api_key, _env, _v in pending]}
+
+
+# Long enough for any provider token this app stores, short enough that the
+# .env cannot be used as a blob store.
+_ENV_VALUE_MAX_LENGTH = 512
+
+# Values are written single-quoted, which `load_dotenv` and every POSIX shell
+# treat literally, so a Windows path like C:\Users\numa\token.json survives
+# intact - three of these keys are file paths, and banning the backslash
+# outright rejected them (NUMA-142 P6 review). What cannot be represented
+# inside a single-quoted line is a single quote and any control character: a
+# newline would start a second setting that the next boot would load.
+_FORBIDDEN_ENV_CHARS = (
+    {"'"} | {chr(code) for code in range(0x20)} | {chr(0x7F)}
+)
+
+
+def _validate_env_value(api_key: str, value: str) -> None:
+    if len(value) > _ENV_VALUE_MAX_LENGTH:
+        raise AISettingsSaveError(
+            f"{api_key} is too long (max {_ENV_VALUE_MAX_LENGTH} characters)"
+        )
+    if any(ch in _FORBIDDEN_ENV_CHARS for ch in value):
+        raise AISettingsSaveError(
+            f"{api_key} may not contain quotes, newlines or control characters"
+        )
 
 
 def _upsert_env_line(lines: list[str], env_key: str, value: str) -> None:
     """Replace the first `KEY=`/`KEY =` line in place, else append a new one."""
     for i, line in enumerate(lines):
         if line.startswith(f"{env_key}=") or line.startswith(f"{env_key} ="):
-            lines[i] = f'{env_key}="{value}"' if value else f"{env_key}="
+            lines[i] = _env_line(env_key, value)
             return
 
     if value:
-        lines.append(f'{env_key}="{value}"')
+        lines.append(_env_line(env_key, value))
+
+
+def _env_line(env_key: str, value: str) -> str:
+    """One `KEY='value'` line. Single quotes: dotenv decodes escape sequences
+    inside double quotes, which would mangle a Windows path's backslashes."""
+    if not value:
+        return f"{env_key}="
+    return f"{env_key}='{value}'"
 
 
 ai_settings_service = AISettingsService()

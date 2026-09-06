@@ -1,3 +1,4 @@
+import logging
 import os
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -6,7 +7,21 @@ from .schemas import SignUpRequest, SignInRequest, TokenResponse, UserResponse, 
 from .service import sign_up, sign_in, exchange_supabase_token, JWT_EXPIRE_SECONDS
 from .dependencies import get_current_user
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Bootstrap probes third-party services, so its failures carry provider hosts,
+# token-endpoint bodies and driver text. `str(exc)` in the JSON body walked
+# straight past the NUMA-134 redaction, which only filters log records. The
+# reason is logged; the caller is told a service could not be checked
+# (NUMA-142 P6, PLAN 8).
+_PROBE_FAILED_DETAIL = "Could not check this integration"
+
+
+def _probe_failed(service: str, exc: Exception) -> str:
+    log.warning("Bootstrap probe failed for %s: %s", service, exc, exc_info=True)
+    return _PROBE_FAILED_DETAIL
 
 
 # ── Email / Password ──────────────────────────────────────────────────────────
@@ -105,7 +120,7 @@ def bootstrap_integrations(
                 svc.calendarList().list(maxResults=1).execute()
                 google_valid = True
             except Exception as exc:
-                google_reason = str(exc)
+                google_reason = _probe_failed("google", exc)
 
         services["google"] = {
             "connected": google_connected,
@@ -124,7 +139,11 @@ def bootstrap_integrations(
                 ),
             }
     except Exception as exc:
-        services["google"] = {"connected": False, "valid": False, "detail": str(exc)}
+        services["google"] = {
+            "connected": False,
+            "valid": False,
+            "detail": _probe_failed("google", exc),
+        }
 
     # Slack requires Slack OAuth consent.
     try:
@@ -146,27 +165,21 @@ def bootstrap_integrations(
                 "authorization_url": services["slack"]["authorization_url"],
             }
     except Exception as exc:
-        services["slack"] = {"connected": False, "detail": str(exc)}
+        services["slack"] = {"connected": False, "detail": _probe_failed("slack", exc)}
 
     # GitHub requires GitHub OAuth or token consent.
     try:
-        from ..github_agent.router import _get_github_config, _get_github_token, _oauth_states, GITHUB_OAUTH_URL
-        import secrets
-        from urllib.parse import urlencode
+        from ..github_agent.router import _get_github_config, _get_github_token
+        from ..github_agent.service import github_service
 
         github_connected = bool(_get_github_token(user_id))
         services["github"] = {"connected": github_connected}
-        client_id, _, redirect_uri = _get_github_config()
+        client_id, _, _ = _get_github_config()
         if next_action is None and not github_connected and client_id:
-            state = secrets.token_urlsafe(32)
-            _oauth_states[state] = user_id
-            params = {
-                "client_id": client_id,
-                "redirect_uri": redirect_uri,
-                "scope": "repo read:user user:email",
-                "state": state,
-            }
-            authorization_url = f"{GITHUB_OAUTH_URL}?{urlencode(params)}"
+            # The service owns the URL and the signed state; this route used to
+            # hand-roll both and write into a module-global dict that the
+            # callback could not see under a second worker (NUMA-142 P6).
+            authorization_url = github_service.build_authorization_url(user_id)
             services["github"]["authorization_url"] = authorization_url
             next_action = {
                 "service": "github",
@@ -174,7 +187,7 @@ def bootstrap_integrations(
                 "authorization_url": authorization_url,
             }
     except Exception as exc:
-        services["github"] = {"connected": False, "detail": str(exc)}
+        services["github"] = {"connected": False, "detail": _probe_failed("github", exc)}
 
     leetcode_username = (os.getenv("LEETCODE_USERNAME") or "").strip()
     services["leetcode"] = {

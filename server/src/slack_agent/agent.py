@@ -127,7 +127,12 @@ def _match_time_of_day(lower: str) -> Optional[re.Match]:
     return None
 
 
-def _parse_slack_due(text: str) -> Optional[datetime]:
+def _parse_slack_due(text: str, user_id: Optional[str] = None) -> Optional[datetime]:
+    """Parse "by 5pm" out of a message, in the user's own timezone.
+
+    It used to build the datetime in UTC, so "by 5pm" from an IST user became
+    22:30 IST - past the deadline it was recording (NUMA-142 P6, PLAN 7).
+    """
     lower = text.lower()
     day_offset: Optional[int] = None
     if re.search(r"\b(tom|tmr|tomorrow)\b", lower):
@@ -153,8 +158,11 @@ def _parse_slack_due(text: str) -> Optional[datetime]:
     if hour > 23 or minute > 59:
         return None
 
-    due_date = (datetime.now(timezone.utc) + timedelta(days=day_offset or 0)).date()
-    return datetime.combine(due_date, datetime.min.time(), tzinfo=timezone.utc).replace(
+    from ..core.timezones import user_timezone
+
+    tz = user_timezone(user_id)
+    due_date = (datetime.now(tz) + timedelta(days=day_offset or 0)).date()
+    return datetime.combine(due_date, datetime.min.time(), tzinfo=tz).replace(
         hour=hour,
         minute=minute,
     )
@@ -178,19 +186,18 @@ def _slack_task_priority(text: str) -> str:
 def _slack_task_title(text: str) -> Optional[str]:
     cleaned = _strip_due_clause(_clean_slack_text(text))
     cleaned = re.sub(r"^(hi|hii|hello|hey)\s+", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"^(pls|please)\s+", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(
-        r"^(can\s+u|can\s+you|could\s+you|would\s+you)\s+",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    cleaned = re.sub(
-        r"^(pls|please)\s+(can\s+u|can\s+you|could\s+you|would\s+you)\s+",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
+    # Twice, because either order occurs: "please can you send" and "can you
+    # please send". A fourth pattern used to handle the first of those and was
+    # unreachable, since the "please" prefix had already been stripped one line
+    # above it (NUMA-142 P6).
+    for _ in range(2):
+        cleaned = re.sub(r"^(pls|please)\s+", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"^(can\s+u|can\s+you|could\s+you|would\s+you)\s+",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
     cleaned = _normalize_text(cleaned)
     if not cleaned:
         return None
@@ -351,7 +358,7 @@ def _create_tasks_from_recent_slack(user_id: str, limit: int = 20) -> Tuple[List
             user_id=user_id,
             title=title,
             priority=_slack_task_priority(text),
-            due_date=_parse_slack_due(text),
+            due_date=_parse_slack_due(text, user_id),
             slack_ts=str(message.get("ts") or ""),
             description=description,
         )

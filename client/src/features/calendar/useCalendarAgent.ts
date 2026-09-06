@@ -28,7 +28,13 @@ import { sendAgentCommand } from "./calendar.api"
 import type { AgentChatMessage, AgentChatResponse } from "./calendar.types"
 
 export function useCalendarAgent() {
-  const { agentMessages, setAgentMessages, addAgentMessage, fetchEvents } = useCalendarStore()
+  // Selector per slice, not the whole store. Subscribing to the store object
+  // re-rendered every consumer of this hook on any calendar state change, so
+  // one agent message re-rendered the entire month grid (NUMA-142 P6, PLAN 9).
+  const agentMessages = useCalendarStore((state) => state.agentMessages)
+  const setAgentMessages = useCalendarStore((state) => state.setAgentMessages)
+  const addAgentMessage = useCalendarStore((state) => state.addAgentMessage)
+  const fetchEvents = useCalendarStore((state) => state.fetchEvents)
 
   const onResult = useCallback(
     async (result: AgentChatResponse) => {

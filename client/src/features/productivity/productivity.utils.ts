@@ -39,6 +39,6 @@ export function commitDateLabel(date?: string | null): string {
   return ` - ${new Date(date).toLocaleDateString()}`
 }
 
-export function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback
-}
+// Defined once in `lib/utils`; re-exported so this feature's call sites keep
+// importing it from their own module (NUMA-142 P6, PLAN 10).
+export { errorMessage } from "@/lib/utils"

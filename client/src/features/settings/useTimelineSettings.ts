@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useState } from "react"
 
 import { TIMELINE_SETTINGS_KEY } from "@/features/calendar/calendar.constants"
+import { parseTimelineSettings } from "@/features/calendar/calendar.settings"
 import type { TimelineSettings } from "@/features/calendar/calendar.types"
 import {
   DEFAULT_TIMELINE_FORM,
@@ -35,7 +36,9 @@ function readStoredForm(): TimelineForm {
     const raw = localStorage.getItem(TIMELINE_SETTINGS_KEY)
     if (!raw) return DEFAULT_TIMELINE_FORM
 
-    const stored = JSON.parse(raw) as TimelineSettings
+    // Validated, not cast: the same unchecked parse on the reading side is what
+    // made a zero step hang the calendar tab (NUMA-142 P6).
+    const stored = parseTimelineSettings(JSON.parse(raw))
     return {
       intervalMs: stored.updateIntervalMs || DEFAULT_TIMELINE_FORM.intervalMs,
       waterEnabled: stored.waterEnabled ?? DEFAULT_TIMELINE_FORM.waterEnabled,

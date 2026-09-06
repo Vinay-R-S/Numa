@@ -37,4 +37,5 @@ def _log_dependency_exception(message: str, exc: Exception, *args) -> None:
 def _strip_internal_stats_fields(stats: dict) -> dict:
     cleaned = dict(stats)
     cleaned.pop("_last_synced_at", None)
+    cleaned.pop("_profile_synced_at", None)
     return cleaned
